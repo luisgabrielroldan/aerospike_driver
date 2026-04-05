@@ -4,6 +4,7 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
 
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
+  alias Aerospike.Protocol.MessagePack
 
   describe "encode_value/1 and decode_value/2 round-trip" do
     test "nil" do
@@ -128,6 +129,101 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
 
     test "geojson particle decodes as UTF-8 string" do
       assert Value.decode_value(Operation.particle_geojson(), "{}") == "{}"
+    end
+  end
+
+  describe "encode_value compound types" do
+    test "blob encodes as particle type 4 with raw bytes" do
+      assert {4, <<1, 2, 3>>} = Value.encode_value({:bytes, <<1, 2, 3>>})
+    end
+
+    test "list with strings round-trips through particle encoding" do
+      {pt, data} = Value.encode_value(["hello", "world"])
+      assert pt == Operation.particle_list()
+      assert Value.decode_value(pt, data) == ["hello", "world"]
+    end
+
+    test "list with mixed types round-trips" do
+      {pt, data} = Value.encode_value([1, "str", true, nil, 3.14])
+      assert pt == Operation.particle_list()
+      decoded = Value.decode_value(pt, data)
+      assert [1, "str", true, nil, f] = decoded
+      assert_in_delta f, 3.14, 0.001
+    end
+
+    test "list with nested lists round-trips" do
+      {pt, data} = Value.encode_value([[1, 2], [3, 4]])
+      assert pt == Operation.particle_list()
+      assert Value.decode_value(pt, data) == [[1, 2], [3, 4]]
+    end
+
+    test "list with blob values round-trips" do
+      {pt, data} = Value.encode_value([{:bytes, <<0xFF>>}])
+      assert pt == Operation.particle_list()
+      assert Value.decode_value(pt, data) == [{:blob, <<0xFF>>}]
+    end
+
+    test "list with booleans and nil round-trips" do
+      {pt, data} = Value.encode_value([true, false, nil])
+      assert pt == Operation.particle_list()
+      assert Value.decode_value(pt, data) == [true, false, nil]
+    end
+
+    test "map with string values round-trips" do
+      map = %{"key" => "val"}
+      {pt, data} = Value.encode_value(map)
+      assert pt == Operation.particle_map()
+      assert Value.decode_value(pt, data) == map
+    end
+
+    test "map with nested map round-trips" do
+      map = %{"outer" => %{"inner" => 42}}
+      {pt, data} = Value.encode_value(map)
+      assert pt == Operation.particle_map()
+      assert Value.decode_value(pt, data) == map
+    end
+
+    test "map with nested list round-trips" do
+      map = %{"tags" => [1, 2, 3]}
+      {pt, data} = Value.encode_value(map)
+      assert pt == Operation.particle_map()
+      assert Value.decode_value(pt, data) == map
+    end
+
+    test "encode_value rejects unsupported term" do
+      assert_raise ArgumentError, ~r/unsupported bin value/, fn ->
+        Value.encode_value({:tuple, 1, 2})
+      end
+    end
+
+    test "encode_value rejects unsupported CDT element in list" do
+      assert_raise ArgumentError, ~r/unsupported CDT/, fn ->
+        Value.encode_value([self()])
+      end
+    end
+
+    test "encode_bin_operations with atom keys converts to strings" do
+      ops = Value.encode_bin_operations(%{name: "Alice"})
+      assert [%Operation{bin_name: "name"}] = ops
+    end
+
+    test "map with atom keys round-trips (atom keys become strings)" do
+      {pt, data} = Value.encode_value(%{name: "Alice"})
+      assert pt == Operation.particle_map()
+      assert Value.decode_value(pt, data) == %{"name" => "Alice"}
+    end
+
+    test "map particle with ext values preserves ext tuples" do
+      ext = {:ext, 0xFF, <<0, 0, 0, 0>>}
+      map_data = MessagePack.pack!(%{{:particle_string, "x"} => ext})
+      decoded = Value.decode_value(Operation.particle_map(), map_data)
+      assert %{"x" => {:ext, 0xFF, _}} = decoded
+    end
+
+    test "string without particle prefix passes through in map decode" do
+      raw_str = MessagePack.pack!(%{"plain" => 1})
+      decoded = Value.decode_value(Operation.particle_map(), raw_str)
+      assert %{"plain" => 1} = decoded
     end
   end
 
