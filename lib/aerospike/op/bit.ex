@@ -1,0 +1,201 @@
+defmodule Aerospike.Op.Bit do
+  import Bitwise
+
+  @moduledoc """
+  Bitwise operations on a byte-array bin for `Aerospike.operate/4`.
+
+  Offsets are in **bits** for `set`, `bw_or`, `bw_xor`, `bw_and`, `bw_not`, `lshift`, `rshift`,
+  `add`, `subtract`, `get`, `count`, `lscan`, `rscan`, and `get_int`. `resize`, `insert`, and
+  `remove` use **byte** offsets/sizes per the Aerospike API.
+
+  Pass optional `ctx:` for nested bitmaps (`Aerospike.Ctx`) and `flags:` for the server policy
+  integer (default `0`).
+  """
+
+  alias Aerospike.Protocol.CDT
+
+  @opaque t :: Aerospike.Op.t()
+
+  @resize 0
+  @insert 1
+  @remove 2
+  @set 3
+  @bw_or 4
+  @bw_xor 5
+  @bw_and 6
+  @bw_not 7
+  @lshift 8
+  @rshift 9
+  @add 10
+  @subtract 11
+  @set_int 12
+  @get 50
+  @count 51
+  @lscan 52
+  @rscan 53
+  @get_int 54
+
+  @signed_flag 1
+
+  defp ctx(opts), do: Keyword.get(opts, :ctx)
+  defp flags(opts), do: Keyword.get(opts, :flags, 0)
+
+  @spec resize(String.t(), integer(), integer(), keyword()) :: t()
+  def resize(bin_name, byte_size, resize_flags \\ 0, opts \\ [])
+      when is_binary(bin_name) and is_integer(byte_size) and is_integer(resize_flags) do
+    CDT.bit_modify_op(bin_name, @resize, [byte_size, flags(opts), resize_flags], ctx(opts))
+  end
+
+  @spec insert(String.t(), integer(), binary(), keyword()) :: t()
+  def insert(bin_name, byte_offset, bytes, opts \\ [])
+      when is_binary(bin_name) and is_integer(byte_offset) and is_binary(bytes) do
+    CDT.bit_modify_op(bin_name, @insert, [byte_offset, {:bytes, bytes}, flags(opts)], ctx(opts))
+  end
+
+  @spec remove(String.t(), integer(), integer(), keyword()) :: t()
+  def remove(bin_name, byte_offset, byte_size, opts \\ [])
+      when is_binary(bin_name) and is_integer(byte_offset) and is_integer(byte_size) do
+    CDT.bit_modify_op(bin_name, @remove, [byte_offset, byte_size, flags(opts)], ctx(opts))
+  end
+
+  @spec set(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  def set(bin_name, bit_offset, bit_size, value, opts \\ [])
+      when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
+             is_binary(value) do
+    CDT.bit_modify_op(
+      bin_name,
+      @set,
+      [bit_offset, bit_size, {:bytes, value}, flags(opts)],
+      ctx(opts)
+    )
+  end
+
+  @doc "Bitwise OR of `value` into the region `[bit_offset, bit_offset + bit_size)`."
+  @spec bw_or(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  def bw_or(bin_name, bit_offset, bit_size, value, opts \\ [])
+      when is_binary(bin_name) and is_binary(value) do
+    CDT.bit_modify_op(
+      bin_name,
+      @bw_or,
+      [bit_offset, bit_size, {:bytes, value}, flags(opts)],
+      ctx(opts)
+    )
+  end
+
+  @spec bw_xor(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  def bw_xor(bin_name, bit_offset, bit_size, value, opts \\ [])
+      when is_binary(bin_name) and is_binary(value) do
+    CDT.bit_modify_op(
+      bin_name,
+      @bw_xor,
+      [bit_offset, bit_size, {:bytes, value}, flags(opts)],
+      ctx(opts)
+    )
+  end
+
+  @spec bw_and(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  def bw_and(bin_name, bit_offset, bit_size, value, opts \\ [])
+      when is_binary(bin_name) and is_binary(value) do
+    CDT.bit_modify_op(
+      bin_name,
+      @bw_and,
+      [bit_offset, bit_size, {:bytes, value}, flags(opts)],
+      ctx(opts)
+    )
+  end
+
+  @spec bw_not(String.t(), integer(), integer(), keyword()) :: t()
+  def bw_not(bin_name, bit_offset, bit_size, opts \\ [])
+      when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) do
+    CDT.bit_modify_op(bin_name, @bw_not, [bit_offset, bit_size, flags(opts)], ctx(opts))
+  end
+
+  @spec lshift(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  def lshift(bin_name, bit_offset, bit_size, shift, opts \\ [])
+      when is_binary(bin_name) and is_integer(shift) do
+    CDT.bit_modify_op(bin_name, @lshift, [bit_offset, bit_size, shift, flags(opts)], ctx(opts))
+  end
+
+  @spec rshift(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  def rshift(bin_name, bit_offset, bit_size, shift, opts \\ [])
+      when is_binary(bin_name) and is_integer(shift) do
+    CDT.bit_modify_op(bin_name, @rshift, [bit_offset, bit_size, shift, flags(opts)], ctx(opts))
+  end
+
+  @doc """
+  Add an integer to a sub-integer in the bitmap (`bit_size` ≤ 64).
+
+  Options: `:signed` (default `false`), `:overflow_action` (default `0`, OR with signed flag when `:signed` is true).
+  """
+  @spec add(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  def add(bin_name, bit_offset, bit_size, value, opts \\ [])
+      when is_binary(bin_name) and is_integer(value) do
+    signed = Keyword.get(opts, :signed, false)
+    overflow = Keyword.get(opts, :overflow_action, 0)
+    action = if signed, do: overflow ||| @signed_flag, else: overflow
+
+    CDT.bit_modify_op(
+      bin_name,
+      @add,
+      [bit_offset, bit_size, value, flags(opts), action],
+      ctx(opts)
+    )
+  end
+
+  @doc "Subtract — same options as `add/5`."
+  @spec subtract(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  def subtract(bin_name, bit_offset, bit_size, value, opts \\ [])
+      when is_binary(bin_name) and is_integer(value) do
+    signed = Keyword.get(opts, :signed, false)
+    overflow = Keyword.get(opts, :overflow_action, 0)
+    action = if signed, do: overflow ||| @signed_flag, else: overflow
+
+    CDT.bit_modify_op(
+      bin_name,
+      @subtract,
+      [bit_offset, bit_size, value, flags(opts), action],
+      ctx(opts)
+    )
+  end
+
+  @spec set_int(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  def set_int(bin_name, bit_offset, bit_size, value, opts \\ [])
+      when is_binary(bin_name) and is_integer(value) do
+    CDT.bit_modify_op(bin_name, @set_int, [bit_offset, bit_size, value, flags(opts)], ctx(opts))
+  end
+
+  @spec get(String.t(), integer(), integer(), keyword()) :: t()
+  def get(bin_name, bit_offset, bit_size, opts \\ [])
+      when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) do
+    CDT.bit_read_op(bin_name, @get, [bit_offset, bit_size], ctx(opts))
+  end
+
+  @spec count(String.t(), integer(), integer(), keyword()) :: t()
+  def count(bin_name, bit_offset, bit_size, opts \\ [])
+      when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) do
+    CDT.bit_read_op(bin_name, @count, [bit_offset, bit_size], ctx(opts))
+  end
+
+  @spec lscan(String.t(), integer(), integer(), boolean(), keyword()) :: t()
+  def lscan(bin_name, bit_offset, bit_size, value, opts \\ []) when is_binary(bin_name) do
+    CDT.bit_read_op(bin_name, @lscan, [bit_offset, bit_size, value], ctx(opts))
+  end
+
+  @spec rscan(String.t(), integer(), integer(), boolean(), keyword()) :: t()
+  def rscan(bin_name, bit_offset, bit_size, value, opts \\ []) when is_binary(bin_name) do
+    CDT.bit_read_op(bin_name, @rscan, [bit_offset, bit_size, value], ctx(opts))
+  end
+
+  @spec get_int(String.t(), integer(), integer(), boolean(), keyword()) :: t()
+  def get_int(bin_name, bit_offset, bit_size, signed \\ false, opts \\ [])
+      when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) do
+    args =
+      if signed do
+        [bit_offset, bit_size, @signed_flag]
+      else
+        [bit_offset, bit_size]
+      end
+
+    CDT.bit_read_op(bin_name, @get_int, args, ctx(opts))
+  end
+end
