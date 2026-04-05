@@ -1,0 +1,76 @@
+services:
+  aerospike:
+    image: aerospike/aerospike-server:latest
+    container_name: aerospike1
+    hostname: aerospike1
+    ports:
+      - "3000:3000" # client protocol
+      - "3001:3001" # fabric
+      - "3002:3002" # heartbeat (clustering)
+    volumes:
+      - ./aerospike.conf:/opt/aerospike/aerospike.conf
+    command: ["--config-file", "/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  aerospike2:
+    image: aerospike/aerospike-server:latest
+    container_name: aerospike2
+    hostname: aerospike2
+    profiles: [cluster]
+    ports:
+      - "3010:3000"
+      - "3011:3001"
+      - "3012:3002"
+    volumes:
+      - ./aerospike.conf:/opt/aerospike/aerospike.conf
+    command: ["--config-file", "/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  aerospike3:
+    image: aerospike/aerospike-server:latest
+    container_name: aerospike3
+    hostname: aerospike3
+    profiles: [cluster]
+    ports:
+      - "3020:3000"
+      - "3021:3001"
+      - "3022:3002"
+    volumes:
+      - ./aerospike.conf:/opt/aerospike/aerospike.conf
+    command: ["--config-file", "/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  aerospike-ee:
+    image: aerospike/aerospike-server-enterprise:latest
+    container_name: aerospike-ee
+    hostname: aerospike-ee
+    profiles: [enterprise]
+    ports:
+      - "3100:3000" # client protocol
+      - "3101:3001" # fabric
+      - "3102:3002" # heartbeat
+    volumes:
+      - ./aerospike-enterprise.conf:/opt/aerospike/aerospike.conf
+      - ./features.conf:/etc/aerospike/features.conf
+    command: ["--config-file", "/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
