@@ -278,7 +278,25 @@ From the `aerospike_driver` directory:
 mix deps.get
 ```
 
-By default, **integration** and **property** tests are excluded:
+### Docker Setup
+
+Tests require an Aerospike server running via Docker Compose. There are three profiles
+depending on which tests you want to run:
+
+```bash
+# Single node — enough for unit, property, and basic integration tests
+docker compose up -d
+
+# 3-node cluster — adds multi-node, partition routing, and peer discovery tests
+docker compose --profile cluster up -d
+
+# All services — adds enterprise-only feature tests (durable delete, etc.)
+docker compose --profile cluster --profile enterprise up -d
+```
+
+### Running Tests
+
+By default, only unit tests and doctests run. Other test categories are opt-in:
 
 ```bash
 # Unit tests only (fast, no external dependencies)
@@ -287,27 +305,29 @@ mix test
 # Include property-based tests
 mix test --include property
 
-# Include integration tests (needs Aerospike on localhost:3000)
+# Include integration tests (needs single Aerospike node)
 mix test --include integration
 
-# Full suite
-mix test --include integration --include property
+# Include multi-node cluster tests (needs --profile cluster)
+mix test --include cluster
+
+# Include enterprise feature tests (needs --profile enterprise)
+mix test --include enterprise
+
+# Full suite (needs all Docker profiles running)
+mix test.all
 ```
 
-Start Aerospike locally via Docker (from the repository root):
+### Coverage
 
-```bash
-docker compose up -d
-```
-
-**Coverage** (runs integration tests via Mix aliases):
+Coverage runs integration tests via Mix aliases:
 
 ```bash
 mix coveralls          # terminal summary
 mix test.coverage      # HTML report in cover/
 ```
 
-**Quality checks:**
+### Quality Checks
 
 ```bash
 mix format --check-formatted

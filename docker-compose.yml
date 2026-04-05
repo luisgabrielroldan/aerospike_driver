@@ -66,7 +66,6 @@ services:
       - "3102:3002" # heartbeat
     volumes:
       - ./aerospike-enterprise.conf:/opt/aerospike/aerospike.conf
-      - ./features.conf:/etc/aerospike/features.conf
     command: ["--config-file", "/opt/aerospike/aerospike.conf"]
     healthcheck:
       test: ["CMD", "asinfo", "-v", "status"]

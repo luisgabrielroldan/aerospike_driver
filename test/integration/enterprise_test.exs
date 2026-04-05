@@ -6,9 +6,6 @@ defmodule Aerospike.Integration.EnterpriseTest do
 
       docker compose --profile enterprise up -d
 
-  And an evaluation feature key at `./features.conf` in the repo root.
-  Obtain one from https://aerospike.com/download/#evaluation-license
-
   Run with:
 
       mix test --include enterprise
@@ -23,6 +20,15 @@ defmodule Aerospike.Integration.EnterpriseTest do
   setup do
     host = System.get_env("AEROSPIKE_EE_HOST", "127.0.0.1")
     port = System.get_env("AEROSPIKE_EE_PORT", "3100") |> String.to_integer()
+
+    unless ee_running?(host, port) do
+      flunk("""
+      Enterprise server not running on #{host}:#{port}. Start with:
+
+          docker compose --profile enterprise up -d
+      """)
+    end
+
     name = :"ee_itest_#{System.unique_integer([:positive])}"
 
     opts = [
@@ -55,6 +61,17 @@ defmodule Aerospike.Integration.EnterpriseTest do
     assert :ok = Aerospike.put(conn, key, %{"v" => 1}, durable_delete: true)
     assert {:ok, record} = Aerospike.get(conn, key)
     assert record.bins["v"] == 1
+  end
+
+  defp ee_running?(host, port) do
+    case :gen_tcp.connect(~c"#{host}", port, [], 2_000) do
+      {:ok, sock} ->
+        :gen_tcp.close(sock)
+        true
+
+      _ ->
+        false
+    end
   end
 
   defp await_cluster_ready(name, timeout \\ 10_000) do

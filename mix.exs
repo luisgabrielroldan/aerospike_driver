@@ -35,7 +35,8 @@ defmodule Aerospike.MixProject do
         "coveralls.post": :test,
         "coveralls.html": :test,
         "coveralls.lcov": :test,
-        "coveralls.json": :test
+        "coveralls.json": :test,
+        "test.all": :test
       ],
       test_coverage: [tool: ExCoveralls]
     ]
@@ -84,6 +85,7 @@ defmodule Aerospike.MixProject do
       "coveralls.json": "coveralls.json --include integration",
       "coveralls.lcov": "coveralls.lcov --include integration",
       "test.coverage": "coveralls.html --include integration",
+      "test.all": "test --include integration --include property --include cluster --include enterprise",
       "test.enterprise": "test --include enterprise"
     ]
   end
