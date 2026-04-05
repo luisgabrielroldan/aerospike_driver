@@ -23,29 +23,70 @@ defmodule Aerospike.Op.Map do
       Rank -1  → highest-valued item
       Rank -3  → third highest by value
 
+  ## Map ordering
+
+  Maps can be unordered (default), key-ordered, or key-value-ordered. Key-ordered maps
+  (`attr: 1`) give O(log N) lookups on in-memory namespaces and are recommended.
+
   ## Policy and context
 
   Pass `policy: %{attr: order_attr, flags: write_flags}` on writes. Default is
   `%{attr: 0, flags: 0}` (unordered map, default write flags). Use `ctx:` for nested
   maps (see `Aerospike.Ctx`).
 
+  ### Write flags
+
+  Combine with `Bitwise.|||/2`:
+
+  - `0` — default upsert (create or update)
+  - `1` — `CREATE_ONLY` — fail if key exists
+  - `2` — `UPDATE_ONLY` — fail if key missing
+  - `4` — `NO_FAIL` — no-op instead of error on policy violation
+  - `8` — `DO_PARTIAL` — with `NO_FAIL`, apply entries that don't violate the policy
+
   ## Return types
 
   Functions that accept `return_type:` control what the server returns. Helpers:
 
-  - `return_none/0`, `return_key/0`, `return_value/0`, `return_key_value/0`
+  - `return_none/0` — nothing (fastest for write-only operations)
+  - `return_key/0` — key(s) of affected entries
+  - `return_value/0` — value(s) of affected entries
+  - `return_key_value/0` — key/value pairs
 
   Each function documents its default when `return_type:` is omitted.
 
-  ## Example
+  ## Examples
 
       alias Aerospike.Op.Map
 
+      # Basic CRUD on a map bin
       Aerospike.operate(conn, key, [
         Map.put("prefs", "theme", "dark"),
         Map.get_by_key("prefs", "theme"),
         Map.remove_by_key("prefs", "legacy", return_type: Map.return_key())
       ])
+
+      # Leaderboard: get top 3 scores by rank
+      Aerospike.operate(conn, key, [
+        Map.get_by_rank_range("scores", -3, 3,
+          return_type: Map.return_key_value())
+      ])
+
+      # Atomic counter increment per category
+      Aerospike.operate(conn, key, [
+        Map.increment("stats", "views", 1),
+        Map.increment("stats", "clicks", 1)
+      ])
+
+      # Trim old events by key range (timestamps as keys)
+      cutoff = System.system_time(:millisecond) - 86_400_000
+      Aerospike.operate(conn, key, [
+        Map.remove_by_key_range("events", nil, cutoff,
+          return_type: Map.return_none())
+      ])
+
+  See the [Map Patterns guide](map-patterns.md) for real-world usage patterns
+  like event containers, document stores, and leaderboards.
   """
 
   alias Aerospike.Protocol.CDT

@@ -50,7 +50,7 @@ defmodule Aerospike.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
-      files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
+      files: ~w(lib guides .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
@@ -101,10 +101,15 @@ defmodule Aerospike.MixProject do
       extras: [
         {"README.md", [title: "Overview"]},
         {"CHANGELOG.md", [title: "Changelog"]},
-        {"LICENSE", [title: "License"]}
+        {"LICENSE", [title: "License"]},
+        "guides/getting-started.md",
+        "guides/operate-and-cdt.md",
+        "guides/map-patterns.md",
+        "guides/list-patterns.md",
+        "guides/nested-operations.md"
       ],
       groups_for_extras: [
-        Guides: ~r/guides\/.*/
+        Tutorials: ~r/guides\/.*/
       ],
       groups_for_modules: [
         "Data Types": [

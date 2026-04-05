@@ -29,6 +29,11 @@ defmodule Aerospike.Op.List do
       Rank -1  → largest value
       Rank -N  → Nth largest value
 
+  ## List ordering
+
+  Lists default to unordered (insertion order). Set `policy: %{order: 1, flags: 0}`
+  to create an ordered list that maintains sorted order on every write.
+
   ## Nested CDT operations
 
   Nested operations are supported via the optional `ctx:` keyword argument.
@@ -39,24 +44,52 @@ defmodule Aerospike.Op.List do
       List.append("bin", 11, ctx: [Aerospike.Ctx.list_index(-1)])
       # bin result = [[7,9,5], [1,2,3], [6,5,4,1,11]]
 
-  ## Example
-
-      alias Aerospike.Op.List
-
-      Aerospike.operate(conn, key, [
-        List.append("tags", "vip"),
-        List.remove_by_value("tags", "trial", return_type: List.return_value()),
-        List.size("tags")
-      ])
-
   ## Return types
 
   Functions that accept `return_type:` let you control what the server returns:
 
-  - `return_none/0` — no returned value (default for write-only operations)
+  - `return_none/0` — no returned value (fastest for write-only operations)
   - `return_index/0` — index offset order
   - `return_count/0` — count of items selected
   - `return_value/0` — value(s) for single reads and value lists for range reads
+
+  ## Examples
+
+      alias Aerospike.Op.List
+
+      # Tag management
+      Aerospike.operate(conn, key, [
+        List.append("tags", "vip"),
+        List.remove_by_value("tags", "trial", return_type: List.return_none()),
+        List.size("tags")
+      ])
+
+      # Queue: atomic enqueue + dequeue
+      Aerospike.operate(conn, key, [
+        List.append("queue", %{"job" => "send_email"}),
+        List.pop("queue", 0)
+      ])
+
+      # Bounded list: append then keep last 100 entries
+      Aerospike.operate(conn, key, [
+        List.append("history", new_entry),
+        List.trim("history", -100, 100)
+      ])
+
+      # Top-3 values by rank
+      Aerospike.operate(conn, key, [
+        List.get_by_rank_range("scores", -3, 3)
+      ])
+
+      # Time-range query on [timestamp, value] pairs
+      Aerospike.operate(conn, key, [
+        List.get_by_value_range("readings",
+          [1_523_474_231_000, nil],
+          [1_523_474_234_000, nil])
+      ])
+
+  See the [List Patterns guide](list-patterns.md) for real-world usage patterns
+  like queues, time series, and bounded lists.
   """
 
   alias Aerospike.Protocol.CDT
