@@ -1,6 +1,9 @@
 defmodule Aerospike.CRUD do
   @moduledoc false
-  # Implements the core single-record commands: put, get, delete, exists, touch.
+
+  import Bitwise
+
+  # Implements the core single-record commands: put, get, delete, exists, touch, operate.
   #
   # Each command follows the same pipeline:
   # 1. Merge per-command defaults from ETS with caller-supplied opts.
@@ -12,6 +15,8 @@ defmodule Aerospike.CRUD do
   alias Aerospike.Key
   alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.AsmMsg.Field
+  alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
@@ -133,7 +138,137 @@ defmodule Aerospike.CRUD do
     router_then_decode(conn, key, wire, merged, &finish_put/2)
   end
 
-  # Sends wire bytes through the Router, then decodes the AS_MSG response.
+  @doc """
+  Runs an atomic multi-operation command on a single record.
+  """
+  @spec operate(atom(), Key.t(), [Operation.t()], keyword()) ::
+          {:ok, Aerospike.Record.t()} | {:error, Error.t()}
+  def operate(conn, %Key{} = key, ops, opts \\ [])
+      when is_atom(conn) and is_list(ops) and is_list(opts) do
+    merged = merge_defaults(conn, :operate, opts)
+
+    with_telemetry(:operate, key, conn, fn -> run_operate(conn, key, ops, merged) end)
+  end
+
+  defp run_operate(_conn, _key, [], _merged) do
+    {{:error,
+      Error.from_result_code(:parameter_error,
+        message: "operate requires a non-empty operation list"
+      )}, nil}
+  end
+
+  defp run_operate(conn, key, ops, merged) do
+    wire = encode_operate(key, ops, merged)
+    router_then_decode(conn, key, wire, merged, &finish_operate(&1, &2, key))
+  end
+
+  defp finish_operate(msg, node, key) do
+    case Response.parse_record_response(msg, key) do
+      {:ok, _} = ok -> {ok, node}
+      {:error, _} = err -> {err, node}
+    end
+  end
+
+  defp encode_operate(key, ops, merged) do
+    st = scan_operate_ops(ops)
+
+    info1 =
+      if st.header_only? do
+        st.info1 ||| AsmMsg.info1_nobindata()
+      else
+        st.info1
+      end
+
+    info2 = if st.has_write?, do: st.info2 ||| AsmMsg.info2_write(), else: st.info2
+
+    info2 =
+      if respond_all_ops?(merged, st, info1) do
+        info2 ||| AsmMsg.info2_respond_all_ops()
+      else
+        info2
+      end
+
+    base = %AsmMsg{
+      info1: info1,
+      info2: info2,
+      info3: st.info3,
+      fields: operate_fields(key),
+      operations: ops
+    }
+
+    base
+    |> Policy.apply_operate_policy(merged, st.has_write?)
+    |> Policy.apply_send_key(key, merged)
+    |> AsmMsg.encode()
+    |> Message.encode_as_msg()
+  end
+
+  defp operate_fields(%Key{} = key) do
+    [
+      Field.namespace(key.namespace),
+      Field.set(key.set),
+      Field.digest(key.digest)
+    ]
+  end
+
+  defp respond_all_ops?(merged, st, info1) do
+    want? = st.respond_all? or Keyword.get(merged, :respond_per_each_op, false)
+    get_all? = (info1 &&& AsmMsg.info1_get_all()) != 0
+    want? and not get_all?
+  end
+
+  defp scan_operate_ops(ops) do
+    st =
+      Enum.reduce(
+        ops,
+        %{
+          info1: 0,
+          info2: 0,
+          info3: 0,
+          read_bin?: false,
+          read_header?: false,
+          respond_all?: false,
+          has_write?: false
+        },
+        fn op, acc ->
+          acc
+          |> maybe_mark_respond_all(op)
+          |> accumulate_by_op_type(op)
+        end
+      )
+
+    Map.put(st, :header_only?, st.read_header? and not st.read_bin?)
+  end
+
+  defp maybe_mark_respond_all(acc, %Operation{op_type: t, map_cdt: m}) do
+    ra? = t in [7, 8, 12, 13, 15, 16] or (t == 3 and m) or (t == 4 and m)
+    %{acc | respond_all?: acc.respond_all? or ra?}
+  end
+
+  defp accumulate_by_op_type(acc, %Operation{op_type: 1, read_header: true}) do
+    %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_header?: true}
+  end
+
+  defp accumulate_by_op_type(acc, %Operation{op_type: 1} = op) do
+    info1 = acc.info1 ||| AsmMsg.info1_read()
+    info1 = if op.bin_name == "", do: info1 ||| AsmMsg.info1_get_all(), else: info1
+    %{acc | info1: info1, read_bin?: true}
+  end
+
+  defp accumulate_by_op_type(acc, %Operation{op_type: t}) when t in [3, 7] do
+    %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_bin?: true}
+  end
+
+  defp accumulate_by_op_type(acc, %Operation{op_type: t}) when t in [12, 15] do
+    %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_bin?: true}
+  end
+
+  defp accumulate_by_op_type(acc, %Operation{op_type: t})
+       when t in [2, 4, 5, 8, 9, 10, 11, 13, 14, 16] do
+    %{acc | has_write?: true}
+  end
+
+  defp accumulate_by_op_type(acc, _), do: acc
   # Returns `{result, node_name}` so telemetry can tag the responding node.
   defp router_then_decode(conn, key, wire, merged, on_msg) do
     case Router.run(conn, key, wire, router_opts(merged)) do

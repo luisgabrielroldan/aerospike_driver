@@ -31,13 +31,25 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @particle_list 20
   @particle_geojson 23
 
-  defstruct op_type: 0, particle_type: 0, bin_name: "", data: <<>>
+  # `read_header`: when true, this is a header-only read (generation/TTL, no bins).
+  # Wire `op_type` matches `READ` (1); flagging is used only for operate header flags.
+  #
+  # `map_cdt`: true for map collection op types (Go `_MAP_READ` / `_MAP_MODIFY`); same wire
+  # op bytes as list CDT but operate-args treats them like map for RESPOND_ALL_OPS.
+  defstruct op_type: 0,
+            particle_type: 0,
+            bin_name: "",
+            data: <<>>,
+            read_header: false,
+            map_cdt: false
 
   @type t :: %__MODULE__{
           op_type: non_neg_integer(),
           particle_type: non_neg_integer(),
           bin_name: String.t(),
-          data: binary()
+          data: binary(),
+          read_header: boolean(),
+          map_cdt: boolean()
         }
 
   # Operation type accessor functions
@@ -284,6 +296,32 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
       particle_type: @particle_integer,
       bin_name: bin_name,
       data: <<value::64-big-signed>>
+    }
+  end
+
+  @doc """
+  Creates an append operation (string concat to an existing string bin).
+  """
+  @spec append(String.t(), String.t()) :: t()
+  def append(bin_name, value) when is_binary(bin_name) and is_binary(value) do
+    %__MODULE__{
+      op_type: @append,
+      particle_type: @particle_string,
+      bin_name: bin_name,
+      data: value
+    }
+  end
+
+  @doc """
+  Creates a prepend operation (prefix to an existing string bin).
+  """
+  @spec prepend(String.t(), String.t()) :: t()
+  def prepend(bin_name, value) when is_binary(bin_name) and is_binary(value) do
+    %__MODULE__{
+      op_type: @prepend,
+      particle_type: @particle_string,
+      bin_name: bin_name,
+      data: value
     }
   end
 

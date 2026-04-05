@@ -59,13 +59,30 @@ defmodule Aerospike.Policy do
     replica: [type: :non_neg_integer]
   ]
 
+  # Operate merges read + write semantics; options mirror `put`/`get` where applicable.
+  @operate_keys [
+    ttl: [type: :non_neg_integer],
+    timeout: [type: :non_neg_integer],
+    generation: [type: :non_neg_integer],
+    gen_policy: [type: {:in, [:none, :expect_gen_equal, :expect_gen_gt]}],
+    exists: [
+      type: {:in, [:create_only, :update_only, :replace_only, :create_or_replace]}
+    ],
+    send_key: [type: :boolean],
+    durable_delete: [type: :boolean],
+    respond_per_each_op: [type: :boolean],
+    pool_checkout_timeout: [type: :non_neg_integer],
+    replica: [type: :non_neg_integer]
+  ]
+
   # Per-command defaults that can be set at `Aerospike.start_link/1` time.
   @defaults_keys [
     write: [type: :keyword_list, keys: @write_keys],
     read: [type: :keyword_list, keys: @read_keys],
     delete: [type: :keyword_list, keys: @delete_keys],
     exists: [type: :keyword_list, keys: @exists_keys],
-    touch: [type: :keyword_list, keys: @touch_keys]
+    touch: [type: :keyword_list, keys: @touch_keys],
+    operate: [type: :keyword_list, keys: @operate_keys]
   ]
 
   # Schema for the top-level `Aerospike.start_link/1` options.
@@ -102,6 +119,7 @@ defmodule Aerospike.Policy do
   @delete_schema NimbleOptions.new!(@delete_keys)
   @exists_schema NimbleOptions.new!(@exists_keys)
   @touch_schema NimbleOptions.new!(@touch_keys)
+  @operate_schema NimbleOptions.new!(@operate_keys)
 
   @doc false
   def start_schema, do: @start_schema
@@ -134,6 +152,9 @@ defmodule Aerospike.Policy do
 
   @doc false
   def validate_touch(opts), do: NimbleOptions.validate(opts, @touch_schema)
+
+  @doc false
+  def validate_operate(opts), do: NimbleOptions.validate(opts, @operate_schema)
 
   @doc false
   def validation_error_message(%NimbleOptions.ValidationError{} = e), do: Exception.message(e)
@@ -231,6 +252,24 @@ defmodule Aerospike.Policy do
     msg
     |> put_ttl(Keyword.get(opts, :ttl))
     |> put_timeout(Keyword.get(opts, :timeout))
+  end
+
+  # Operate: timeout always applies; write-style flags apply only when the op list includes writes.
+  @doc false
+  @spec apply_operate_policy(AsmMsg.t(), keyword(), boolean()) :: AsmMsg.t()
+  def apply_operate_policy(%AsmMsg{} = msg, opts, has_write?)
+      when is_list(opts) and is_boolean(has_write?) do
+    msg = put_timeout(msg, Keyword.get(opts, :timeout))
+
+    if has_write? do
+      msg
+      |> put_ttl(Keyword.get(opts, :ttl))
+      |> apply_generation_flags(opts)
+      |> apply_exists_flags(opts)
+      |> maybe_durable_delete_write(Keyword.get(opts, :durable_delete))
+    else
+      msg
+    end
   end
 
   # Appends a KEY field to the message so the server stores the original user key

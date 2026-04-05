@@ -19,6 +19,10 @@ defmodule Aerospike do
       {:ok, record} = Aerospike.get(:aero, key)
       record.bins["name"] == "Ada"
 
+      import Aerospike.Op
+      {:ok, rec2} = Aerospike.operate(:aero, key, [put("status", "ok"), get("name")])
+      rec2.bins["name"] == "Ada"
+
       Aerospike.close(:aero)
 
   """
@@ -74,7 +78,7 @@ defmodule Aerospike do
   * `:tls` — when `true`, upgrades each node connection with TLS after TCP connect (default `false`).
   * `:tls_opts` — keyword list passed to `:ssl.connect/3` (certificates, verify, SNI, etc.; default `[]`).
     For non-IP hosts, `:server_name_indication` defaults to the hostname unless set in `:tls_opts`.
-  * `:defaults` — policy defaults per command (`:write`, `:read`, `:delete`, `:exists`, `:touch`).
+  * `:defaults` — policy defaults per command (`:write`, `:read`, `:delete`, `:exists`, `:touch`, `:operate`).
 
   ## TLS example
 
@@ -270,6 +274,43 @@ defmodule Aerospike do
   def touch!(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
     case touch(conn, key, opts) do
       :ok -> :ok
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Runs multiple read/write operations on one record in a single atomic round-trip.
+
+  Pass a list of operations from `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, etc.
+
+  ## Options
+
+  Merges **read** and **write** policy keys: `:timeout`, `:ttl`, `:generation`, `:gen_policy`,
+  `:exists`, `:send_key`, `:durable_delete`, `:respond_per_each_op`, `:pool_checkout_timeout`,
+  `:replica`.
+  """
+  @spec operate(conn, Key.t(), [Aerospike.Op.t()], keyword()) ::
+          {:ok, Aerospike.Record.t()} | {:error, Error.t()}
+  def operate(conn, %Key{} = key, ops, opts \\ [])
+      when is_atom(conn) and is_list(ops) and is_list(opts) do
+    case Policy.validate_operate(opts) do
+      {:ok, call_opts} ->
+        CRUD.operate(conn, key, ops, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `operate/4` but returns `%Aerospike.Record{}` or raises `Aerospike.Error`.
+  """
+  @spec operate!(conn, Key.t(), [Aerospike.Op.t()], keyword()) :: Aerospike.Record.t()
+  def operate!(conn, %Key{} = key, ops, opts \\ [])
+      when is_atom(conn) and is_list(ops) and is_list(opts) do
+    case operate(conn, key, ops, opts) do
+      {:ok, record} -> record
       {:error, %Error{} = e} -> raise e
     end
   end
