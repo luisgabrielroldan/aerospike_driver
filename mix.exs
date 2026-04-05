@@ -106,7 +106,8 @@ defmodule Aerospike.MixProject do
         "guides/operate-and-cdt.md",
         "guides/map-patterns.md",
         "guides/list-patterns.md",
-        "guides/nested-operations.md"
+        "guides/nested-operations.md",
+        "guides/batch-operations.md"
       ],
       groups_for_extras: [
         Tutorials: ~r/guides\/.*/
@@ -116,6 +117,11 @@ defmodule Aerospike.MixProject do
           Aerospike.Key,
           Aerospike.Record,
           Aerospike.Error
+        ],
+        "Batch & expressions": [
+          Aerospike.Batch,
+          Aerospike.BatchResult,
+          Aerospike.Exp
         ]
       ],
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],

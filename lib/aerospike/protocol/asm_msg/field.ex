@@ -230,4 +230,22 @@ defmodule Aerospike.Protocol.AsmMsg.Field do
   def digest(digest) when is_binary(digest) and byte_size(digest) == 20 do
     %__MODULE__{type: @digest_ripe, data: digest}
   end
+
+  @doc """
+  Creates a KEY field from a Key struct's user_key.
+
+  - Integer user_key → particle type 1, 8 bytes big-endian
+  - String user_key → particle type 3, raw UTF-8
+  - nil user_key → nil (no field, typically digest-only key)
+  """
+  @spec key_from_user_key(%{user_key: integer() | binary() | nil}) :: t() | nil
+  def key_from_user_key(%{user_key: n}) when is_integer(n) do
+    key(1, <<n::64-signed-big>>)
+  end
+
+  def key_from_user_key(%{user_key: s}) when is_binary(s) do
+    key(3, s)
+  end
+
+  def key_from_user_key(%{user_key: nil}), do: nil
 end

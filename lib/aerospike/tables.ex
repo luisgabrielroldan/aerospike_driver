@@ -22,4 +22,8 @@ defmodule Aerospike.Tables do
   # ETS key that the Router checks to confirm the cluster has completed initial tend.
   @doc false
   def ready_key, do: :cluster_ready
+
+  # Task.Supervisor for batch fan-out (isolates task crashes from callers).
+  @doc false
+  def task_sup(name) when is_atom(name), do: :"#{name}_task_sup"
 end

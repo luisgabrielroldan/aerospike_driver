@@ -69,6 +69,45 @@ defmodule Aerospike.PolicyTest do
     test "accepts valid options" do
       assert {:ok, _} = Policy.validate_read(timeout: 100, replica: 0)
     end
+
+    test "accepts replica atoms" do
+      for a <- [:master, :sequence, :any] do
+        assert {:ok, _} = Policy.validate_read(timeout: 100, replica: a)
+      end
+    end
+
+    test "rejects empty :bins list" do
+      assert {:error, %NimbleOptions.ValidationError{key: :bins}} =
+               Policy.validate_read(bins: [])
+    end
+  end
+
+  describe "validate_batch/1" do
+    test "accepts known options" do
+      assert {:ok, opts} =
+               Policy.validate_batch(
+                 timeout: 10,
+                 pool_checkout_timeout: 20,
+                 replica: 0,
+                 respond_all_keys: false
+               )
+
+      assert opts[:respond_all_keys] == false
+    end
+
+    test "rejects unknown option" do
+      assert {:error, %NimbleOptions.ValidationError{}} = Policy.validate_batch(foo: 1)
+    end
+
+    test "accepts replica atoms and filter struct" do
+      alias Aerospike.Exp
+
+      assert {:ok, _} =
+               Policy.validate_batch(
+                 replica: :master,
+                 filter: Exp.from_wire(<<1, 2, 3>>)
+               )
+    end
   end
 
   describe "policy default merge semantics" do

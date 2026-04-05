@@ -172,6 +172,7 @@ Common options:
 
 ## Next Steps
 
-- [Working with Operations](operate-and-cdt.md) — atomic multi-operation transactions and CDT operations
+- [Working with Operations](operate-and-cdt.md) — atomic multi-op and CDT operations
+- [Batch Operations](batch-operations.md) — multi-key reads, writes, and mixed ops in one round-trip
 - `Aerospike.Op.Map` — full map operation reference
 - `Aerospike.Op.List` — full list operation reference

@@ -5,6 +5,8 @@ defmodule Aerospike.Connection do
   # wire-protocol framing (8-byte header). Connections are not shared across
   # processes — they are owned by NimblePool workers.
 
+  import Bitwise
+
   alias Aerospike.Protocol.Admin
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Message
@@ -182,6 +184,49 @@ defmodule Aerospike.Connection do
       {:error, _} = err -> err
     end
   end
+
+  @doc """
+  Sends wire data and reads a multi-frame response (batch/scan/query).
+
+  The server sends one proto frame per record, terminated by a frame whose
+  AS_MSG header has the INFO3_LAST bit set (byte 3, bit 0). All frame bodies
+  are concatenated and returned as a single binary.
+  """
+  @spec request_stream(t(), iodata()) ::
+          {:ok, t(), binary()} | {:error, term()}
+  def request_stream(%__MODULE__{} = conn, data) do
+    {mod, socket} = conn.transport
+
+    case mod.send(socket, data) do
+      :ok -> recv_stream(conn, mod, socket, [])
+      {:error, _} = err -> err
+    end
+  end
+
+  # Reads proto frames until the body carries the INFO3_LAST sentinel.
+  # AS_MSG body layout: byte 0 = header_size (22), bytes 1-4 = info1..info4.
+  # INFO3_LAST is bit 0 of byte 3.
+  @info3_last_bit 0x01
+
+  defp recv_stream(conn, mod, socket, acc) do
+    with {:ok, header} <- mod.recv(socket, 8, conn.recv_timeout),
+         {:ok, {_version, _type, length}} <- Message.decode_header(header),
+         {:ok, body} <- recv_exact(mod, socket, length, conn.recv_timeout) do
+      acc = [body | acc]
+
+      if stream_last_frame?(body) do
+        {:ok, refresh_idle(conn), IO.iodata_to_binary(Enum.reverse(acc))}
+      else
+        recv_stream(conn, mod, socket, acc)
+      end
+    end
+  end
+
+  # An empty frame or one whose info3 byte has the LAST bit signals end-of-stream.
+  defp stream_last_frame?(<<_hdr_size::8, _i1::8, _i2::8, i3::8, _rest::binary>>),
+    do: (i3 &&& @info3_last_bit) != 0
+
+  defp stream_last_frame?(_), do: true
 
   @doc """
   Runs Aerospike INFO command(s) and returns a map of key-value strings.

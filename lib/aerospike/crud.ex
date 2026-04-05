@@ -19,9 +19,9 @@ defmodule Aerospike.CRUD do
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Protocol.Response
   alias Aerospike.Router
-  alias Aerospike.Tables
 
   # Coerces atom bin names to strings; the wire protocol uses string bin names.
   @doc false
@@ -40,17 +40,58 @@ defmodule Aerospike.CRUD do
   @spec put(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
   def put(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
     bins = normalize_bins(bins)
-    merged = merge_defaults(conn, :write, opts)
+    merged = Policy.merge_defaults(conn, :write, opts)
 
-    with_telemetry(:put, key, conn, fn -> run_put(conn, key, bins, merged) end)
+    with_telemetry(:put, key, conn, fn ->
+      run_write(conn, key, bins, merged, Operation.op_write())
+    end)
   end
 
-  defp run_put(conn, key, bins, merged) do
-    wire = encode_put(key, bins, merged)
-    router_then_decode(conn, key, wire, merged, &finish_put/2)
+  @doc """
+  Atomically adds integer deltas to bins for `key`.
+  """
+  @spec add(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
+  def add(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+    bins = normalize_bins(bins)
+    merged = Policy.merge_defaults(conn, :write, opts)
+
+    with_telemetry(:add, key, conn, fn ->
+      run_write(conn, key, bins, merged, Operation.op_add())
+    end)
   end
 
-  defp finish_put(msg, node) do
+  @doc """
+  Atomically appends string suffixes to bins for `key`.
+  """
+  @spec append(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
+  def append(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+    bins = normalize_bins(bins)
+    merged = Policy.merge_defaults(conn, :write, opts)
+
+    with_telemetry(:append, key, conn, fn ->
+      run_write(conn, key, bins, merged, Operation.op_append())
+    end)
+  end
+
+  @doc """
+  Atomically prepends string prefixes to bins for `key`.
+  """
+  @spec prepend(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
+  def prepend(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+    bins = normalize_bins(bins)
+    merged = Policy.merge_defaults(conn, :write, opts)
+
+    with_telemetry(:prepend, key, conn, fn ->
+      run_write(conn, key, bins, merged, Operation.op_prepend())
+    end)
+  end
+
+  defp run_write(conn, key, bins, merged, op_type) do
+    wire = encode_write(key, bins, merged, op_type)
+    router_then_decode(conn, key, wire, merged, &finish_write/2)
+  end
+
+  defp finish_write(msg, node) do
     case Response.parse_write_response(msg) do
       :ok -> {:ok, node}
       {:error, _} = err -> {err, node}
@@ -62,7 +103,7 @@ defmodule Aerospike.CRUD do
   """
   @spec get(atom(), Key.t(), keyword()) :: {:ok, Aerospike.Record.t()} | {:error, Error.t()}
   def get(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    merged = merge_defaults(conn, :read, opts)
+    merged = Policy.merge_defaults(conn, :read, opts)
 
     with_telemetry(:get, key, conn, fn -> run_get(conn, key, merged) end)
   end
@@ -84,7 +125,7 @@ defmodule Aerospike.CRUD do
   """
   @spec delete(atom(), Key.t(), keyword()) :: {:ok, boolean()} | {:error, Error.t()}
   def delete(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    merged = merge_defaults(conn, :delete, opts)
+    merged = Policy.merge_defaults(conn, :delete, opts)
 
     with_telemetry(:delete, key, conn, fn -> run_delete(conn, key, merged) end)
   end
@@ -106,7 +147,7 @@ defmodule Aerospike.CRUD do
   """
   @spec exists(atom(), Key.t(), keyword()) :: {:ok, boolean()} | {:error, Error.t()}
   def exists(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    merged = merge_defaults(conn, :exists, opts)
+    merged = Policy.merge_defaults(conn, :exists, opts)
 
     with_telemetry(:exists, key, conn, fn -> run_exists(conn, key, merged) end)
   end
@@ -128,14 +169,14 @@ defmodule Aerospike.CRUD do
   """
   @spec touch(atom(), Key.t(), keyword()) :: :ok | {:error, Error.t()}
   def touch(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    merged = merge_defaults(conn, :touch, opts)
+    merged = Policy.merge_defaults(conn, :touch, opts)
 
     with_telemetry(:touch, key, conn, fn -> run_touch(conn, key, merged) end)
   end
 
   defp run_touch(conn, key, merged) do
     wire = encode_touch(key, merged)
-    router_then_decode(conn, key, wire, merged, &finish_put/2)
+    router_then_decode(conn, key, wire, merged, &finish_write/2)
   end
 
   @doc """
@@ -145,7 +186,7 @@ defmodule Aerospike.CRUD do
           {:ok, Aerospike.Record.t()} | {:error, Error.t()}
   def operate(conn, %Key{} = key, ops, opts \\ [])
       when is_atom(conn) and is_list(ops) and is_list(opts) do
-    merged = merge_defaults(conn, :operate, opts)
+    merged = Policy.merge_defaults(conn, :operate, opts)
 
     with_telemetry(:operate, key, conn, fn -> run_operate(conn, key, ops, merged) end)
   end
@@ -170,7 +211,7 @@ defmodule Aerospike.CRUD do
   end
 
   defp encode_operate(key, ops, merged) do
-    st = scan_operate_ops(ops)
+    st = OperateFlags.scan_ops(ops)
 
     info1 =
       if st.header_only? do
@@ -217,61 +258,9 @@ defmodule Aerospike.CRUD do
     want? and not get_all?
   end
 
-  defp scan_operate_ops(ops) do
-    st =
-      Enum.reduce(
-        ops,
-        %{
-          info1: 0,
-          info2: 0,
-          info3: 0,
-          read_bin?: false,
-          read_header?: false,
-          respond_all?: false,
-          has_write?: false
-        },
-        fn op, acc ->
-          acc
-          |> maybe_mark_respond_all(op)
-          |> accumulate_by_op_type(op)
-        end
-      )
-
-    Map.put(st, :header_only?, st.read_header? and not st.read_bin?)
-  end
-
-  defp maybe_mark_respond_all(acc, %Operation{op_type: t, map_cdt: m}) do
-    ra? = t in [7, 8, 12, 13, 15, 16] or (t == 3 and m) or (t == 4 and m)
-    %{acc | respond_all?: acc.respond_all? or ra?}
-  end
-
-  defp accumulate_by_op_type(acc, %Operation{op_type: 1, read_header: true}) do
-    %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_header?: true}
-  end
-
-  defp accumulate_by_op_type(acc, %Operation{op_type: 1} = op) do
-    info1 = acc.info1 ||| AsmMsg.info1_read()
-    info1 = if op.bin_name == "", do: info1 ||| AsmMsg.info1_get_all(), else: info1
-    %{acc | info1: info1, read_bin?: true}
-  end
-
-  defp accumulate_by_op_type(acc, %Operation{op_type: t}) when t in [3, 7] do
-    %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_bin?: true}
-  end
-
-  defp accumulate_by_op_type(acc, %Operation{op_type: t}) when t in [12, 15] do
-    %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_bin?: true}
-  end
-
-  defp accumulate_by_op_type(acc, %Operation{op_type: t})
-       when t in [2, 4, 5, 8, 9, 10, 11, 13, 14, 16] do
-    %{acc | has_write?: true}
-  end
-
-  defp accumulate_by_op_type(acc, _), do: acc
   # Returns `{result, node_name}` so telemetry can tag the responding node.
   defp router_then_decode(conn, key, wire, merged, on_msg) do
-    case Router.run(conn, key, wire, router_opts(merged)) do
+    case Router.run(conn, key, wire, merged) do
       {:ok, body, node} -> with_decoded_msg(body, node, on_msg)
       {:error, %Error{} = e} -> {{:error, e}, nil}
     end
@@ -307,35 +296,8 @@ defmodule Aerospike.CRUD do
   defp telemetry_result({:ok, _}), do: :ok
   defp telemetry_result({:error, %Error{code: code}}), do: {:error, code}
 
-  # Merges connection-level defaults (set at start_link time) with per-call opts.
-  # Per-call opts take precedence.
-  defp merge_defaults(conn, kind, opts) do
-    defaults = read_defaults(conn, kind)
-    Keyword.merge(defaults, opts)
-  end
-
-  defp read_defaults(conn, command_type) when is_atom(conn) do
-    case :ets.lookup(Tables.meta(conn), :policy_defaults) do
-      [{_, defaults}] -> Keyword.get(defaults, command_type, [])
-      [] -> []
-    end
-  end
-
-  # Extracts routing-relevant options (pool timeout, replica index) from the
-  # merged opts to pass to Router.run/4.
-  defp router_opts(opts) when is_list(opts) do
-    replica = Keyword.get(opts, :replica)
-
-    opts
-    |> Keyword.take([:pool_checkout_timeout])
-    |> maybe_put_replica_index(replica)
-  end
-
-  defp maybe_put_replica_index(kw, nil), do: kw
-  defp maybe_put_replica_index(kw, r) when is_integer(r), do: Keyword.put(kw, :replica_index, r)
-
-  defp encode_put(key, bins, merged) do
-    ops = Value.encode_bin_operations(bins)
+  defp encode_write(key, bins, merged, op_type) do
+    ops = Value.encode_bin_operations(bins, op_type)
 
     key
     |> base_write_msg(ops)

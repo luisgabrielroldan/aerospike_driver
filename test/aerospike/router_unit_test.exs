@@ -110,6 +110,33 @@ defmodule Aerospike.RouterUnitTest do
              Router.run(name, key, <<>>, pool_checkout_timeout: 100)
   end
 
+  @tag capture_log: true
+  test "replica :sequence routes like :master for replica index 0", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    key = Key.new("test", "x", "replica_seq")
+    pid = Key.partition_id(key)
+
+    :ets.insert(Tables.partitions(name), {{key.namespace, pid, 0}, "master_node"})
+    :ets.insert(Tables.nodes(name), {"master_node", %{pool_pid: nil}})
+
+    assert {:error, %{code: :invalid_node}} = Router.run(name, key, <<>>, replica: :sequence)
+  end
+
+  @tag capture_log: true
+  test "replica atoms :master/:any route to replica index 0", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    key = Key.new("test", "x", "replica_atom_test")
+    pid = Key.partition_id(key)
+
+    # Only insert partition for replica index 0
+    :ets.insert(Tables.partitions(name), {{key.namespace, pid, 0}, "master_node"})
+    :ets.insert(Tables.nodes(name), {"master_node", %{pool_pid: nil}})
+
+    # Both :master and :any should find replica index 0 and hit the pool (which errors on nil pid)
+    assert {:error, %{code: :invalid_node}} = Router.run(name, key, <<>>, replica: :master)
+    assert {:error, %{code: :invalid_node}} = Router.run(name, key, <<>>, replica: :any)
+  end
+
   test "honours non-zero replica_index", %{name: name} do
     :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
     key = Key.new("test", "x", "y")
@@ -123,5 +150,31 @@ defmodule Aerospike.RouterUnitTest do
 
     assert {:error, %{code: :invalid_node}} =
              Router.run(name, key, <<>>, replica_index: 1)
+  end
+
+  test "group_by_node/3 groups keys by node preserving order", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+
+    k1 = Key.new("test", "s", "router-batch-a")
+    k2 = Key.new("test", "s", "router-batch-b")
+    p1 = Key.partition_id(k1)
+    p2 = Key.partition_id(k2)
+
+    {:ok, pool} = Agent.start(fn -> :ok end)
+
+    on_exit(fn ->
+      try do
+        Agent.stop(pool, :normal, 100)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    :ets.insert(Tables.partitions(name), {{k1.namespace, p1, 0}, "node_batch"})
+    :ets.insert(Tables.partitions(name), {{k2.namespace, p2, 0}, "node_batch"})
+    :ets.insert(Tables.nodes(name), {"node_batch", %{pool_pid: pool}})
+
+    assert {:ok, %{"node_batch" => %{pool_pid: ^pool, entries: [{0, ^k1}, {1, ^k2}]}}} =
+             Router.group_by_node(name, [k1, k2])
   end
 end

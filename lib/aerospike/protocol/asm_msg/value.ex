@@ -1,6 +1,7 @@
 defmodule Aerospike.Protocol.AsmMsg.Value do
   @moduledoc false
 
+  alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.MessagePack
@@ -18,37 +19,62 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @doc """
   Decodes wire particle bytes to an Elixir term.
 
-  Unsupported particle types return `{:raw, particle_type, data}`.
+  Returns `{:ok, term}` on success or `{:error, Error.t()}` on failure.
+  Unsupported particle types return `{:ok, {:raw, particle_type, data}}`.
   """
-  @spec decode_value(non_neg_integer(), binary()) :: term()
-  def decode_value(@particle_null, <<>>), do: nil
+  @spec decode_value(non_neg_integer(), binary()) :: {:ok, term()} | {:error, Error.t()}
+  def decode_value(@particle_null, <<>>), do: {:ok, nil}
 
-  def decode_value(@particle_integer, <<n::64-signed-big>>), do: n
+  def decode_value(@particle_integer, <<n::64-signed-big>>), do: {:ok, n}
 
-  def decode_value(@particle_float, <<f::64-float-big>>), do: f
+  def decode_value(@particle_float, <<f::64-float-big>>), do: {:ok, f}
 
-  def decode_value(@particle_string, data) when is_binary(data), do: data
+  def decode_value(@particle_string, data) when is_binary(data), do: {:ok, data}
 
-  def decode_value(@particle_blob, data) when is_binary(data), do: {:blob, data}
+  def decode_value(@particle_blob, data) when is_binary(data), do: {:ok, {:blob, data}}
 
-  def decode_value(@particle_bool, <<0>>), do: false
-  def decode_value(@particle_bool, <<1>>), do: true
+  def decode_value(@particle_bool, <<0>>), do: {:ok, false}
+  def decode_value(@particle_bool, <<1>>), do: {:ok, true}
 
   def decode_value(@particle_map, data) when is_binary(data) do
-    data |> MessagePack.unpack!() |> normalize_msgpack_particle_strings()
+    case MessagePack.unpack(data) do
+      {:ok, {packed, <<>>}} ->
+        {:ok, normalize_msgpack_particle_strings(packed)}
+
+      {:ok, {_, rest}} ->
+        {:error,
+         Error.from_result_code(:parse_error,
+           message: "MessagePack map: trailing bytes (#{byte_size(rest)})"
+         )}
+
+      {:error, :invalid_msgpack} ->
+        {:error, Error.from_result_code(:parse_error, message: "invalid MessagePack map")}
+    end
   end
 
   def decode_value(@particle_list, data) when is_binary(data) do
-    data |> MessagePack.unpack!() |> normalize_msgpack_particle_strings()
+    case MessagePack.unpack(data) do
+      {:ok, {packed, <<>>}} ->
+        {:ok, normalize_msgpack_particle_strings(packed)}
+
+      {:ok, {_, rest}} ->
+        {:error,
+         Error.from_result_code(:parse_error,
+           message: "MessagePack list: trailing bytes (#{byte_size(rest)})"
+         )}
+
+      {:error, :invalid_msgpack} ->
+        {:error, Error.from_result_code(:parse_error, message: "invalid MessagePack list")}
+    end
   end
 
   # GeoJSON is UTF-8 text on the wire (same layout as STRING).
   def decode_value(@particle_geojson, data) when is_binary(data) do
-    data
+    {:ok, data}
   end
 
   def decode_value(particle_type, data) when is_integer(particle_type) and is_binary(data) do
-    {:raw, particle_type, data}
+    {:ok, {:raw, particle_type, data}}
   end
 
   # MessagePack strings inside MAP/LIST particle bins often carry Aerospike's
@@ -165,6 +191,20 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   """
   @spec encode_bin_operations(%{optional(atom() | String.t()) => term()}) :: [Operation.t()]
   def encode_bin_operations(bins) when is_map(bins) do
+    encode_bin_operations(bins, Operation.op_write())
+  end
+
+  @doc """
+  Builds operations from a bin map with the specified operation type.
+
+  - `:write` (2) — standard put
+  - `:add` (5) — atomic integer increment (values must be integers)
+  - `:append` (9) — atomic string append (values must be strings)
+  - `:prepend` (10) — atomic string prepend (values must be strings)
+  """
+  @spec encode_bin_operations(%{optional(atom() | String.t()) => term()}, non_neg_integer()) ::
+          [Operation.t()]
+  def encode_bin_operations(bins, op_type) when is_map(bins) and is_integer(op_type) do
     bins
     |> Enum.map(fn
       {k, v} when is_atom(k) -> {Atom.to_string(k), v}
@@ -173,8 +213,32 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
     end)
     |> Enum.sort_by(fn {name, _} -> name end)
     |> Enum.map(fn {name, value} ->
-      {pt, data} = encode_value(value)
-      %Operation{op_type: Operation.op_write(), particle_type: pt, bin_name: name, data: data}
+      {pt, data} = encode_value_for_op(op_type, name, value)
+      %Operation{op_type: op_type, particle_type: pt, bin_name: name, data: data}
     end)
+  end
+
+  defp encode_value_for_op(op_type, _name, value) when op_type == 2 do
+    encode_value(value)
+  end
+
+  defp encode_value_for_op(op_type, name, value) when op_type == 5 do
+    unless is_integer(value) do
+      raise ArgumentError, "add requires integer values, got #{inspect(value)} for bin #{name}"
+    end
+
+    Key.validate_int64!(value, "add bin value")
+    {@particle_integer, <<value::64-signed-big>>}
+  end
+
+  defp encode_value_for_op(op_type, name, value) when op_type in [9, 10] do
+    unless is_binary(value) do
+      op_name = if op_type == 9, do: "append", else: "prepend"
+
+      raise ArgumentError,
+            "#{op_name} requires string values, got #{inspect(value)} for bin #{name}"
+    end
+
+    {@particle_string, value}
   end
 end

@@ -117,136 +117,189 @@ defmodule Aerospike.Protocol.MessagePack do
   @spec unpack!(binary()) :: term()
   def unpack!(bin) when is_binary(bin) do
     case unpack(bin) do
-      {term, <<>>} ->
+      {:ok, {term, <<>>}} ->
         term
 
-      {_term, rest} ->
+      {:ok, {_term, rest}} ->
         raise ArgumentError, "MessagePack.unpack!: trailing bytes (#{byte_size(rest)})"
+
+      {:error, :invalid_msgpack} ->
+        raise ArgumentError, "MessagePack.unpack!: incomplete or invalid input"
     end
   end
 
-  @spec unpack(binary()) :: {term(), binary()}
-  def unpack(<<0xC0, rest::binary>>), do: {nil, rest}
+  @spec unpack(binary()) :: {:ok, {term(), binary()}} | {:error, :invalid_msgpack}
+  def unpack(bin) when is_binary(bin), do: do_unpack(bin)
 
-  def unpack(<<0xC2, rest::binary>>), do: {false, rest}
-  def unpack(<<0xC3, rest::binary>>), do: {true, rest}
+  defp do_unpack(<<0xC0, rest::binary>>), do: {:ok, {nil, rest}}
 
-  def unpack(<<b, rest::binary>>) when b <= 0x7F, do: {b, rest}
+  defp do_unpack(<<0xC2, rest::binary>>), do: {:ok, {false, rest}}
+  defp do_unpack(<<0xC3, rest::binary>>), do: {:ok, {true, rest}}
 
-  def unpack(<<b, rest::binary>>) when b >= 0xE0 do
-    {b - 256, rest}
+  defp do_unpack(<<b, rest::binary>>) when b <= 0x7F, do: {:ok, {b, rest}}
+
+  defp do_unpack(<<b, rest::binary>>) when b >= 0xE0 do
+    {:ok, {b - 256, rest}}
   end
 
-  def unpack(<<0xCC, n::8, rest::binary>>), do: {n, rest}
-  def unpack(<<0xCD, n::16-big, rest::binary>>), do: {n, rest}
-  def unpack(<<0xCE, n::32-big, rest::binary>>), do: {n, rest}
-  def unpack(<<0xCF, n::64-big, rest::binary>>), do: {n, rest}
+  defp do_unpack(<<0xCC, n::8, rest::binary>>), do: {:ok, {n, rest}}
+  defp do_unpack(<<0xCD, n::16-big, rest::binary>>), do: {:ok, {n, rest}}
+  defp do_unpack(<<0xCE, n::32-big, rest::binary>>), do: {:ok, {n, rest}}
+  defp do_unpack(<<0xCF, n::64-big, rest::binary>>), do: {:ok, {n, rest}}
 
-  def unpack(<<0xD0, n::8-signed, rest::binary>>), do: {n, rest}
-  def unpack(<<0xD1, n::16-signed-big, rest::binary>>), do: {n, rest}
-  def unpack(<<0xD2, n::32-signed-big, rest::binary>>), do: {n, rest}
-  def unpack(<<0xD3, n::64-signed-big, rest::binary>>), do: {n, rest}
+  defp do_unpack(<<0xD0, n::8-signed, rest::binary>>), do: {:ok, {n, rest}}
+  defp do_unpack(<<0xD1, n::16-signed-big, rest::binary>>), do: {:ok, {n, rest}}
+  defp do_unpack(<<0xD2, n::32-signed-big, rest::binary>>), do: {:ok, {n, rest}}
+  defp do_unpack(<<0xD3, n::64-signed-big, rest::binary>>), do: {:ok, {n, rest}}
 
-  def unpack(<<0xCA, f::32-float-big, rest::binary>>), do: {f, rest}
-  def unpack(<<0xCB, f::64-float-big, rest::binary>>), do: {f, rest}
+  defp do_unpack(<<0xCA, f::32-float-big, rest::binary>>), do: {:ok, {f, rest}}
+  defp do_unpack(<<0xCB, f::64-float-big, rest::binary>>), do: {:ok, {f, rest}}
 
-  def unpack(<<b, rest::binary>>) when b >= 0xA0 and b <= 0xBF do
+  defp do_unpack(<<b, rest::binary>>) when b >= 0xA0 and b <= 0xBF do
     len = b - 0xA0
-    <<str::binary-size(len), r::binary>> = rest
-    {unpack_cdt_string_payload(str), r}
+
+    if byte_size(rest) >= len do
+      <<str::binary-size(len), r::binary>> = rest
+      {:ok, {unpack_cdt_string_payload(str), r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xD9, len::8, rest::binary>>) do
-    <<str::binary-size(len), r::binary>> = rest
-    {unpack_cdt_string_payload(str), r}
+  defp do_unpack(<<0xD9, len::8, rest::binary>>) do
+    if byte_size(rest) >= len do
+      <<str::binary-size(len), r::binary>> = rest
+      {:ok, {unpack_cdt_string_payload(str), r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xDA, len::16-big, rest::binary>>) do
-    <<str::binary-size(len), r::binary>> = rest
-    {unpack_cdt_string_payload(str), r}
+  defp do_unpack(<<0xDA, len::16-big, rest::binary>>) do
+    if byte_size(rest) >= len do
+      <<str::binary-size(len), r::binary>> = rest
+      {:ok, {unpack_cdt_string_payload(str), r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xDB, len::32-big, rest::binary>>) do
-    <<str::binary-size(len), r::binary>> = rest
-    {unpack_cdt_string_payload(str), r}
+  defp do_unpack(<<0xDB, len::32-big, rest::binary>>) do
+    if byte_size(rest) >= len do
+      <<str::binary-size(len), r::binary>> = rest
+      {:ok, {unpack_cdt_string_payload(str), r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xC4, len::8, rest::binary>>) do
-    <<bin::binary-size(len), r::binary>> = rest
-    {bin, r}
+  defp do_unpack(<<0xC4, len::8, rest::binary>>) do
+    if byte_size(rest) >= len do
+      <<bin::binary-size(len), r::binary>> = rest
+      {:ok, {bin, r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xC5, len::16-big, rest::binary>>) do
-    <<bin::binary-size(len), r::binary>> = rest
-    {bin, r}
+  defp do_unpack(<<0xC5, len::16-big, rest::binary>>) do
+    if byte_size(rest) >= len do
+      <<bin::binary-size(len), r::binary>> = rest
+      {:ok, {bin, r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xC6, len::32-big, rest::binary>>) do
-    <<bin::binary-size(len), r::binary>> = rest
-    {bin, r}
+  defp do_unpack(<<0xC6, len::32-big, rest::binary>>) do
+    if byte_size(rest) >= len do
+      <<bin::binary-size(len), r::binary>> = rest
+      {:ok, {bin, r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<b, rest::binary>>) when b >= 0x90 and b <= 0x9F do
-    n = b - 0x90
-    unpack_list(rest, n, [])
+  defp do_unpack(<<b, rest::binary>>) when b >= 0x90 and b <= 0x9F do
+    unpack_list(rest, b - 0x90, [])
   end
 
-  def unpack(<<0xDC, n::16-big, rest::binary>>), do: unpack_list(rest, n, [])
-  def unpack(<<0xDD, n::32-big, rest::binary>>), do: unpack_list(rest, n, [])
+  defp do_unpack(<<0xDC, n::16-big, rest::binary>>), do: unpack_list(rest, n, [])
+  defp do_unpack(<<0xDD, n::32-big, rest::binary>>), do: unpack_list(rest, n, [])
 
-  def unpack(<<b, rest::binary>>) when b >= 0x80 and b <= 0x8F do
-    n = b - 0x80
-    unpack_map(rest, n, %{})
+  defp do_unpack(<<b, rest::binary>>) when b >= 0x80 and b <= 0x8F do
+    unpack_map(rest, b - 0x80, %{})
   end
 
-  def unpack(<<0xDE, n::16-big, rest::binary>>), do: unpack_map(rest, n, %{})
-  def unpack(<<0xDF, n::32-big, rest::binary>>), do: unpack_map(rest, n, %{})
+  defp do_unpack(<<0xDE, n::16-big, rest::binary>>), do: unpack_map(rest, n, %{})
+  defp do_unpack(<<0xDF, n::32-big, rest::binary>>), do: unpack_map(rest, n, %{})
 
-  def unpack(<<0xD4, type::8, data::binary-size(1), rest::binary>>),
-    do: {{:ext, type, data}, rest}
+  defp do_unpack(<<0xD4, type::8, data::binary-size(1), rest::binary>>),
+    do: {:ok, {{:ext, type, data}, rest}}
 
-  def unpack(<<0xD5, type::8, data::binary-size(2), rest::binary>>),
-    do: {{:ext, type, data}, rest}
+  defp do_unpack(<<0xD5, type::8, data::binary-size(2), rest::binary>>),
+    do: {:ok, {{:ext, type, data}, rest}}
 
-  def unpack(<<0xD6, type::8, data::binary-size(4), rest::binary>>),
-    do: {{:ext, type, data}, rest}
+  defp do_unpack(<<0xD6, type::8, data::binary-size(4), rest::binary>>),
+    do: {:ok, {{:ext, type, data}, rest}}
 
-  def unpack(<<0xD7, type::8, data::binary-size(8), rest::binary>>),
-    do: {{:ext, type, data}, rest}
+  defp do_unpack(<<0xD7, type::8, data::binary-size(8), rest::binary>>),
+    do: {:ok, {{:ext, type, data}, rest}}
 
-  def unpack(<<0xD8, type::8, data::binary-size(16), rest::binary>>),
-    do: {{:ext, type, data}, rest}
+  defp do_unpack(<<0xD8, type::8, data::binary-size(16), rest::binary>>),
+    do: {:ok, {{:ext, type, data}, rest}}
 
-  def unpack(<<0xC7, dlen::8, type::8, rest::binary>>) do
-    <<data::binary-size(dlen), r::binary>> = rest
-    {{:ext, type, data}, r}
+  defp do_unpack(<<0xC7, dlen::8, type::8, rest::binary>>) do
+    if byte_size(rest) >= dlen do
+      <<data::binary-size(dlen), r::binary>> = rest
+      {:ok, {{:ext, type, data}, r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xC8, dlen::16-big, type::8, rest::binary>>) do
-    <<data::binary-size(dlen), r::binary>> = rest
-    {{:ext, type, data}, r}
+  defp do_unpack(<<0xC8, dlen::16-big, type::8, rest::binary>>) do
+    if byte_size(rest) >= dlen do
+      <<data::binary-size(dlen), r::binary>> = rest
+      {:ok, {{:ext, type, data}, r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(<<0xC9, dlen::32-big, type::8, rest::binary>>) do
-    <<data::binary-size(dlen), r::binary>> = rest
-    {{:ext, type, data}, r}
+  defp do_unpack(<<0xC9, dlen::32-big, type::8, rest::binary>>) do
+    if byte_size(rest) >= dlen do
+      <<data::binary-size(dlen), r::binary>> = rest
+      {:ok, {{:ext, type, data}, r}}
+    else
+      {:error, :invalid_msgpack}
+    end
   end
 
-  def unpack(_), do: raise(ArgumentError, "MessagePack.unpack: incomplete or invalid input")
+  defp do_unpack(_), do: {:error, :invalid_msgpack}
 
-  defp unpack_list(rest, 0, acc), do: {Enum.reverse(acc), rest}
+  defp unpack_list(rest, 0, acc), do: {:ok, {Enum.reverse(acc), rest}}
 
   defp unpack_list(rest, n, acc) do
-    {elem, r} = unpack(rest)
-    unpack_list(r, n - 1, [elem | acc])
+    case do_unpack(rest) do
+      {:ok, {elem, r}} -> unpack_list(r, n - 1, [elem | acc])
+      {:error, _} = err -> err
+    end
   end
 
-  defp unpack_map(rest, 0, map), do: {map, rest}
+  defp unpack_map(rest, 0, map), do: {:ok, {map, rest}}
 
   defp unpack_map(rest, n, map) do
-    {k, r1} = unpack(rest)
-    {v, r2} = unpack(r1)
-    unpack_map(r2, n - 1, Map.put(map, k, v))
+    case do_unpack(rest) do
+      {:ok, {k, r1}} ->
+        case do_unpack(r1) do
+          {:ok, {v, r2}} -> unpack_map(r2, n - 1, Map.put(map, k, v))
+          {:error, _} = err -> err
+        end
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   # CDT uses msgpack str (not bin) for particle-wrapped blob payloads.

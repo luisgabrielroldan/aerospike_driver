@@ -8,10 +8,32 @@ defmodule Aerospike.Policy do
 
   import Bitwise
 
+  alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Tables
+
+  # Replica routing: atoms match the public API proposal; non-negative integers are the
+  # wire/partition-table replica index (0 = master) for advanced use.
+  @replica_opt {:or, [{:in, [:master, :sequence, :any]}, :non_neg_integer]}
+
+  # Merges connection-level defaults (set at `start_link`) with per-call opts.
+  @doc false
+  @spec merge_defaults(atom(), atom(), keyword()) :: keyword()
+  def merge_defaults(conn, kind, opts) when is_atom(conn) and is_atom(kind) and is_list(opts) do
+    Keyword.merge(read_defaults(conn, kind), opts)
+  end
+
+  @doc false
+  @spec read_defaults(atom(), atom()) :: keyword()
+  def read_defaults(conn, command_type) when is_atom(conn) do
+    case :ets.lookup(Tables.meta(conn), :policy_defaults) do
+      [{_, defaults}] -> Keyword.get(defaults, command_type, [])
+      [] -> []
+    end
+  end
 
   # -- NimbleOptions schemas for per-command policies -------------------------
 
@@ -26,7 +48,7 @@ defmodule Aerospike.Policy do
     send_key: [type: :boolean],
     durable_delete: [type: :boolean],
     pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: :non_neg_integer]
+    replica: [type: @replica_opt]
   ]
 
   @read_keys [
@@ -35,28 +57,30 @@ defmodule Aerospike.Policy do
     bins: [type: {:list, {:or, [:string, :atom]}}],
     # When true, returns generation/expiration metadata without bin data.
     header_only: [type: :boolean],
+    # Read touch TTL percent for batch/read policies (0 = default).
+    read_touch_ttl_percent: [type: :non_neg_integer],
     pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: :non_neg_integer]
+    replica: [type: @replica_opt]
   ]
 
   @delete_keys [
     timeout: [type: :non_neg_integer],
     durable_delete: [type: :boolean],
     pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: :non_neg_integer]
+    replica: [type: @replica_opt]
   ]
 
   @exists_keys [
     timeout: [type: :non_neg_integer],
     pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: :non_neg_integer]
+    replica: [type: @replica_opt]
   ]
 
   @touch_keys [
     ttl: [type: :non_neg_integer],
     timeout: [type: :non_neg_integer],
     pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: :non_neg_integer]
+    replica: [type: @replica_opt]
   ]
 
   # Operate merges read + write semantics; options mirror `put`/`get` where applicable.
@@ -72,7 +96,16 @@ defmodule Aerospike.Policy do
     durable_delete: [type: :boolean],
     respond_per_each_op: [type: :boolean],
     pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: :non_neg_integer]
+    replica: [type: @replica_opt]
+  ]
+
+  # Batch: outer message timeout, pool checkout, replica routing, server batch flags.
+  @batch_keys [
+    timeout: [type: :non_neg_integer],
+    pool_checkout_timeout: [type: :non_neg_integer],
+    replica: [type: @replica_opt],
+    respond_all_keys: [type: :boolean, default: true],
+    filter: [type: {:struct, Exp}]
   ]
 
   # Per-command defaults that can be set at `Aerospike.start_link/1` time.
@@ -82,7 +115,8 @@ defmodule Aerospike.Policy do
     delete: [type: :keyword_list, keys: @delete_keys],
     exists: [type: :keyword_list, keys: @exists_keys],
     touch: [type: :keyword_list, keys: @touch_keys],
-    operate: [type: :keyword_list, keys: @operate_keys]
+    operate: [type: :keyword_list, keys: @operate_keys],
+    batch: [type: :keyword_list, keys: @batch_keys]
   ]
 
   # Schema for the top-level `Aerospike.start_link/1` options.
@@ -120,6 +154,7 @@ defmodule Aerospike.Policy do
   @exists_schema NimbleOptions.new!(@exists_keys)
   @touch_schema NimbleOptions.new!(@touch_keys)
   @operate_schema NimbleOptions.new!(@operate_keys)
+  @batch_schema NimbleOptions.new!(@batch_keys)
 
   @doc false
   def start_schema, do: @start_schema
@@ -142,7 +177,12 @@ defmodule Aerospike.Policy do
   def validate_write(opts), do: NimbleOptions.validate(opts, @write_schema)
 
   @doc false
-  def validate_read(opts), do: NimbleOptions.validate(opts, @read_schema)
+  def validate_read(opts) do
+    case NimbleOptions.validate(opts, @read_schema) do
+      {:ok, validated} -> validate_bins_not_empty_when_present(validated)
+      {:error, _} = err -> err
+    end
+  end
 
   @doc false
   def validate_delete(opts), do: NimbleOptions.validate(opts, @delete_schema)
@@ -157,7 +197,25 @@ defmodule Aerospike.Policy do
   def validate_operate(opts), do: NimbleOptions.validate(opts, @operate_schema)
 
   @doc false
+  def validate_batch(opts), do: NimbleOptions.validate(opts, @batch_schema)
+
+  @doc false
   def validation_error_message(%NimbleOptions.ValidationError{} = e), do: Exception.message(e)
+
+  # `:bins => []` is ambiguous (read no bins vs read all); require omission for \"all bins\".
+  defp validate_bins_not_empty_when_present(validated) do
+    if Keyword.get(validated, :bins) == [] do
+      {:error,
+       %NimbleOptions.ValidationError{
+         key: :bins,
+         keys_path: [],
+         value: [],
+         message: "must be a non-empty list of bin names; omit :bins entirely to read all bins"
+       }}
+    else
+      {:ok, validated}
+    end
+  end
 
   # -- Wire-level policy application -------------------------------------------
   # These functions set info2/info3 flag bits and header fields on an AsmMsg
@@ -272,13 +330,20 @@ defmodule Aerospike.Policy do
     end
   end
 
+  # Outer batch AS_MSG timeout (milliseconds, signed int32 on wire).
+  @doc false
+  @spec apply_batch_outer_timeout(AsmMsg.t(), keyword()) :: AsmMsg.t()
+  def apply_batch_outer_timeout(%AsmMsg{} = msg, opts) when is_list(opts) do
+    put_timeout(msg, Keyword.get(opts, :timeout))
+  end
+
   # Appends a KEY field to the message so the server stores the original user key
   # alongside the digest. Without this, only the 20-byte digest is stored.
   @doc false
   @spec apply_send_key(AsmMsg.t(), Key.t(), keyword()) :: AsmMsg.t()
   def apply_send_key(%AsmMsg{} = msg, %Key{} = key, opts) when is_list(opts) do
     if Keyword.get(opts, :send_key) == true do
-      case key_field(key) do
+      case Field.key_from_user_key(key) do
         nil -> msg
         field -> %{msg | fields: msg.fields ++ [field]}
       end
@@ -286,18 +351,6 @@ defmodule Aerospike.Policy do
       msg
     end
   end
-
-  # Encodes the user key as a typed KEY field.
-  # Type 1 = integer (8 bytes big-endian), type 3 = string.
-  defp key_field(%Key{user_key: n}) when is_integer(n) do
-    Field.key(1, <<n::64-signed-big>>)
-  end
-
-  defp key_field(%Key{user_key: s}) when is_binary(s) do
-    Field.key(3, s)
-  end
-
-  defp key_field(%Key{user_key: nil}), do: nil
 
   # Builds the read AsmMsg, varying the wire shape based on options:
   # - `header_only: true` → READ + NOBINDATA flags (metadata only, no bin payload)

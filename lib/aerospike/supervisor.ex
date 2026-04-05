@@ -5,10 +5,14 @@ defmodule Aerospike.Supervisor do
   #   2. NodeSupervisor — DynamicSupervisor for per-node connection pools.
   #   3. Cluster — GenServer that discovers nodes and builds the partition map.
   #
-  # `one_for_one` strategy: each child is independent. If the Cluster crashes,
-  # the ETS tables and pools survive so the restart can re-tend without data loss.
+  # Dependency chain: Cluster and NodeSupervisor both rely on TableOwner's ETS tables.
+  # `rest_for_one` restarts the crashed child and every child started after it, so if
+  # TableOwner dies the whole subtree is rebuilt with fresh tables; if only Cluster
+  # dies, TableOwner and pools survive (same as before under `one_for_one` for the
+  # last child).
 
   alias Aerospike.Policy
+  alias Aerospike.Tables
 
   @doc false
   @spec sup_name(atom()) :: atom()
@@ -22,23 +26,25 @@ defmodule Aerospike.Supervisor do
     children = [
       {Aerospike.TableOwner, name: name},
       {Aerospike.NodeSupervisor, name: name},
+      {Task.Supervisor, name: Tables.task_sup(name)},
       {Aerospike.Cluster, validated}
     ]
 
     Supervisor.start_link(children,
-      strategy: :one_for_one,
+      strategy: :rest_for_one,
       name: sup_name(name)
     )
   end
 
   @doc false
   def child_spec(opts) when is_list(opts) do
-    validated = Policy.validate_start!(opts)
-    name = Keyword.fetch!(validated, :name)
+    # Validate to extract :name for the child spec id, but pass raw opts to start_link
+    # so validation happens exactly once in start_link.
+    name = Keyword.fetch!(opts, :name)
 
     %{
       id: {__MODULE__, name},
-      start: {__MODULE__, :start_link, [validated]},
+      start: {__MODULE__, :start_link, [opts]},
       type: :supervisor,
       restart: :permanent,
       shutdown: :infinity

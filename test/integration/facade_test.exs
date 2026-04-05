@@ -383,6 +383,27 @@ defmodule Aerospike.Integration.FacadeTest do
     assert record.bins["r"] == 1
   end
 
+  test "add!/append!/prepend!/operate! bang variants succeed", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key = Helpers.unique_key("test", "facade_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, key, %{"n" => 1, "s" => "mid"})
+
+    :ok = Aerospike.add!(conn, key, %{"n" => 2})
+    :ok = Aerospike.append!(conn, key, %{"s" => "tail"})
+    :ok = Aerospike.prepend!(conn, key, %{"s" => "pre"})
+
+    import Aerospike.Op
+
+    rec = Aerospike.operate!(conn, key, [get("n"), get("s")])
+    assert rec.bins["n"] == 3
+    assert rec.bins["s"] == "premidtail"
+  end
+
   test "send_key with integer key", %{conn: conn, host: host, port: port} do
     int_id = System.unique_integer([:positive])
     key = Aerospike.key("test", "facade_itest", int_id)

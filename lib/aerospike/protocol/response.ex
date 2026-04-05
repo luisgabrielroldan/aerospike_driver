@@ -16,15 +16,19 @@ defmodule Aerospike.Protocol.Response do
   def parse_record_response(%AsmMsg{} = msg, %Key{} = key) do
     case result_atom(msg.result_code) do
       {:ok, :ok} ->
-        bins = record_bins_from_operations(msg.operations)
+        case record_bins_from_operations(msg.operations) do
+          {:ok, bins} ->
+            {:ok,
+             %Record{
+               key: key,
+               bins: bins,
+               generation: msg.generation,
+               ttl: msg.expiration
+             }}
 
-        {:ok,
-         %Record{
-           key: key,
-           bins: bins,
-           generation: msg.generation,
-           ttl: msg.expiration
-         }}
+          {:error, _} = err ->
+            err
+        end
 
       other ->
         error_from_result(other)
@@ -32,9 +36,16 @@ defmodule Aerospike.Protocol.Response do
   end
 
   defp record_bins_from_operations(operations) do
-    for %Operation{bin_name: name} = op when name != "" <- operations, into: %{} do
-      {name, Value.decode_value(op.particle_type, op.data)}
-    end
+    Enum.reduce_while(operations, {:ok, %{}}, fn
+      %Operation{bin_name: ""}, {:ok, acc} ->
+        {:cont, {:ok, acc}}
+
+      %Operation{bin_name: name} = op, {:ok, acc} ->
+        case Value.decode_value(op.particle_type, op.data) do
+          {:ok, v} -> {:cont, {:ok, Map.put(acc, name, v)}}
+          {:error, _} = err -> {:halt, err}
+        end
+    end)
   end
 
   @doc """

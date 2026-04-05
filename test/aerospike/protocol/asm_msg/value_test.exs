@@ -9,34 +9,34 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
   describe "encode_value/1 and decode_value/2 round-trip" do
     test "nil" do
       {pt, data} = Value.encode_value(nil)
-      assert Value.decode_value(pt, data) == nil
+      assert Value.decode_value(pt, data) == {:ok, nil}
     end
 
     test "integers" do
       for n <- [0, -1, 42, 9_223_372_036_854_775_807, -9_223_372_036_854_775_808] do
         {pt, data} = Value.encode_value(n)
-        assert Value.decode_value(pt, data) == n
+        assert Value.decode_value(pt, data) == {:ok, n}
       end
     end
 
     test "float" do
       {pt, data} = Value.encode_value(3.14)
-      assert Value.decode_value(pt, data) == 3.14
+      assert Value.decode_value(pt, data) == {:ok, 3.14}
     end
 
     test "string" do
       {pt, data} = Value.encode_value("hello")
-      assert Value.decode_value(pt, data) == "hello"
+      assert Value.decode_value(pt, data) == {:ok, "hello"}
     end
 
     test "bool" do
-      assert Value.decode_value(17, <<1>>) == true
-      assert Value.decode_value(17, <<0>>) == false
+      assert Value.decode_value(17, <<1>>) == {:ok, true}
+      assert Value.decode_value(17, <<0>>) == {:ok, false}
     end
   end
 
   test "unknown particle type returns raw tuple" do
-    assert Value.decode_value(99, <<1, 2, 3>>) == {:raw, 99, <<1, 2, 3>>}
+    assert Value.decode_value(99, <<1, 2, 3>>) == {:ok, {:raw, 99, <<1, 2, 3>>}}
   end
 
   test "encode_bin_operations/1" do
@@ -105,30 +105,50 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
     end
 
     test "decoding blob returns tagged tuple" do
-      assert {:blob, "binary data"} = Value.decode_value(4, "binary data")
+      assert {:ok, {:blob, "binary data"}} = Value.decode_value(4, "binary data")
     end
 
     test "map particle round-trip uses particle-wrapped string keys in MessagePack" do
       {pt, data} = Value.encode_value(%{"a" => 1})
       assert pt == Operation.particle_map()
-      assert Value.decode_value(pt, data) == %{"a" => 1}
+      assert Value.decode_value(pt, data) == {:ok, %{"a" => 1}}
     end
 
     test "list particle round-trip" do
       {pt, data} = Value.encode_value([1, 2, 3])
       assert pt == Operation.particle_list()
-      assert Value.decode_value(pt, data) == [1, 2, 3]
+      assert Value.decode_value(pt, data) == {:ok, [1, 2, 3]}
     end
 
     test "nested map bin round-trip" do
       nested = %{"profile" => %{"geo" => %{"lat" => 0.0}}}
       {pt, data} = Value.encode_value(nested)
       assert pt == Operation.particle_map()
-      assert Value.decode_value(pt, data) == nested
+      assert Value.decode_value(pt, data) == {:ok, nested}
     end
 
     test "geojson particle decodes as UTF-8 string" do
-      assert Value.decode_value(Operation.particle_geojson(), "{}") == "{}"
+      assert Value.decode_value(Operation.particle_geojson(), "{}") == {:ok, "{}"}
+    end
+
+    test "map particle with trailing bytes errors" do
+      {pt, data} = Value.encode_value(%{"a" => 1})
+      assert {:error, %{code: :parse_error}} = Value.decode_value(pt, data <> <<0>>)
+    end
+
+    test "list particle with trailing bytes errors" do
+      {pt, data} = Value.encode_value([1, 2])
+      assert {:error, %{code: :parse_error}} = Value.decode_value(pt, data <> <<0>>)
+    end
+
+    test "map particle invalid msgpack errors" do
+      assert {:error, %{code: :parse_error}} =
+               Value.decode_value(Operation.particle_map(), <<0xC1>>)
+    end
+
+    test "list particle invalid msgpack errors" do
+      assert {:error, %{code: :parse_error}} =
+               Value.decode_value(Operation.particle_list(), <<0xC1>>)
     end
   end
 
@@ -140,54 +160,53 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
     test "list with strings round-trips through particle encoding" do
       {pt, data} = Value.encode_value(["hello", "world"])
       assert pt == Operation.particle_list()
-      assert Value.decode_value(pt, data) == ["hello", "world"]
+      assert Value.decode_value(pt, data) == {:ok, ["hello", "world"]}
     end
 
     test "list with mixed types round-trips" do
       {pt, data} = Value.encode_value([1, "str", true, nil, 3.14])
       assert pt == Operation.particle_list()
-      decoded = Value.decode_value(pt, data)
-      assert [1, "str", true, nil, f] = decoded
+      assert {:ok, [1, "str", true, nil, f]} = Value.decode_value(pt, data)
       assert_in_delta f, 3.14, 0.001
     end
 
     test "list with nested lists round-trips" do
       {pt, data} = Value.encode_value([[1, 2], [3, 4]])
       assert pt == Operation.particle_list()
-      assert Value.decode_value(pt, data) == [[1, 2], [3, 4]]
+      assert Value.decode_value(pt, data) == {:ok, [[1, 2], [3, 4]]}
     end
 
     test "list with blob values round-trips" do
       {pt, data} = Value.encode_value([{:bytes, <<0xFF>>}])
       assert pt == Operation.particle_list()
-      assert Value.decode_value(pt, data) == [{:blob, <<0xFF>>}]
+      assert Value.decode_value(pt, data) == {:ok, [{:blob, <<0xFF>>}]}
     end
 
     test "list with booleans and nil round-trips" do
       {pt, data} = Value.encode_value([true, false, nil])
       assert pt == Operation.particle_list()
-      assert Value.decode_value(pt, data) == [true, false, nil]
+      assert Value.decode_value(pt, data) == {:ok, [true, false, nil]}
     end
 
     test "map with string values round-trips" do
       map = %{"key" => "val"}
       {pt, data} = Value.encode_value(map)
       assert pt == Operation.particle_map()
-      assert Value.decode_value(pt, data) == map
+      assert Value.decode_value(pt, data) == {:ok, map}
     end
 
     test "map with nested map round-trips" do
       map = %{"outer" => %{"inner" => 42}}
       {pt, data} = Value.encode_value(map)
       assert pt == Operation.particle_map()
-      assert Value.decode_value(pt, data) == map
+      assert Value.decode_value(pt, data) == {:ok, map}
     end
 
     test "map with nested list round-trips" do
       map = %{"tags" => [1, 2, 3]}
       {pt, data} = Value.encode_value(map)
       assert pt == Operation.particle_map()
-      assert Value.decode_value(pt, data) == map
+      assert Value.decode_value(pt, data) == {:ok, map}
     end
 
     test "encode_value rejects unsupported term" do
@@ -207,22 +226,40 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
       assert [%Operation{bin_name: "name"}] = ops
     end
 
+    test "encode_bin_operations add rejects non-integer" do
+      assert_raise ArgumentError, ~r/add requires integer/, fn ->
+        Value.encode_bin_operations(%{"x" => "nope"}, Operation.op_add())
+      end
+    end
+
+    test "encode_bin_operations append rejects non-binary" do
+      assert_raise ArgumentError, ~r/append requires string/, fn ->
+        Value.encode_bin_operations(%{"x" => 1}, Operation.op_append())
+      end
+    end
+
+    test "encode_bin_operations prepend rejects non-binary" do
+      assert_raise ArgumentError, ~r/prepend requires string/, fn ->
+        Value.encode_bin_operations(%{"x" => 1}, Operation.op_prepend())
+      end
+    end
+
     test "map with atom keys round-trips (atom keys become strings)" do
       {pt, data} = Value.encode_value(%{name: "Alice"})
       assert pt == Operation.particle_map()
-      assert Value.decode_value(pt, data) == %{"name" => "Alice"}
+      assert Value.decode_value(pt, data) == {:ok, %{"name" => "Alice"}}
     end
 
     test "map particle with ext values preserves ext tuples" do
       ext = {:ext, 0xFF, <<0, 0, 0, 0>>}
       map_data = MessagePack.pack!(%{{:particle_string, "x"} => ext})
-      decoded = Value.decode_value(Operation.particle_map(), map_data)
+      assert {:ok, decoded} = Value.decode_value(Operation.particle_map(), map_data)
       assert %{"x" => {:ext, 0xFF, _}} = decoded
     end
 
     test "string without particle prefix passes through in map decode" do
       raw_str = MessagePack.pack!(%{"plain" => 1})
-      decoded = Value.decode_value(Operation.particle_map(), raw_str)
+      assert {:ok, decoded} = Value.decode_value(Operation.particle_map(), raw_str)
       assert %{"plain" => 1} = decoded
     end
   end
@@ -232,7 +269,7 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
     property "integer round-trip" do
       check all(n <- integer(-9_223_372_036_854_775_808..9_223_372_036_854_775_807)) do
         {pt, data} = Value.encode_value(n)
-        assert Value.decode_value(pt, data) == n
+        assert Value.decode_value(pt, data) == {:ok, n}
       end
     end
   end

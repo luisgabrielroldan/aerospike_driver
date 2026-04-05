@@ -267,6 +267,22 @@ defmodule Aerospike.Protocol.MessagePackTest do
     test "raises on invalid input" do
       assert_raise ArgumentError, fn -> MessagePack.unpack!(<<>>) end
     end
+
+    test "ext32 unpack with truncated payload errors" do
+      assert {:error, :invalid_msgpack} = MessagePack.unpack(<<0xC9, 100::32-big, 7>>)
+    end
+
+    test "list unpack errors when an element is invalid" do
+      assert {:error, :invalid_msgpack} = MessagePack.unpack(<<0x91, 0xC1>>)
+    end
+
+    test "map unpack errors when key decode fails" do
+      assert {:error, :invalid_msgpack} = MessagePack.unpack(<<0x81, 0xC1, 0x01>>)
+    end
+
+    test "map unpack errors when value decode fails" do
+      assert {:error, :invalid_msgpack} = MessagePack.unpack(<<0x81, 0x01, 0xC1>>)
+    end
   end
 
   describe "ext packing" do
@@ -325,6 +341,18 @@ defmodule Aerospike.Protocol.MessagePackTest do
       map = Map.new(1..16, fn i -> {"k#{i}", i} end)
       bin = MessagePack.pack!(map)
       assert <<0xDE, _::binary>> = bin
+    end
+
+    test "array32 header when length exceeds uint16" do
+      list = List.duplicate(0, 65_536)
+      bin = MessagePack.pack!(list)
+      assert <<0xDD, 65_536::32-big, _::binary>> = bin
+    end
+
+    test "map32 header when entry count exceeds uint16" do
+      map = Map.new(1..65_536, fn i -> {i, i} end)
+      bin = MessagePack.pack!(map)
+      assert <<0xDF, 65_536::32-big, _::binary>> = bin
     end
   end
 

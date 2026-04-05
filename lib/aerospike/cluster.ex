@@ -49,6 +49,7 @@ defmodule Aerospike.Cluster do
 
   @impl true
   def init(opts) when is_list(opts) do
+    Process.flag(:trap_exit, true)
     name = Keyword.fetch!(opts, :name)
     hosts = Keyword.fetch!(opts, :hosts)
     seeds = Enum.map(hosts, &parse_seed/1)
@@ -77,6 +78,12 @@ defmodule Aerospike.Cluster do
     }
 
     {:ok, state, {:continue, :initial_tend}}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state.tend_conns, fn {_node, conn} -> Connection.close(conn) end)
+    :ok
   end
 
   # Initial tend runs synchronously in handle_continue so the cluster is ready
@@ -157,8 +164,24 @@ defmodule Aerospike.Cluster do
   defp add_peer_node(state, node_name, host, port) do
     conn_opts = connection_opts(state, host, port)
 
-    with {:ok, conn} <- Connection.connect(conn_opts),
-         {:ok, conn} <- Connection.login(conn, state.auth_opts),
+    case Connection.connect(conn_opts) do
+      {:ok, conn} ->
+        case complete_peer_handshake(conn, state, node_name, host, port) do
+          {:ok, conn} ->
+            {:ok, conn}
+
+          :error ->
+            Connection.close(conn)
+            :error
+        end
+
+      {:error, _} ->
+        :error
+    end
+  end
+
+  defp complete_peer_handshake(conn, state, node_name, host, port) do
+    with {:ok, conn} <- Connection.login(conn, state.auth_opts),
          {:ok, conn, info} <- Connection.request_info(conn, ["node"]),
          {:ok, verified_name} <- extract_node_name(info),
          true <- verified_name == node_name,
@@ -360,10 +383,6 @@ defmodule Aerospike.Cluster do
         {:error, reason} -> {:cont, {:error, reason}}
       end
     end)
-    |> case do
-      {:ok, _, _, _, _} = ok -> ok
-      {:error, _} = err -> err
-    end
   end
 
   # Opens a TCP connection to a seed and performs the login + info handshake.
