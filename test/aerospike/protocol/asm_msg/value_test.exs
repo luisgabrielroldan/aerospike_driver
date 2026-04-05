@@ -46,9 +46,9 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
     assert names == ["age", "name"]
   end
 
-  test "encode_bin_operations rejects unsupported values" do
+  test "encode_bin_operations rejects unsupported nested values" do
     assert_raise ArgumentError, fn ->
-      Value.encode_bin_operations(%{"x" => %{}})
+      Value.encode_bin_operations(%{"x" => %{self() => 1}})
     end
   end
 
@@ -105,6 +105,29 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
 
     test "decoding blob returns tagged tuple" do
       assert {:blob, "binary data"} = Value.decode_value(4, "binary data")
+    end
+
+    test "map particle round-trip uses particle-wrapped string keys in MessagePack" do
+      {pt, data} = Value.encode_value(%{"a" => 1})
+      assert pt == Operation.particle_map()
+      assert Value.decode_value(pt, data) == %{"a" => 1}
+    end
+
+    test "list particle round-trip" do
+      {pt, data} = Value.encode_value([1, 2, 3])
+      assert pt == Operation.particle_list()
+      assert Value.decode_value(pt, data) == [1, 2, 3]
+    end
+
+    test "nested map bin round-trip" do
+      nested = %{"profile" => %{"geo" => %{"lat" => 0.0}}}
+      {pt, data} = Value.encode_value(nested)
+      assert pt == Operation.particle_map()
+      assert Value.decode_value(pt, data) == nested
+    end
+
+    test "geojson particle decodes as UTF-8 string" do
+      assert Value.decode_value(Operation.particle_geojson(), "{}") == "{}"
     end
   end
 
