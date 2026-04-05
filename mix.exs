@@ -85,7 +85,8 @@ defmodule Aerospike.MixProject do
       "coveralls.json": "coveralls.json --include integration",
       "coveralls.lcov": "coveralls.lcov --include integration",
       "test.coverage": "coveralls.html --include integration",
-      "test.all": "test --include integration --include property --include cluster --include enterprise",
+      "test.all":
+        "test --include integration --include property --include cluster --include enterprise",
       "test.enterprise": "test --include enterprise"
     ]
   end
