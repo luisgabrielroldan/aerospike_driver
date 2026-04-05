@@ -57,6 +57,12 @@ defmodule Aerospike.Protocol.MessagePackTest do
       assert MessagePack.unpack!(bin) == <<3, "hi">>
     end
 
+    test "{:bytes, _} encodes BLOB particle inside msgpack str (CDT / Go packBytes)" do
+      bin = MessagePack.pack!({:bytes, <<0xFF, 0x00>>})
+      assert bin == <<0xA3, 4, 0xFF, 0x00>>
+      assert MessagePack.unpack!(bin) == {:blob, <<0xFF, 0x00>>}
+    end
+
     test "raises on unsupported pack term" do
       assert_raise ArgumentError, fn -> MessagePack.pack!(self()) end
     end
@@ -71,9 +77,7 @@ defmodule Aerospike.Protocol.MessagePackTest do
     @describetag :property
 
     property "scalars roundtrip" do
-      check all(
-              n <- one_of([integer(-1_000_000..1_000_000), float(), boolean(), constant(nil)])
-            ) do
+      check all(n <- one_of([integer(-1_000_000..1_000_000), float(), boolean(), constant(nil)])) do
         assert MessagePack.unpack!(MessagePack.pack!(n)) == n
       end
     end
