@@ -220,6 +220,117 @@ defmodule Aerospike.ConnectionUnitTest do
     end
   end
 
+  describe "send_command/2 via mock server" do
+    test "sends data without reading; server receives full message" do
+      {:ok, lsock, port} = MockTcpServer.start()
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            assert {:ok, _header, body} = MockTcpServer.recv_message(client)
+            assert body == <<1, 2, 3>>
+          end)
+        end)
+
+      Process.sleep(50)
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      req = Message.encode(Message.proto_version(), Message.type_info(), <<1, 2, 3>>)
+      assert {:ok, conn2} = Connection.send_command(conn, req)
+      refute Connection.idle?(conn2)
+      Connection.close(conn2)
+      Task.await(server)
+    end
+
+    test "returns error when client socket is already closed" do
+      {:ok, lsock, port} = MockTcpServer.start()
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn _client -> :ok end)
+        end)
+
+      Process.sleep(50)
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      Connection.close(conn)
+      assert {:error, _} = Connection.send_command(conn, <<>>)
+      Task.await(server)
+    end
+  end
+
+  describe "recv_frame/1 via mock server" do
+    test "reads one frame and sets last? from INFO3_LAST bit" do
+      {:ok, lsock, port} = MockTcpServer.start()
+
+      not_last_body = <<22, 0, 0, 0>>
+      last_body = <<22, 0, 0, 1>>
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            {:ok, _, _} = MockTcpServer.recv_message(client)
+            MockTcpServer.send_typed_response(client, 2, Message.type_as_msg(), not_last_body)
+            MockTcpServer.send_typed_response(client, 2, Message.type_as_msg(), last_body)
+          end)
+        end)
+
+      Process.sleep(50)
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      req = Message.encode(Message.proto_version(), Message.type_info(), <<>>)
+
+      assert {:ok, conn2} = Connection.send_command(conn, req)
+      assert {:ok, conn3, body1, false} = Connection.recv_frame(conn2)
+      assert body1 == not_last_body
+      assert {:ok, conn4, body2, true} = Connection.recv_frame(conn3)
+      assert body2 == last_body
+      refute Connection.idle?(conn4)
+
+      Connection.close(conn4)
+      Task.await(server)
+    end
+
+    test "returns error when body recv fails (partial frame)" do
+      {:ok, lsock, port} = MockTcpServer.start()
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            {:ok, _, _} = MockTcpServer.recv_message(client)
+            header = Message.encode_header(2, Message.type_as_msg(), 1000)
+            :gen_tcp.send(client, header)
+            Process.sleep(10)
+          end)
+        end)
+
+      Process.sleep(50)
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      req = Message.encode(Message.proto_version(), Message.type_info(), <<>>)
+      assert {:ok, conn2} = Connection.send_command(conn, req)
+      assert {:error, :closed} = Connection.recv_frame(conn2)
+      Connection.close(conn2)
+      Task.await(server)
+    end
+
+    test "returns error when server closes before any frame" do
+      {:ok, lsock, port} = MockTcpServer.start()
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            {:ok, _, _} = MockTcpServer.recv_message(client)
+            :gen_tcp.close(client)
+          end)
+        end)
+
+      Process.sleep(50)
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      req = Message.encode(Message.proto_version(), Message.type_info(), <<>>)
+      assert {:ok, conn2} = Connection.send_command(conn, req)
+      assert {:error, _} = Connection.recv_frame(conn2)
+      Connection.close(conn2)
+      Task.await(server)
+    end
+  end
+
   describe "recv_message/1 via mock server" do
     test "handles zero-length body" do
       {:ok, lsock, port} = MockTcpServer.start()

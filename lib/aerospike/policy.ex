@@ -108,6 +108,23 @@ defmodule Aerospike.Policy do
     filter: [type: {:struct, Exp}]
   ]
 
+  # Scan / query execution (facade + ScanOps): socket timeout, replica routing, pool checkout.
+  @scan_keys [
+    timeout: [
+      type: :non_neg_integer,
+      default: 30_000,
+      doc: "Socket timeout in milliseconds"
+    ],
+    pool_checkout_timeout: [type: :non_neg_integer, default: 5_000],
+    replica: [type: @replica_opt, default: :master]
+  ]
+
+  @query_keys [
+    timeout: [type: :non_neg_integer, default: 30_000],
+    pool_checkout_timeout: [type: :non_neg_integer, default: 5_000],
+    replica: [type: @replica_opt, default: :master]
+  ]
+
   # Per-command defaults that can be set at `Aerospike.start_link/1` time.
   @defaults_keys [
     write: [type: :keyword_list, keys: @write_keys],
@@ -116,7 +133,9 @@ defmodule Aerospike.Policy do
     exists: [type: :keyword_list, keys: @exists_keys],
     touch: [type: :keyword_list, keys: @touch_keys],
     operate: [type: :keyword_list, keys: @operate_keys],
-    batch: [type: :keyword_list, keys: @batch_keys]
+    batch: [type: :keyword_list, keys: @batch_keys],
+    scan: [type: :keyword_list, keys: @scan_keys],
+    query: [type: :keyword_list, keys: @query_keys]
   ]
 
   # Schema for the top-level `Aerospike.start_link/1` options.
@@ -144,7 +163,9 @@ defmodule Aerospike.Policy do
                   defaults: [
                     type: :keyword_list,
                     keys: @defaults_keys,
-                    default: []
+                    default: [],
+                    doc:
+                      "Policy defaults per command (`:write`, `:read`, `:batch`, `:scan`, `:query`, …)."
                   ]
                 )
 
@@ -155,6 +176,8 @@ defmodule Aerospike.Policy do
   @touch_schema NimbleOptions.new!(@touch_keys)
   @operate_schema NimbleOptions.new!(@operate_keys)
   @batch_schema NimbleOptions.new!(@batch_keys)
+  @scan_schema NimbleOptions.new!(@scan_keys)
+  @query_schema NimbleOptions.new!(@query_keys)
 
   @doc false
   def start_schema, do: @start_schema
@@ -198,6 +221,12 @@ defmodule Aerospike.Policy do
 
   @doc false
   def validate_batch(opts), do: NimbleOptions.validate(opts, @batch_schema)
+
+  @doc false
+  def validate_scan(opts), do: NimbleOptions.validate(opts, @scan_schema)
+
+  @doc false
+  def validate_query(opts), do: NimbleOptions.validate(opts, @query_schema)
 
   @doc false
   def validation_error_message(%NimbleOptions.ValidationError{} = e), do: Exception.message(e)

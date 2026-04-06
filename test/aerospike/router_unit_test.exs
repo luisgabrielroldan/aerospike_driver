@@ -2,6 +2,7 @@ defmodule Aerospike.RouterUnitTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Key
+  alias Aerospike.PartitionFilter
   alias Aerospike.Router
   alias Aerospike.Tables
 
@@ -176,5 +177,145 @@ defmodule Aerospike.RouterUnitTest do
 
     assert {:ok, %{"node_batch" => %{pool_pid: ^pool, entries: [{0, ^k1}, {1, ^k2}]}}} =
              Router.group_by_node(name, [k1, k2])
+  end
+
+  test "expand_partition_filter nil is all partitions", _ctx do
+    {full, partial} = Router.expand_partition_filter(nil)
+    assert partial == []
+    assert full == Enum.to_list(0..4_095)
+    assert length(full) == 4_096
+  end
+
+  test "expand_partition_filter by_id and by_range", _ctx do
+    assert {[42], []} == Router.expand_partition_filter(PartitionFilter.by_id(42))
+
+    assert {Enum.to_list(0..9), []} ==
+             Router.expand_partition_filter(PartitionFilter.by_range(0, 10))
+  end
+
+  test "expand_partition_filter splits cursor partitions by digest", _ctx do
+    d = :crypto.strong_rand_bytes(20)
+
+    pf = %PartitionFilter{
+      begin: 0,
+      count: 4_096,
+      digest: nil,
+      partitions: [
+        %{id: 1, digest: nil, bval: nil},
+        %{id: 2, digest: d, bval: nil},
+        %{id: 3, digest: nil}
+      ]
+    }
+
+    assert {[1, 3], [%{id: 2, digest: ^d, bval: nil}]} = Router.expand_partition_filter(pf)
+  end
+
+  test "group_partitions_by_node all partitions on one node", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    ns = "test_scan"
+    {:ok, pool} = Agent.start(fn -> :ok end)
+
+    on_exit(fn ->
+      try do
+        Agent.stop(pool, :normal, 100)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    for i <- 0..4_095 do
+      :ets.insert(Tables.partitions(name), {{ns, i, 0}, "node1"})
+    end
+
+    :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: pool}})
+
+    ids = Enum.to_list(0..4_095)
+
+    assert {:ok, %{"node1" => %{pool_pid: ^pool, parts_full: ^ids, parts_partial: []}}} =
+             Router.group_partitions_by_node(name, ns, ids, 0)
+  end
+
+  test "group_partitions_by_node two nodes even/odd", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    ns = "test_scan2"
+    {:ok, pool_a} = Agent.start(fn -> :ok end)
+    {:ok, pool_b} = Agent.start(fn -> :ok end)
+
+    on_exit(fn ->
+      for p <- [pool_a, pool_b] do
+        try do
+          Agent.stop(p, :normal, 100)
+        catch
+          :exit, _ -> :ok
+        end
+      end
+    end)
+
+    for i <- 0..4_095 do
+      node = if rem(i, 2) == 0, do: "node_a", else: "node_b"
+      :ets.insert(Tables.partitions(name), {{ns, i, 0}, node})
+    end
+
+    :ets.insert(Tables.nodes(name), {"node_a", %{pool_pid: pool_a}})
+    :ets.insert(Tables.nodes(name), {"node_b", %{pool_pid: pool_b}})
+
+    ids = Enum.to_list(0..4_095)
+    {:ok, groups} = Router.group_partitions_by_node(name, ns, ids, 0)
+
+    evens = Enum.filter(ids, &(rem(&1, 2) == 0))
+    odds = Enum.filter(ids, &(rem(&1, 2) == 1))
+
+    assert %{
+             "node_a" => %{pool_pid: ^pool_a, parts_full: ^evens, parts_partial: []},
+             "node_b" => %{pool_pid: ^pool_b, parts_full: ^odds, parts_partial: []}
+           } = groups
+  end
+
+  test "group_partitions_by_node subset of partitions only", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    ns = "test_scan3"
+    {:ok, pool} = Agent.start(fn -> :ok end)
+
+    on_exit(fn ->
+      try do
+        Agent.stop(pool, :normal, 100)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    for i <- [0, 1, 2, 99] do
+      :ets.insert(Tables.partitions(name), {{ns, i, 0}, "node1"})
+    end
+
+    :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: pool}})
+
+    assert {:ok, %{"node1" => %{pool_pid: ^pool, parts_full: [0, 1, 2], parts_partial: []}}} =
+             Router.group_partitions_by_node(name, ns, [0, 1, 2], 0)
+  end
+
+  test "group_partitions_by_node errors when partition missing from ETS", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    ns = "test_scan4"
+    {:ok, pool} = Agent.start(fn -> :ok end)
+
+    on_exit(fn ->
+      try do
+        Agent.stop(pool, :normal, 100)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    :ets.insert(Tables.partitions(name), {{ns, 0, 0}, "node1"})
+    :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: pool}})
+
+    assert {:error, %{code: :invalid_cluster_partition_map}} =
+             Router.group_partitions_by_node(name, ns, [0, 1], 0)
+  end
+
+  test "group_partitions_by_node returns cluster_not_ready when meta flag absent", %{name: name} do
+    assert {:error, %{code: :cluster_not_ready}} =
+             Router.group_partitions_by_node(name, "ns", [0], 0)
   end
 end

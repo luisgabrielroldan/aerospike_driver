@@ -32,7 +32,11 @@ defmodule Aerospike do
   alias Aerospike.CRUD
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Page
   alias Aerospike.Policy
+  alias Aerospike.Query
+  alias Aerospike.Scan
+  alias Aerospike.ScanOps
   alias Aerospike.Supervisor, as: AeroSupervisor
 
   @typedoc """
@@ -80,7 +84,8 @@ defmodule Aerospike do
   * `:tls` — when `true`, upgrades each node connection with TLS after TCP connect (default `false`).
   * `:tls_opts` — keyword list passed to `:ssl.connect/3` (certificates, verify, SNI, etc.; default `[]`).
     For non-IP hosts, `:server_name_indication` defaults to the hostname unless set in `:tls_opts`.
-  * `:defaults` — policy defaults per command (`:write`, `:read`, `:delete`, `:exists`, `:touch`, `:operate`, `:batch`).
+  * `:defaults` — policy defaults per command (`:write`, `:read`, `:delete`, `:exists`, `:touch`,
+    `:operate`, `:batch`, `:scan`, `:query`).
 
   ## TLS example
 
@@ -604,4 +609,180 @@ defmodule Aerospike do
       {:error, %Error{} = e} -> raise e
     end
   end
+
+  @doc """
+  Returns a lazy `Stream` of records from a scan or query.
+
+  The stream yields bare `%Aerospike.Record{}` structs. If a network error
+  or server error occurs mid-stream, `Aerospike.Error` is raised.
+
+  The stream holds one pool connection per node for its entire lifetime.
+  On early termination (e.g. `Enum.take/2`), the connection is closed
+  rather than returned to the pool.
+
+  ## Options
+
+  Scan/query policy: `:timeout`, `:pool_checkout_timeout`, `:replica`.
+
+  ## Examples
+
+      alias Aerospike.Scan
+
+      Aerospike.stream!(:aero, Scan.new("test", "users"))
+      |> Stream.filter(fn r -> r.bins["age"] > 21 end)
+      |> Enum.take(100)
+
+  ## Limitations
+
+  In multi-node clusters, partitions are read sequentially (one node at a time).
+  For maximum throughput on large scans, prefer `all/3` which fans out concurrently.
+
+  """
+  @spec stream!(conn(), Scan.t() | Query.t(), keyword()) :: Enumerable.t()
+  def stream!(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case validate_scan_query_opts(scannable, opts) do
+      {:ok, call_opts} ->
+        ScanOps.stream(conn, scannable, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        raise Error.from_result_code(:parameter_error,
+                message: Policy.validation_error_message(e)
+              )
+    end
+  end
+
+  @doc """
+  Eagerly collects all records from a scan or query into a list.
+
+  Requires `max_records` on the scan/query builder. Returns
+  `{:error, %Aerospike.Error{code: :max_records_required}}` if missing.
+
+  ## Options
+
+  Scan/query policy: `:timeout`, `:pool_checkout_timeout`, `:replica`.
+
+  ## Examples
+
+      alias Aerospike.Scan
+
+      {:ok, records} = Aerospike.all(:aero, Scan.new("test", "users") |> Scan.max_records(1_000))
+
+  """
+  @spec all(conn(), Scan.t() | Query.t(), keyword()) ::
+          {:ok, [Aerospike.Record.t()]} | {:error, Error.t()}
+  def all(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case validate_scan_query_opts(scannable, opts) do
+      {:ok, call_opts} ->
+        ScanOps.all(conn, scannable, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `all/3` but returns the list or raises `Aerospike.Error`.
+  """
+  @spec all!(conn(), Scan.t() | Query.t(), keyword()) :: [Aerospike.Record.t()]
+  def all!(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case all(conn, scannable, opts) do
+      {:ok, records} -> records
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Counts records matching a scan or query using a server-side NOBINDATA scan.
+
+  **Cost:** This performs a full scan or query with bin payloads omitted. The
+  server sends one record header per matching record, and the client counts
+  them. For large datasets, prefer the Aerospike info protocol
+  (`sets/<ns>/<set>`) via a raw info command for unfiltered per-set counts.
+
+  ## Options
+
+  Scan/query policy: `:timeout`, `:pool_checkout_timeout`, `:replica`.
+
+  ## Examples
+
+      alias Aerospike.Scan
+
+      {:ok, n} = Aerospike.count(:aero, Scan.new("test", "users"))
+
+  """
+  @spec count(conn(), Scan.t() | Query.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, Error.t()}
+  def count(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case validate_scan_query_opts(scannable, opts) do
+      {:ok, call_opts} ->
+        ScanOps.count(conn, scannable, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `count/3` but returns the count or raises `Aerospike.Error`.
+  """
+  @spec count!(conn(), Scan.t() | Query.t(), keyword()) :: non_neg_integer()
+  def count!(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case count(conn, scannable, opts) do
+      {:ok, n} -> n
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns one page of records from a scan or query with cursor-based pagination.
+
+  Pass `cursor: page.cursor` from a previous `page/3` call to resume.
+
+  ## Options
+
+  * Scan/query policy: `:timeout`, `:pool_checkout_timeout`, `:replica`
+  * `:cursor` — `%Aerospike.Cursor{}` or encoded cursor binary from `Cursor.encode/1`
+
+  ## Examples
+
+      alias Aerospike.Scan
+
+      scan = Scan.new("test", "users") |> Scan.max_records(100)
+      {:ok, page} = Aerospike.page(:aero, scan)
+      {:ok, page2} = Aerospike.page(:aero, scan, cursor: page.cursor)
+
+  """
+  @spec page(conn(), Scan.t() | Query.t(), keyword()) :: {:ok, Page.t()} | {:error, Error.t()}
+  def page(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
+    {cursor, opts2} = Keyword.pop(opts, :cursor)
+
+    case validate_scan_query_opts(scannable, opts2) do
+      {:ok, call_opts} ->
+        opts3 = if cursor != nil, do: Keyword.put(call_opts, :cursor, cursor), else: call_opts
+        ScanOps.page(conn, scannable, opts3)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `page/3` but returns `%Aerospike.Page{}` or raises `Aerospike.Error`.
+  """
+  @spec page!(conn(), Scan.t() | Query.t(), keyword()) :: Page.t()
+  def page!(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case page(conn, scannable, opts) do
+      {:ok, p} -> p
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  defp validate_scan_query_opts(%Scan{} = _scannable, opts) when is_list(opts),
+    do: Policy.validate_scan(opts)
+
+  defp validate_scan_query_opts(%Query{} = _scannable, opts) when is_list(opts),
+    do: Policy.validate_query(opts)
 end

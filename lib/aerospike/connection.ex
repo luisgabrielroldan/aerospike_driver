@@ -11,6 +11,7 @@ defmodule Aerospike.Connection do
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.ResultCode
+  alias Aerospike.Protocol.ScanResponse
 
   # Wire protocol message type for admin commands (login, create-user, etc.).
   @admin_message_type 2
@@ -161,6 +162,22 @@ defmodule Aerospike.Connection do
   end
 
   @doc """
+  Sends wire data to the server without reading a response.
+
+  Used to initiate multi-frame commands (scan, query) where frames
+  are read individually via `recv_frame/1`.
+  """
+  @spec send_command(t(), iodata()) :: {:ok, t()} | {:error, term()}
+  def send_command(%__MODULE__{} = conn, data) do
+    {mod, socket} = conn.transport
+
+    case mod.send(socket, data) do
+      :ok -> {:ok, refresh_idle(conn)}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
   Reads one complete message from the socket (header + body) and refreshes idle deadline.
   """
   @spec recv_message(t()) ::
@@ -186,6 +203,23 @@ defmodule Aerospike.Connection do
   end
 
   @doc """
+  Reads one protocol frame from the connection.
+
+  Returns `{:ok, conn, body, last?}` where `last?` is true when
+  the frame carries the INFO3_LAST sentinel (end of scan/query stream).
+  """
+  @spec recv_frame(t()) :: {:ok, t(), binary(), boolean()} | {:error, term()}
+  def recv_frame(%__MODULE__{} = conn) do
+    {mod, socket} = conn.transport
+
+    with {:ok, header} <- mod.recv(socket, 8, conn.recv_timeout),
+         {:ok, {_version, _type, length}} <- Message.decode_header(header),
+         {:ok, body} <- recv_exact(mod, socket, length, conn.recv_timeout) do
+      {:ok, refresh_idle(conn), body, stream_last_frame?(body)}
+    end
+  end
+
+  @doc """
   Sends wire data and reads a multi-frame response (batch/scan/query).
 
   The server sends one proto frame per record, terminated by a frame whose
@@ -203,18 +237,13 @@ defmodule Aerospike.Connection do
     end
   end
 
-  # Reads proto frames until the body carries the INFO3_LAST sentinel.
-  # AS_MSG body layout: byte 0 = header_size (22), bytes 1-4 = info1..info4.
-  # INFO3_LAST is bit 0 of byte 3.
-  @info3_last_bit 0x01
-
   defp recv_stream(conn, mod, socket, acc) do
     with {:ok, header} <- mod.recv(socket, 8, conn.recv_timeout),
          {:ok, {_version, _type, length}} <- Message.decode_header(header),
          {:ok, body} <- recv_exact(mod, socket, length, conn.recv_timeout) do
       acc = [body | acc]
 
-      if stream_last_frame?(body) do
+      if ScanResponse.lazy_stream_chunk_terminal?(body) do
         {:ok, refresh_idle(conn), IO.iodata_to_binary(Enum.reverse(acc))}
       else
         recv_stream(conn, mod, socket, acc)
@@ -222,11 +251,31 @@ defmodule Aerospike.Connection do
     end
   end
 
-  # An empty frame or one whose info3 byte has the LAST bit signals end-of-stream.
-  defp stream_last_frame?(<<_hdr_size::8, _i1::8, _i2::8, i3::8, _rest::binary>>),
-    do: (i3 &&& @info3_last_bit) != 0
+  # recv_frame/1 may see synthetic short bodies in tests; real scan AS_MSG chunks from
+  # request_stream/2 are always large enough for ScanResponse.lazy_stream_chunk_terminal?/1.
+  defp stream_last_frame?(body) when byte_size(body) < 22 do
+    recv_frame_stream_terminal?(body)
+  end
 
-  defp stream_last_frame?(_), do: true
+  defp stream_last_frame?(body) when is_binary(body) do
+    ScanResponse.lazy_stream_chunk_terminal?(body)
+  end
+
+  @info3_last_bit 0x01
+
+  defp recv_frame_stream_terminal?(body) when byte_size(body) < 4, do: true
+
+  defp recv_frame_stream_terminal?(body) do
+    <<_hdr::8, _i1::8, _i2::8, i3::8, _::binary>> = body
+    last? = (i3 &&& @info3_last_bit) != 0
+
+    if byte_size(body) >= 6 do
+      <<_::32, _i4::8, rc::8, _::binary>> = body
+      last? or rc != 0
+    else
+      last?
+    end
+  end
 
   @doc """
   Runs Aerospike INFO command(s) and returns a map of key-value strings.

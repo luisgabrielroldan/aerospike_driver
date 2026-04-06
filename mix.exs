@@ -107,7 +107,8 @@ defmodule Aerospike.MixProject do
         "guides/map-patterns.md",
         "guides/list-patterns.md",
         "guides/nested-operations.md",
-        "guides/batch-operations.md"
+        "guides/batch-operations.md",
+        "guides/queries-and-scanning.md"
       ],
       groups_for_extras: [
         Tutorials: ~r/guides\/.*/
@@ -116,12 +117,22 @@ defmodule Aerospike.MixProject do
         "Data Types": [
           Aerospike.Key,
           Aerospike.Record,
-          Aerospike.Error
+          Aerospike.Error,
+          Aerospike.Page,
+          Aerospike.Cursor
         ],
-        "Batch & expressions": [
+        "Scan & Query": [
+          Aerospike.PartitionFilter,
+          Aerospike.Query,
+          Aerospike.Scan
+        ],
+        "Expressions & filters": [
+          Aerospike.Exp,
+          Aerospike.Filter
+        ],
+        Batch: [
           Aerospike.Batch,
-          Aerospike.BatchResult,
-          Aerospike.Exp
+          Aerospike.BatchResult
         ]
       ],
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],

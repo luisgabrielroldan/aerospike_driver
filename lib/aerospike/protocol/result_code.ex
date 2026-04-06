@@ -13,6 +13,7 @@ defmodule Aerospike.Protocol.ResultCode do
     -17 => :common_error,
     -16 => :max_retries_exceeded,
     -15 => :max_error_rate,
+    -14 => :max_records_required,
     -13 => :rack_not_defined,
     -12 => :invalid_cluster_partition_map,
     -11 => :server_not_available,
@@ -147,6 +148,7 @@ defmodule Aerospike.Protocol.ResultCode do
     common_error: "Common error",
     max_retries_exceeded: "Max retries exceeded",
     max_error_rate: "Max errors limit reached for node",
+    max_records_required: "max_records must be set to a positive integer for this operation",
     rack_not_defined: "Requested rack for node/namespace was not defined in the cluster",
     invalid_cluster_partition_map:
       "Cluster has an invalid partition map, usually due to bad configuration",

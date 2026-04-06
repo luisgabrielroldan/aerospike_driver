@@ -5,6 +5,7 @@ defmodule Aerospike.Protocol.BatchResponseTest do
   alias Aerospike.BatchResult
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.BatchResponse
 
   defp header(opts) do
@@ -179,6 +180,62 @@ defmodule Aerospike.Protocol.BatchResponseTest do
 
     test "empty batch ops returns empty list" do
       assert {:ok, []} = BatchResponse.parse_batch_operate(<<>>, [])
+    end
+
+    test "read bin_not_found returns ok nil" do
+      key = Key.new("n", "s", "x")
+      op = Batch.read(key)
+      body = header(rc: 17, bidx: 0, fc: 0, oc: 0) <> last_header()
+
+      assert {:ok, [%BatchResult{status: :ok, record: nil}]} =
+               BatchResponse.parse_batch_operate(body, [op])
+    end
+
+    test "delete with non-ok/non-key_not_found rc returns error" do
+      key = Key.new("n", "s", "x")
+      op = Batch.delete(key)
+      body = header(rc: 4, bidx: 0, fc: 0, oc: 0) <> last_header()
+
+      assert {:ok, [%BatchResult{status: :error, error: %{code: :parameter_error}}]} =
+               BatchResponse.parse_batch_operate(body, [op])
+    end
+
+    test "udf with returned bins populates record" do
+      key = Key.new("n", "s", "x")
+      op = Batch.udf(key, "p", "f", [])
+
+      op_bin =
+        Operation.encode(%Operation{
+          op_type: Operation.op_read(),
+          particle_type: Operation.particle_string(),
+          bin_name: "result",
+          data: "ok"
+        })
+
+      body = header(rc: 0, bidx: 0, fc: 0, oc: 1) <> op_bin <> last_header()
+
+      assert {:ok, [%BatchResult{status: :ok, record: %Aerospike.Record{bins: bins}}]} =
+               BatchResponse.parse_batch_operate(body, [op])
+
+      assert bins == %{"result" => "ok"}
+    end
+
+    test "udf error returns error result" do
+      key = Key.new("n", "s", "x")
+      op = Batch.udf(key, "p", "f", [])
+      body = header(rc: 4, bidx: 0, fc: 0, oc: 0) <> last_header()
+
+      assert {:ok, [%BatchResult{status: :error, error: %{code: :parameter_error}}]} =
+               BatchResponse.parse_batch_operate(body, [op])
+    end
+
+    test "unknown result code maps to server_error in read" do
+      key = Key.new("n", "s", "x")
+      op = Batch.read(key)
+      body = header(rc: 254, bidx: 0, fc: 0, oc: 0) <> last_header()
+
+      assert {:ok, [%BatchResult{status: :error, error: %{code: :server_error}}]} =
+               BatchResponse.parse_batch_operate(body, [op])
     end
   end
 end
