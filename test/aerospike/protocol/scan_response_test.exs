@@ -438,6 +438,65 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     end
   end
 
+  describe "malformed input" do
+    @info3_last 0x01
+
+    defp malformed_header(opts) do
+      info3 = Keyword.get(opts, :info3, 0)
+      rc = Keyword.get(opts, :rc, 0)
+      gen = Keyword.get(opts, :generation, 0)
+      exp = Keyword.get(opts, :expiration, 0)
+      timeout = Keyword.get(opts, :timeout, 0)
+      field_count = Keyword.get(opts, :field_count, 0)
+      op_count = Keyword.get(opts, :op_count, 0)
+
+      <<22::8, 0::8, 0::8, info3::8, 0::8, rc::8, gen::32-big, exp::32-big,
+        timeout::32-signed-big, field_count::16-big, op_count::16-big>>
+    end
+
+    test "shorter-than-header payload returns parse_error" do
+      assert {:error, %{code: :parse_error}} = ScanResponse.parse(<<1, 2, 3>>, @namespace, @set)
+    end
+
+    test "field_count larger than available fields returns parse_error" do
+      # field_count claims 3 fields, but only one field is present.
+      header = malformed_header(field_count: 3, info3: @info3_last)
+      one_field = <<4::32-big, Field.type_namespace(), "ns1">>
+
+      assert {:error, %{code: :parse_error}} =
+               ScanResponse.parse(header <> one_field, @namespace, @set)
+    end
+
+    test "op_count larger than available operations returns parse_error" do
+      # op_count claims 2 operations, but only one operation is present.
+      header = malformed_header(op_count: 2, info3: @info3_last)
+      one_op = Operation.encode(Operation.read("bin"))
+
+      assert {:error, %{code: :parse_error}} =
+               ScanResponse.parse(header <> one_op, @namespace, @set)
+    end
+
+    test "LAST with unknown result_code 255 returns server_error" do
+      body = AsmMsg.encode(last_msg(rc: 255))
+
+      assert {:error, %{code: :server_error}} = ScanResponse.parse(body, @namespace, @set)
+    end
+
+    test "field advertises huge size but payload is truncated" do
+      header = malformed_header(field_count: 1, info3: @info3_last)
+      huge_field = <<2_147_483_647::32-big, Field.type_digest(), 1, 2, 3, 4, 5>>
+
+      assert {:error, %{code: :parse_error}} =
+               ScanResponse.parse(header <> huge_field, @namespace, @set)
+    end
+
+    test "duplicate LAST frames in one body return parse_error" do
+      body = AsmMsg.encode(last_msg()) <> AsmMsg.encode(last_msg())
+
+      assert {:error, %{code: :parse_error}} = ScanResponse.parse(body, @namespace, @set)
+    end
+  end
+
   describe "skip_fields edge cases (via count_records)" do
     defp raw_header(opts) do
       info3 = Keyword.get(opts, :info3, 0)

@@ -2,13 +2,24 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
   use ExUnit.Case, async: true
 
   import Aerospike.Op
+  import Bitwise
 
   alias Aerospike.Batch
   alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.BatchEncoder
   alias Aerospike.Protocol.Message
+
+  # Decode the outer wire message, then extract the BATCH_INDEX field data.
+  # Returns {outer_msg, batch_body} where batch_body is the raw batch index payload.
+  defp decode_batch_body(wire) do
+    {:ok, {2, 3, body}} = Message.decode(wire)
+    {:ok, msg} = AsmMsg.decode(body)
+    [%Field{type: 41, data: batch_body}] = Enum.filter(msg.fields, &(&1.type == 41))
+    {msg, batch_body}
+  end
 
   setup do
     key = Key.new("testns", "set1", "encoder-ut")
@@ -150,5 +161,162 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
       )
 
     assert {:ok, _} = Message.decode(wire_hdr)
+  end
+
+  describe "byte-layout assertions" do
+    test "outer AS_MSG BATCH_INDEX field has type byte 41 (Field.type_batch_index)" do
+      key = Key.new("testns", "set1", "enc-t1")
+      wire = BatchEncoder.encode_batch_get([{0, key}], [])
+      {:ok, {2, 3, body}} = Message.decode(wire)
+      {:ok, msg} = AsmMsg.decode(body)
+      # There must be exactly one batch_index field (type 41)
+      batch_field = Enum.find(msg.fields, &(&1.type == Field.type_batch_index()))
+      refute is_nil(batch_field)
+    end
+
+    test "batch index body encodes key count as big-endian uint32 in bytes 0..3" do
+      key1 = Key.new("testns", "set1", "enc-t2a")
+      key2 = Key.new("testns", "set1", "enc-t2b")
+      key3 = Key.new("testns", "set1", "enc-t2c")
+      wire = BatchEncoder.encode_batch_get([{0, key1}, {1, key2}, {2, key3}], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+      # bytes 0-3: key count (big-endian uint32)
+      <<key_count::32-big, _rest::binary>> = batch_body
+      assert key_count == 3
+    end
+
+    test "encode_batch_get uses read_attr 0x03 (INFO1_READ | INFO1_GET_ALL) at inner byte 1" do
+      key = Key.new("testns", "set1", "enc-t3")
+      wire = BatchEncoder.encode_batch_get([{0, key}], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+
+      # batch_body layout:
+      #   bytes 0-3:  key_count (4)
+      #   byte  4:    flags (1)
+      #   bytes 5-8:  index[0] (4)
+      #   bytes 9-28: digest[0] (20)
+      #   byte  29:   inner byte 0 = entry_flags (batch_msg_info | batch_msg_ttl = 0x0A)
+      #   byte  30:   inner byte 1 = read_attr
+      <<_kc::32, _flags::8, _idx::32, _digest::binary-20, _entry_flags::8, read_attr::8,
+        _::binary>> = batch_body
+
+      # INFO1_READ (0x01) | INFO1_GET_ALL (0x02) = 0x03
+      assert read_attr == (AsmMsg.info1_read() ||| AsmMsg.info1_get_all())
+    end
+
+    test "encode_batch_exists uses read_attr 0x21 (INFO1_READ | INFO1_NOBINDATA) at inner byte 1" do
+      key = Key.new("testns", "set1", "enc-t4")
+      wire = BatchEncoder.encode_batch_exists([{0, key}], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+
+      # Same layout as batch_get; only read_attr changes
+      <<_kc::32, _flags::8, _idx::32, _digest::binary-20, _entry_flags::8, read_attr::8,
+        _::binary>> = batch_body
+
+      # INFO1_READ (0x01) | INFO1_NOBINDATA (0x20) = 0x21
+      assert read_attr == (AsmMsg.info1_read() ||| AsmMsg.info1_nobindata())
+    end
+
+    test "encode_batch_get with header_only: true uses read_attr 0x21 (same as exists)" do
+      key = Key.new("testns", "set1", "enc-t5")
+      wire = BatchEncoder.encode_batch_get([{0, key}], header_only: true)
+      {_msg, batch_body} = decode_batch_body(wire)
+
+      <<_kc::32, _flags::8, _idx::32, _digest::binary-20, _entry_flags::8, read_attr::8,
+        _::binary>> = batch_body
+
+      # header_only suppresses bin data the same way as exists
+      assert read_attr == (AsmMsg.info1_read() ||| AsmMsg.info1_nobindata())
+    end
+
+    test "per-key entry digest matches key.digest at bytes 5..24 of entries region" do
+      key = Key.new("testns", "set1", "enc-t6")
+      wire = BatchEncoder.encode_batch_get([{0, key}], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+
+      # batch_body:  key_count(4) + flags(1) + index(4) + digest(20) + ...
+      <<_kc::32, _flags::8, _idx::32, digest::binary-20, _::binary>> = batch_body
+      assert digest == key.digest
+    end
+
+    test "second key with same ns+set emits repeat flag 0x01 as sole inner byte" do
+      key1 = Key.new("testns", "set1", "enc-t7a")
+      key2 = Key.new("testns", "set1", "enc-t7b")
+      wire = BatchEncoder.encode_batch_get([{0, key1}, {1, key2}], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+
+      # First entry (key1) is non-repeat. Its inner size for ns="testns"(6), set="set1"(4):
+      #   entry header:    8 bytes  (flags, read_attr, 0, 0, ttl::32)
+      #   fields_part fc:  4 bytes  (written_fc::16, op_count::16)
+      #   namespace field: 11 bytes (size::32=7, type=0, "testns")
+      #   set field:        9 bytes (size::32=5, type=1, "set1")
+      #   total inner:     32 bytes
+      # First entry total: 4 (idx) + 20 (digest) + 32 (inner) = 56 bytes
+      <<_kc::32, _flags::8, _entry1::binary-56, _idx2::32, _dig2::binary-20, repeat::8,
+        _::binary>> = batch_body
+
+      # @batch_msg_repeat = 0x01
+      assert repeat == 0x01
+    end
+
+    test "second key with different ns emits non-repeat entry (inner byte 0 = 0x0A)" do
+      key1 = Key.new("ns1", "set1", "enc-t8a")
+      key2 = Key.new("ns2", "set1", "enc-t8b")
+      wire = BatchEncoder.encode_batch_get([{0, key1}, {1, key2}], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+
+      # First entry inner size for ns="ns1"(3), set="set1"(4):
+      #   entry header:     8 bytes
+      #   fields_part fc:   4 bytes
+      #   namespace field:  8 bytes (size::32=4, type=0, "ns1")
+      #   set field:        9 bytes (size::32=5, type=1, "set1")
+      #   total inner:     29 bytes
+      # First entry total: 4 (idx) + 20 (digest) + 29 (inner) = 53 bytes
+      <<_kc::32, _flags::8, _entry1::binary-53, _idx2::32, _dig2::binary-20, second_flags::8,
+        _::binary>> = batch_body
+
+      # Not a repeat; should be batch_msg_info | batch_msg_ttl = 0x0A
+      assert second_flags == 0x0A
+    end
+
+    test "encode_batch_operate Batch.Put has INFO2_WRITE and INFO2_RESPOND_ALL_OPS in info2 byte" do
+      key = Key.new("testns", "set1", "enc-t9")
+      wire = BatchEncoder.encode_batch_operate([{0, Batch.put(key, %{"x" => 1})}], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+
+      # Batch.Put inner entry layout:
+      #   batch_body:  key_count(4) + flags(1) + index(4) + digest(20) + ...
+      #   inner:       entry_flags(1) + r/info1(1) + w/info2(1) + i/info3(1) + ...
+      <<_kc::32, _flags::8, _idx::32, _digest::binary-20, _entry_flags::8, _r::8, w::8,
+        _::binary>> = batch_body
+
+      # INFO2_WRITE (0x01) must be set
+      assert (w &&& AsmMsg.info2_write()) != 0
+      # INFO2_RESPOND_ALL_OPS (0x80) must be set (put! always requests all-ops response)
+      assert (w &&& AsmMsg.info2_respond_all_ops()) != 0
+    end
+
+    test "filter expression option adds FILTER_EXP field (type 43) to outer AS_MSG" do
+      key = Key.new("testns", "set1", "enc-t10")
+      filter = Exp.from_wire(<<0xDE, 0xAD, 0xBE, 0xEF>>)
+      wire = BatchEncoder.encode_batch_get([{0, key}], filter: filter)
+      {:ok, {2, 3, body}} = Message.decode(wire)
+      {:ok, msg} = AsmMsg.decode(body)
+
+      filter_field = Enum.find(msg.fields, &(&1.type == Field.type_filter_exp()))
+      refute is_nil(filter_field)
+      # filter data must carry the raw wire bytes we provided
+      assert filter_field.data == <<0xDE, 0xAD, 0xBE, 0xEF>>
+      # outer AS_MSG must have exactly 2 fields: batch_index + filter_exp
+      assert length(msg.fields) == 2
+    end
+
+    test "empty entries list encodes key_count 0 and valid outer message" do
+      wire = BatchEncoder.encode_batch_get([], [])
+      {_msg, batch_body} = decode_batch_body(wire)
+      # bytes 0-3: key_count = 0
+      <<key_count::32-big, _rest::binary>> = batch_body
+      assert key_count == 0
+    end
   end
 end

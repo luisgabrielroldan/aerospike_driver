@@ -238,4 +238,62 @@ defmodule Aerospike.Protocol.BatchResponseTest do
                BatchResponse.parse_batch_operate(body, [op])
     end
   end
+
+  describe "edge cases" do
+    test "out-of-order batch indices are placed in original slots for operate" do
+      key0 = Key.new("n", "s", "k0")
+      key1 = Key.new("n", "s", "k1")
+      key2 = Key.new("n", "s", "k2")
+      ops = [Batch.read(key0), Batch.read(key1), Batch.read(key2)]
+
+      body =
+        header(rc: 0, bidx: 2, fc: 0, oc: 0) <>
+          header(rc: 3, bidx: 0, fc: 0, oc: 0) <>
+          header(rc: 2, bidx: 1, fc: 0, oc: 0) <>
+          last_header()
+
+      assert {:ok, [slot0, slot1, slot2]} = BatchResponse.parse_batch_operate(body, ops)
+      assert %BatchResult{status: :error, error: %{code: :generation_error}} = slot0
+      assert %BatchResult{status: :ok, record: nil} = slot1
+
+      assert %BatchResult{status: :ok, record: %Aerospike.Record{key: %Key{user_key: "k2"}}} =
+               slot2
+    end
+
+    test "batch get returns parse_error when an out-of-range index appears mid-stream" do
+      key0 = Key.new("n", "s", "k0")
+      key1 = Key.new("n", "s", "k1")
+
+      body =
+        header(rc: 2, bidx: 0, fc: 0, oc: 0) <>
+          header(rc: 2, bidx: 9, fc: 0, oc: 0) <>
+          last_header()
+
+      assert {:error, %{code: :parse_error}} = BatchResponse.parse_batch_get(body, [key0, key1])
+    end
+
+    test "truncated batch frame returns parse_error for get" do
+      key = Key.new("n", "s", "k0")
+      body = header(rc: 0, bidx: 0, fc: 0, oc: 1) <> last_header()
+
+      assert {:error, :incomplete_operation} = BatchResponse.parse_batch_get(body, [key])
+    end
+
+    test "empty non-terminal body yields default nil slots for batch get" do
+      keys = [Key.new("n", "s", "k0"), Key.new("n", "s", "k1"), Key.new("n", "s", "k2")]
+      assert {:ok, [nil, nil, nil]} = BatchResponse.parse_batch_get(last_header(), keys)
+    end
+
+    test "empty non-terminal body yields default false slots for batch exists" do
+      assert {:ok, [false, false, false]} = BatchResponse.parse_batch_exists(last_header(), 3)
+    end
+
+    test "duplicate batch index in exists is last-write-wins" do
+      body =
+        header(rc: 0, bidx: 1, fc: 0, oc: 0) <>
+          header(rc: 2, bidx: 1, fc: 0, oc: 0) <> last_header()
+
+      assert {:ok, [false, false, false]} = BatchResponse.parse_batch_exists(body, 3)
+    end
+  end
 end

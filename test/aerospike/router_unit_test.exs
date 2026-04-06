@@ -179,6 +179,66 @@ defmodule Aerospike.RouterUnitTest do
              Router.group_by_node(name, [k1, k2])
   end
 
+  test "group_by_node/3 returns cluster_not_ready when meta flag absent", %{name: name} do
+    k1 = Key.new("test", "s", "router-not-ready-a")
+    k2 = Key.new("test", "s", "router-not-ready-b")
+
+    assert {:error, %{code: :cluster_not_ready}} = Router.group_by_node(name, [k1, k2])
+  end
+
+  test "group_by_node/3 returns invalid_cluster_partition_map when partition table is empty", %{
+    name: name
+  } do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    k1 = Key.new("test", "s", "router-empty-partition-map")
+
+    assert {:error, %{code: :invalid_cluster_partition_map}} = Router.group_by_node(name, [k1])
+  end
+
+  test "group_by_node/3 returns invalid_node when partition points to missing node", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    k1 = Key.new("test", "s", "router-missing-node-a")
+    p1 = Key.partition_id(k1)
+    :ets.insert(Tables.partitions(name), {{k1.namespace, p1, 0}, "node_removed"})
+
+    assert {:error, %{code: :invalid_node}} = Router.group_by_node(name, [k1])
+  end
+
+  test "group_by_node/3 collapses all keys into one node group", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+
+    k1 = Key.new("test", "s", "same-node-a")
+    k2 = Key.new("test", "s", "same-node-b")
+    k3 = Key.new("test", "s", "same-node-c")
+
+    p1 = Key.partition_id(k1)
+    p2 = Key.partition_id(k2)
+    p3 = Key.partition_id(k3)
+
+    {:ok, pool} = Agent.start(fn -> :ok end)
+
+    on_exit(fn ->
+      try do
+        Agent.stop(pool, :normal, 100)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    :ets.insert(Tables.partitions(name), {{k1.namespace, p1, 0}, "node_single"})
+    :ets.insert(Tables.partitions(name), {{k2.namespace, p2, 0}, "node_single"})
+    :ets.insert(Tables.partitions(name), {{k3.namespace, p3, 0}, "node_single"})
+    :ets.insert(Tables.nodes(name), {"node_single", %{pool_pid: pool}})
+
+    assert {:ok,
+            %{
+              "node_single" => %{
+                pool_pid: ^pool,
+                entries: [{0, ^k1}, {1, ^k2}, {2, ^k3}]
+              }
+            }} = Router.group_by_node(name, [k1, k2, k3])
+  end
+
   test "expand_partition_filter nil is all partitions", _ctx do
     {full, partial} = Router.expand_partition_filter(nil)
     assert partial == []

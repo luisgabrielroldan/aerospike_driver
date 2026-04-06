@@ -2,8 +2,10 @@ defmodule Aerospike.ScanOpsTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.PartitionFilter
   alias Aerospike.Scan
   alias Aerospike.ScanOps
+  alias Aerospike.Tables
 
   describe "all/3" do
     test "returns max_records_required when max_records is unset" do
@@ -331,6 +333,127 @@ defmodule Aerospike.ScanOpsTest do
       {:producer_pid, pid} -> pid
     after
       1_000 -> flunk("did not receive producer pid")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Fault-injection tests for ScanOps.stream/3
+  #
+  # These tests exercise the error paths in `run_stream_producer/5` and
+  # `init_stream_state/3` by setting up bare ETS tables with various fault
+  # conditions (missing partition map, dead pool, slow pool, unexpected pool
+  # exit). Each test uses a unique connection name to stay async-safe.
+  # ---------------------------------------------------------------------------
+
+  describe "stream fault injection" do
+    setup do
+      name = :"scan_fault_#{:erlang.unique_integer([:positive])}"
+      :ets.new(Tables.nodes(name), [:set, :public, :named_table, read_concurrency: true])
+      :ets.new(Tables.partitions(name), [:set, :public, :named_table, read_concurrency: true])
+      :ets.new(Tables.meta(name), [:set, :public, :named_table])
+
+      on_exit(fn ->
+        for t <- [Tables.nodes(name), Tables.partitions(name), Tables.meta(name)] do
+          try do
+            :ets.delete(t)
+          catch
+            :error, :badarg -> :ok
+          end
+        end
+      end)
+
+      {:ok, name: name}
+    end
+
+    @tag timeout: 5_000
+    test "raises cluster_not_ready when cluster meta is absent", %{name: name} do
+      # ready_key is NOT inserted — cluster never completed first tend
+      scan = %{Scan.new("fault_ns") | partition_filter: PartitionFilter.by_id(0)}
+      stream = ScanOps.stream(name, scan, [])
+      err = assert_raise Error, fn -> Enum.to_list(stream) end
+      assert %Error{code: :cluster_not_ready} = err
+    end
+
+    @tag timeout: 5_000
+    test "raises invalid_cluster_partition_map when namespace has no partition entries", %{
+      name: name
+    } do
+      # Cluster is ready but no partition rows exist for this namespace
+      :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+      scan = %{Scan.new("fault_ns") | partition_filter: PartitionFilter.by_id(0)}
+      stream = ScanOps.stream(name, scan, [])
+      err = assert_raise Error, fn -> Enum.to_list(stream) end
+      assert %Error{code: :invalid_cluster_partition_map} = err
+    end
+
+    @tag timeout: 5_000
+    test "raises pool_timeout when pool checkout exceeds timeout", %{name: name} do
+      :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+
+      {:ok, pool} =
+        NimblePool.start_link(worker: {Aerospike.Test.SlowPoolWorker, []}, pool_size: 1)
+
+      on_exit(fn ->
+        try do
+          GenServer.stop(pool, :normal, 100)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      # partition 42 → "node1" → SlowPoolWorker (sleeps forever on checkout)
+      :ets.insert(Tables.partitions(name), {{"fault_ns", 42, 0}, "node1"})
+      :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: pool}})
+
+      scan = %{Scan.new("fault_ns") | partition_filter: PartitionFilter.by_id(42)}
+      # 1 ms checkout timeout guarantees timeout before SlowPoolWorker responds
+      stream = ScanOps.stream(name, scan, pool_checkout_timeout: 1)
+      err = assert_raise Error, fn -> Enum.to_list(stream) end
+      assert %Error{code: :pool_timeout} = err
+    end
+
+    @tag timeout: 5_000
+    test "raises invalid_node when pool process is dead", %{name: name} do
+      :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+
+      dead_pid = spawn(fn -> :ok end)
+      ref = Process.monitor(dead_pid)
+      receive do: ({:DOWN, ^ref, _, _, _} -> :ok)
+
+      :ets.insert(Tables.partitions(name), {{"fault_ns", 42, 0}, "node1"})
+      :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: dead_pid}})
+
+      scan = %{Scan.new("fault_ns") | partition_filter: PartitionFilter.by_id(42)}
+      stream = ScanOps.stream(name, scan, pool_checkout_timeout: 100)
+      err = assert_raise Error, fn -> Enum.to_list(stream) end
+      assert %Error{code: :invalid_node} = err
+    end
+
+    @tag timeout: 5_000
+    @tag capture_log: true
+    test "raises network_error when pool exits with unexpected reason", %{name: name} do
+      :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+
+      # An Agent is not a NimblePool — calling checkout! on it causes an
+      # unexpected exit that is caught by the generic `catch :exit, reason`
+      # clause in run_stream_producer, yielding :network_error.
+      {:ok, fake_pool} = Agent.start(fn -> :ok end)
+
+      on_exit(fn ->
+        try do
+          Agent.stop(fake_pool, :normal, 100)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      :ets.insert(Tables.partitions(name), {{"fault_ns", 42, 0}, "node1"})
+      :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: fake_pool}})
+
+      scan = %{Scan.new("fault_ns") | partition_filter: PartitionFilter.by_id(42)}
+      stream = ScanOps.stream(name, scan, pool_checkout_timeout: 100)
+      err = assert_raise Error, fn -> Enum.to_list(stream) end
+      assert %Error{code: :network_error} = err
     end
   end
 end
