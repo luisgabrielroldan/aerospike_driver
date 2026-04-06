@@ -134,6 +134,14 @@ defmodule Aerospike.MixProject do
         Batch: [
           Aerospike.Batch,
           Aerospike.BatchResult
+        ],
+        Transactions: [
+          Aerospike.Txn
+        ],
+        "Async Tasks": [
+          Aerospike.AsyncTask,
+          Aerospike.IndexTask,
+          Aerospike.RegisterTask
         ]
       ],
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],

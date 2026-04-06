@@ -248,4 +248,67 @@ defmodule Aerospike.Protocol.AsmMsg.Field do
   end
 
   def key_from_user_key(%{user_key: nil}), do: nil
+
+  @doc """
+  Creates a UDF_PACKAGE_NAME field (the Lua module name).
+  """
+  @spec udf_package_name(binary()) :: t()
+  def udf_package_name(name) when is_binary(name) do
+    %__MODULE__{type: @udf_package_name, data: name}
+  end
+
+  @doc """
+  Creates a UDF_FUNCTION field (the Lua function name).
+  """
+  @spec udf_function(name :: binary()) :: t()
+  def udf_function(name) when is_binary(name) do
+    %__MODULE__{type: @udf_function, data: name}
+  end
+
+  @doc """
+  Creates a UDF_ARGLIST field from a MessagePack-encoded binary.
+  """
+  @spec udf_arglist(binary()) :: t()
+  def udf_arglist(encoded) when is_binary(encoded) do
+    %__MODULE__{type: @udf_arglist, data: encoded}
+  end
+
+  @doc """
+  Creates a UDF_OP field. Use `1` for single-record execution.
+  """
+  @spec udf_op(non_neg_integer()) :: t()
+  def udf_op(op) when is_integer(op) and op >= 0 do
+    %__MODULE__{type: @udf_op, data: <<op::8>>}
+  end
+
+  @doc """
+  Creates an MRT_ID field from a transaction ID.
+
+  Encodes the transaction ID as an 8-byte little-endian signed integer.
+  """
+  @spec mrt_id(integer()) :: t()
+  def mrt_id(txn_id) when is_integer(txn_id) do
+    %__MODULE__{type: @mrt_id, data: <<txn_id::64-signed-little>>}
+  end
+
+  @doc """
+  Creates an MRT_DEADLINE field from a server-returned deadline value.
+
+  Encodes the deadline as a 4-byte little-endian signed integer.
+  """
+  @spec mrt_deadline(integer()) :: t()
+  def mrt_deadline(deadline) when is_integer(deadline) do
+    %__MODULE__{type: @mrt_deadline, data: <<deadline::32-signed-little>>}
+  end
+
+  @doc """
+  Creates a RECORD_VERSION field from a version integer.
+
+  Encodes the version as 7 bytes in little-endian order. The upper byte
+  of the uint64 is intentionally dropped — the wire format uses 7 bytes.
+  """
+  @spec record_version(non_neg_integer()) :: t()
+  def record_version(version) when is_integer(version) and version >= 0 do
+    %__MODULE__{type: @record_version, data: <<version::56-little-unsigned>>}
+  end
 end

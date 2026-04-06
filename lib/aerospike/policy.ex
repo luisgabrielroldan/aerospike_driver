@@ -14,6 +14,7 @@ defmodule Aerospike.Policy do
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Tables
+  alias Aerospike.Txn
 
   # Replica routing: atoms match the public API proposal; non-negative integers are the
   # wire/partition-table replica index (0 = master) for advanced use.
@@ -37,80 +38,103 @@ defmodule Aerospike.Policy do
 
   # -- NimbleOptions schemas for per-command policies -------------------------
 
+  @txn_opt [txn: [type: {:struct, Txn}, doc: "Transaction handle"]]
+
   @write_keys [
-    ttl: [type: :non_neg_integer],
-    timeout: [type: :non_neg_integer],
-    generation: [type: :non_neg_integer],
-    gen_policy: [type: {:in, [:none, :expect_gen_equal, :expect_gen_gt]}],
-    exists: [
-      type: {:in, [:create_only, :update_only, :replace_only, :create_or_replace]}
-    ],
-    send_key: [type: :boolean],
-    durable_delete: [type: :boolean],
-    filter: [type: {:struct, Exp}],
-    pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: @replica_opt]
-  ]
+                ttl: [type: :non_neg_integer],
+                timeout: [type: :non_neg_integer],
+                generation: [type: :non_neg_integer],
+                gen_policy: [type: {:in, [:none, :expect_gen_equal, :expect_gen_gt]}],
+                exists: [
+                  type: {:in, [:create_only, :update_only, :replace_only, :create_or_replace]}
+                ],
+                send_key: [type: :boolean],
+                durable_delete: [type: :boolean],
+                filter: [type: {:struct, Exp}],
+                pool_checkout_timeout: [type: :non_neg_integer],
+                replica: [type: @replica_opt]
+              ] ++ @txn_opt
 
   @read_keys [
-    timeout: [type: :non_neg_integer],
-    # Specific bin names to fetch; omit to read all bins.
-    bins: [type: {:list, {:or, [:string, :atom]}}],
-    # When true, returns generation/expiration metadata without bin data.
-    header_only: [type: :boolean],
-    # Read touch TTL percent for batch/read policies (0 = default).
-    read_touch_ttl_percent: [type: :non_neg_integer],
-    filter: [type: {:struct, Exp}],
-    pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: @replica_opt]
-  ]
+               timeout: [type: :non_neg_integer],
+               # Specific bin names to fetch; omit to read all bins.
+               bins: [type: {:list, {:or, [:string, :atom]}}],
+               # When true, returns generation/expiration metadata without bin data.
+               header_only: [type: :boolean],
+               # Read touch TTL percent for batch/read policies (0 = default).
+               read_touch_ttl_percent: [type: :non_neg_integer],
+               filter: [type: {:struct, Exp}],
+               pool_checkout_timeout: [type: :non_neg_integer],
+               replica: [type: @replica_opt]
+             ] ++ @txn_opt
 
   @delete_keys [
-    timeout: [type: :non_neg_integer],
-    durable_delete: [type: :boolean],
-    filter: [type: {:struct, Exp}],
-    pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: @replica_opt]
-  ]
+                 timeout: [type: :non_neg_integer],
+                 durable_delete: [type: :boolean],
+                 filter: [type: {:struct, Exp}],
+                 pool_checkout_timeout: [type: :non_neg_integer],
+                 replica: [type: @replica_opt]
+               ] ++ @txn_opt
 
   @exists_keys [
-    timeout: [type: :non_neg_integer],
-    filter: [type: {:struct, Exp}],
-    pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: @replica_opt]
-  ]
+                 timeout: [type: :non_neg_integer],
+                 filter: [type: {:struct, Exp}],
+                 pool_checkout_timeout: [type: :non_neg_integer],
+                 replica: [type: @replica_opt]
+               ] ++ @txn_opt
 
   @touch_keys [
-    ttl: [type: :non_neg_integer],
-    timeout: [type: :non_neg_integer],
-    filter: [type: {:struct, Exp}],
-    pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: @replica_opt]
-  ]
+                ttl: [type: :non_neg_integer],
+                timeout: [type: :non_neg_integer],
+                filter: [type: {:struct, Exp}],
+                pool_checkout_timeout: [type: :non_neg_integer],
+                replica: [type: @replica_opt]
+              ] ++ @txn_opt
 
   # Operate merges read + write semantics; options mirror `put`/`get` where applicable.
   @operate_keys [
-    ttl: [type: :non_neg_integer],
-    timeout: [type: :non_neg_integer],
-    generation: [type: :non_neg_integer],
-    gen_policy: [type: {:in, [:none, :expect_gen_equal, :expect_gen_gt]}],
-    exists: [
-      type: {:in, [:create_only, :update_only, :replace_only, :create_or_replace]}
-    ],
-    send_key: [type: :boolean],
-    durable_delete: [type: :boolean],
-    respond_per_each_op: [type: :boolean],
-    pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: @replica_opt]
-  ]
+                  ttl: [type: :non_neg_integer],
+                  timeout: [type: :non_neg_integer],
+                  generation: [type: :non_neg_integer],
+                  gen_policy: [type: {:in, [:none, :expect_gen_equal, :expect_gen_gt]}],
+                  exists: [
+                    type: {:in, [:create_only, :update_only, :replace_only, :create_or_replace]}
+                  ],
+                  send_key: [type: :boolean],
+                  durable_delete: [type: :boolean],
+                  respond_per_each_op: [type: :boolean],
+                  pool_checkout_timeout: [type: :non_neg_integer],
+                  replica: [type: @replica_opt]
+                ] ++ @txn_opt
 
   # Batch: outer message timeout, pool checkout, replica routing, server batch flags.
   @batch_keys [
+                timeout: [type: :non_neg_integer],
+                pool_checkout_timeout: [type: :non_neg_integer],
+                replica: [type: @replica_opt],
+                respond_all_keys: [type: :boolean, default: true],
+                filter: [type: {:struct, Exp}]
+              ] ++ @txn_opt
+
+  # Info / admin commands: socket timeout and pool checkout only (no wire-level policy to apply).
+  @info_keys [
     timeout: [type: :non_neg_integer],
-    pool_checkout_timeout: [type: :non_neg_integer],
-    replica: [type: @replica_opt],
-    respond_all_keys: [type: :boolean, default: true],
-    filter: [type: {:struct, Exp}]
+    pool_checkout_timeout: [type: :non_neg_integer]
+  ]
+
+  @index_create_keys [
+    bin: [type: :string, required: true, doc: "Bin name to index"],
+    name: [type: :string, required: true, doc: "Index name"],
+    type: [
+      type: {:in, [:numeric, :string, :geo2dsphere]},
+      required: true,
+      doc: "Index data type"
+    ],
+    collection: [
+      type: {:in, [:list, :mapkeys, :mapvalues]},
+      doc: "Collection index type for CDT bins"
+    ],
+    pool_checkout_timeout: [type: :non_neg_integer]
   ]
 
   # Scan / query execution (facade + ScanOps): socket timeout, replica routing, pool checkout.
@@ -178,11 +202,21 @@ defmodule Aerospike.Policy do
   @read_schema NimbleOptions.new!(@read_keys)
   @delete_schema NimbleOptions.new!(@delete_keys)
   @exists_schema NimbleOptions.new!(@exists_keys)
+  @index_create_schema NimbleOptions.new!(@index_create_keys)
+  @info_schema NimbleOptions.new!(@info_keys)
   @touch_schema NimbleOptions.new!(@touch_keys)
   @operate_schema NimbleOptions.new!(@operate_keys)
   @batch_schema NimbleOptions.new!(@batch_keys)
+  @udf_keys [
+    timeout: [type: :non_neg_integer],
+    filter: [type: {:struct, Exp}],
+    pool_checkout_timeout: [type: :non_neg_integer],
+    replica: [type: @replica_opt]
+  ]
+
   @scan_schema NimbleOptions.new!(@scan_keys)
   @query_schema NimbleOptions.new!(@query_keys)
+  @udf_schema NimbleOptions.new!(@udf_keys)
 
   @doc false
   def start_schema, do: @start_schema
@@ -219,6 +253,12 @@ defmodule Aerospike.Policy do
   def validate_exists(opts), do: NimbleOptions.validate(opts, @exists_schema)
 
   @doc false
+  def validate_index_create(opts), do: NimbleOptions.validate(opts, @index_create_schema)
+
+  @doc false
+  def validate_info(opts), do: NimbleOptions.validate(opts, @info_schema)
+
+  @doc false
   def validate_touch(opts), do: NimbleOptions.validate(opts, @touch_schema)
 
   @doc false
@@ -232,6 +272,9 @@ defmodule Aerospike.Policy do
 
   @doc false
   def validate_query(opts), do: NimbleOptions.validate(opts, @query_schema)
+
+  @doc false
+  def validate_udf(opts), do: NimbleOptions.validate(opts, @udf_schema)
 
   @doc false
   def validation_error_message(%NimbleOptions.ValidationError{} = e), do: Exception.message(e)

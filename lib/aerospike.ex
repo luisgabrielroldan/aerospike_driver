@@ -27,17 +27,22 @@ defmodule Aerospike do
 
   """
 
+  alias Aerospike.Admin
   alias Aerospike.Batch
   alias Aerospike.BatchOps
   alias Aerospike.CRUD
   alias Aerospike.Error
+  alias Aerospike.IndexTask
   alias Aerospike.Key
   alias Aerospike.Page
   alias Aerospike.Policy
   alias Aerospike.Query
+  alias Aerospike.RegisterTask
   alias Aerospike.Scan
   alias Aerospike.ScanOps
   alias Aerospike.Supervisor, as: AeroSupervisor
+  alias Aerospike.Txn
+  alias Aerospike.TxnRoll
 
   @typedoc """
   Named connection handle: currently an atom (`:name` from `start_link/1`).
@@ -778,6 +783,470 @@ defmodule Aerospike do
       {:ok, p} -> p
       {:error, %Error{} = e} -> raise e
     end
+  end
+
+  @doc """
+  Sends a raw info command to a random cluster node and returns the response string.
+
+  ## Options
+
+  `:timeout`, `:pool_checkout_timeout`
+
+  ## Example
+
+      {:ok, "test"} = Aerospike.info(:aero, "namespaces")
+
+  """
+  @spec info(conn(), String.t(), keyword()) :: {:ok, String.t()} | {:error, Error.t()}
+  def info(conn, command, opts \\ [])
+      when is_atom(conn) and is_binary(command) and is_list(opts) do
+    case Policy.validate_info(opts) do
+      {:ok, call_opts} ->
+        Admin.info(conn, command, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Sends a raw info command to the named cluster node and returns the response string.
+
+  ## Options
+
+  `:timeout`, `:pool_checkout_timeout`
+
+  ## Example
+
+      {:ok, [%{name: name}]} = Aerospike.nodes(:aero)
+      {:ok, response} = Aerospike.info_node(:aero, name, "statistics")
+
+  """
+  @spec info_node(conn(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Error.t()}
+  def info_node(conn, node_name, command, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_binary(command) and is_list(opts) do
+    case Policy.validate_info(opts) do
+      {:ok, call_opts} ->
+        Admin.info_node(conn, node_name, command, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Returns the list of cluster nodes with their name, host, and port.
+
+  ## Example
+
+      {:ok, [%{name: "BB9...", host: "127.0.0.1", port: 3000}]} = Aerospike.nodes(:aero)
+
+  """
+  @spec nodes(conn()) ::
+          {:ok, [%{name: String.t(), host: String.t(), port: integer()}]}
+          | {:error, Error.t()}
+  def nodes(conn) when is_atom(conn), do: Admin.nodes(conn)
+
+  @doc """
+  Returns the list of cluster node name strings.
+
+  ## Example
+
+      {:ok, ["BB9..."]} = Aerospike.node_names(:aero)
+
+  """
+  @spec node_names(conn()) :: {:ok, [String.t()]} | {:error, Error.t()}
+  def node_names(conn) when is_atom(conn), do: Admin.node_names(conn)
+
+  @doc """
+  Truncates all records in `namespace`, optionally only those written before `before:`.
+
+  ## Options
+
+  * `:before` — `%DateTime{}` — truncate only records written before this timestamp.
+  * `:pool_checkout_timeout` — pool checkout timeout in ms.
+
+  ## Example
+
+      :ok = Aerospike.truncate(:aero, "test")
+      :ok = Aerospike.truncate(:aero, "test", before: DateTime.utc_now())
+
+  """
+  @spec truncate(conn(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def truncate(conn, namespace, opts \\ [])
+
+  def truncate(conn, namespace, set)
+      when is_atom(conn) and is_binary(namespace) and is_binary(set) do
+    truncate(conn, namespace, set, [])
+  end
+
+  def truncate(conn, namespace, opts)
+      when is_atom(conn) and is_binary(namespace) and is_list(opts) do
+    case Policy.validate_info(Keyword.delete(opts, :before)) do
+      {:ok, call_opts} ->
+        Admin.truncate(conn, namespace, Keyword.merge(call_opts, Keyword.take(opts, [:before])))
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Truncates all records in `namespace` and `set`, optionally those written before `before:`.
+
+  ## Options
+
+  * `:before` — `%DateTime{}` — truncate only records written before this timestamp.
+  * `:pool_checkout_timeout` — pool checkout timeout in ms.
+
+  ## Example
+
+      :ok = Aerospike.truncate(:aero, "test", "users")
+      :ok = Aerospike.truncate(:aero, "test", "users", before: DateTime.utc_now())
+
+  """
+  @spec truncate(conn(), String.t(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def truncate(conn, namespace, set, opts)
+      when is_atom(conn) and is_binary(namespace) and is_binary(set) and is_list(opts) do
+    case Policy.validate_info(Keyword.delete(opts, :before)) do
+      {:ok, call_opts} ->
+        Admin.truncate(
+          conn,
+          namespace,
+          set,
+          Keyword.merge(call_opts, Keyword.take(opts, [:before]))
+        )
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Creates a secondary index on `set` in `namespace`.
+
+  The server builds the index in the background and returns an `IndexTask` that
+  you can poll with `IndexTask.status/1` or block on with `IndexTask.wait/2`.
+
+  ## Options
+
+  * `:bin` — required string; the bin name to index.
+  * `:name` — required string; the index name.
+  * `:type` — required atom; `:numeric`, `:string`, or `:geo2dsphere`.
+  * `:collection` — optional atom; `:list`, `:mapkeys`, or `:mapvalues` for CDT bins.
+  * `:pool_checkout_timeout` — pool checkout timeout in ms.
+
+  ## Example
+
+      {:ok, task} = Aerospike.create_index(:aero, "test", "demo",
+        bin: "age", name: "age_idx", type: :numeric
+      )
+      :ok = Aerospike.IndexTask.wait(task, timeout: 30_000)
+
+  """
+  @spec create_index(conn(), String.t(), String.t(), keyword()) ::
+          {:ok, IndexTask.t()} | {:error, Error.t()}
+  def create_index(conn, namespace, set, opts)
+      when is_atom(conn) and is_binary(namespace) and is_binary(set) and is_list(opts) do
+    case Policy.validate_index_create(opts) do
+      {:ok, call_opts} ->
+        Admin.create_index(conn, namespace, set, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Drops a secondary index by name.
+
+  Returns `:ok` if the index was dropped or did not exist.
+
+  ## Example
+
+      :ok = Aerospike.drop_index(:aero, "test", "age_idx")
+
+  """
+  @spec drop_index(conn(), String.t(), String.t()) :: :ok | {:error, Error.t()}
+  def drop_index(conn, namespace, index_name)
+      when is_atom(conn) and is_binary(namespace) and is_binary(index_name) do
+    Admin.drop_index(conn, namespace, index_name, [])
+  end
+
+  @doc """
+  Registers a UDF package on the cluster.
+
+  `path_or_content` can be either a filesystem path to a `.lua` file or the
+  raw Lua source as a string. `server_name` is the package name used on the
+  server (typically the filename, e.g. `"my_module.lua"`).
+
+  Returns an `RegisterTask` that you can poll with `RegisterTask.status/1` or
+  block on with `RegisterTask.wait/2`.
+
+  ## Example
+
+      {:ok, task} = Aerospike.register_udf(:aero, "/path/to/my_module.lua", "my_module.lua")
+      :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000)
+
+  """
+  @spec register_udf(conn(), String.t(), String.t()) ::
+          {:ok, RegisterTask.t()} | {:error, Error.t()}
+  def register_udf(conn, path_or_content, server_name)
+      when is_atom(conn) and is_binary(path_or_content) and is_binary(server_name) do
+    Admin.register_udf(conn, path_or_content, server_name, [])
+  end
+
+  @doc """
+  Registers a UDF package on the cluster with options.
+
+  See `register_udf/3` for details.
+
+  ## Options
+
+  * `:pool_checkout_timeout` — pool checkout timeout in ms.
+
+  """
+  @spec register_udf(conn(), String.t(), String.t(), keyword()) ::
+          {:ok, RegisterTask.t()} | {:error, Error.t()}
+  def register_udf(conn, path_or_content, server_name, opts)
+      when is_atom(conn) and is_binary(path_or_content) and is_binary(server_name) and
+             is_list(opts) do
+    Admin.register_udf(conn, path_or_content, server_name, opts)
+  end
+
+  @doc """
+  Removes a UDF package from the cluster.
+
+  Returns `:ok` whether or not the package was registered.
+
+  ## Example
+
+      :ok = Aerospike.remove_udf(:aero, "my_module.lua")
+
+  """
+  @spec remove_udf(conn(), String.t()) :: :ok | {:error, Error.t()}
+  def remove_udf(conn, udf_name)
+      when is_atom(conn) and is_binary(udf_name) do
+    Admin.remove_udf(conn, udf_name, [])
+  end
+
+  @doc """
+  Removes a UDF package from the cluster with options.
+
+  See `remove_udf/2` for details.
+
+  ## Options
+
+  * `:pool_checkout_timeout` — pool checkout timeout in ms.
+
+  """
+  @spec remove_udf(conn(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def remove_udf(conn, udf_name, opts)
+      when is_atom(conn) and is_binary(udf_name) and is_list(opts) do
+    Admin.remove_udf(conn, udf_name, opts)
+  end
+
+  @doc """
+  Executes a UDF (User Defined Function) on a single record.
+
+  `package` is the Lua module name as registered on the server (without the `.lua`
+  extension). `function` is the Lua function name. `args` is the list of arguments
+  passed to the function.
+
+  Returns `{:ok, value}` where `value` is the Lua function's return value, or
+  `{:error, %Error{code: :udf_bad_response}}` on UDF runtime error.
+
+  ## Example
+
+      {:ok, task} = Aerospike.register_udf(:aero, "/path/my.lua", "my.lua")
+      :ok = Aerospike.RegisterTask.wait(task)
+
+      key = Aerospike.key("test", "demo", "k1")
+      :ok = Aerospike.put(:aero, key, %{"n" => 42})
+      {:ok, result} = Aerospike.apply_udf(:aero, key, "my", "double_n", [])
+
+  """
+  @spec apply_udf(conn(), Key.t(), String.t(), String.t(), list()) ::
+          {:ok, term()} | {:error, Error.t()}
+  def apply_udf(conn, %Key{} = key, package, function, args)
+      when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) do
+    CRUD.apply_udf(conn, key, package, function, args, [])
+  end
+
+  @doc """
+  Executes a UDF on a single record with options.
+
+  See `apply_udf/5` for details.
+
+  ## Options
+
+  * `:timeout` — socket timeout in milliseconds.
+  * `:filter` — server-side expression filter (`%Aerospike.Exp{}`).
+  * `:pool_checkout_timeout` — pool checkout timeout in milliseconds.
+  * `:replica` — replica routing: `:master`, `:sequence`, or `:any`.
+
+  """
+  @spec apply_udf(conn(), Key.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, term()} | {:error, Error.t()}
+  def apply_udf(conn, %Key{} = key, package, function, args, opts)
+      when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    case Policy.validate_udf(opts) do
+      {:ok, validated} ->
+        CRUD.apply_udf(conn, key, package, function, args, validated)
+
+      {:error, e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Commits a transaction.
+
+  Runs the multi-phase commit protocol: verifies all tracked reads, marks the
+  server-side monitor record for roll-forward, and finalizes each write.
+
+  Returns `{:ok, :committed}` on success, `{:ok, :already_committed}` if the
+  transaction was already committed, or `{:error, %Aerospike.Error{}}` on failure.
+
+  Most callers should use `transaction/2` or `transaction/3`, which handle
+  initialization, commit, and abort automatically. Use `commit/2` directly only
+  when managing the transaction lifecycle manually (without the `transaction`
+  wrapper).
+
+  ## Example
+
+      txn = Txn.new()
+      TxnOps.init_tracking(:conn, txn)
+      Aerospike.put(:conn, key1, %{"x" => 1}, txn: txn)
+      Aerospike.put(:conn, key2, %{"x" => 2}, txn: txn)
+      {:ok, :committed} = Aerospike.commit(:conn, txn)
+
+  """
+  @spec commit(conn(), Txn.t()) :: {:ok, :committed | :already_committed} | {:error, Error.t()}
+  def commit(conn, %Txn{} = txn) when is_atom(conn) do
+    TxnRoll.commit(conn, txn, [])
+  end
+
+  @doc """
+  Aborts a transaction, rolling back all writes.
+
+  Returns `{:ok, :aborted}` on success, `{:ok, :already_aborted}` if the
+  transaction was already aborted, or `{:error, %Aerospike.Error{}}` if the
+  transaction was already committed.
+
+  Roll-back writes are best-effort: if some fail (e.g., during a network
+  partition), the server releases remaining locks when the MRT timeout expires.
+
+  Most callers should use `transaction/2` or `transaction/3`, which abort
+  automatically on failure. Use `abort/2` directly only when managing the
+  transaction lifecycle manually (without the `transaction` wrapper).
+
+  ## Example
+
+      txn = Txn.new()
+      TxnOps.init_tracking(:conn, txn)
+      Aerospike.put(:conn, key, %{"x" => 1}, txn: txn)
+      {:ok, :aborted} = Aerospike.abort(:conn, txn)
+
+  """
+  @spec abort(conn(), Txn.t()) :: {:ok, :aborted | :already_aborted} | {:error, Error.t()}
+  def abort(conn, %Txn{} = txn) when is_atom(conn) do
+    TxnRoll.abort(conn, txn, [])
+  end
+
+  @doc """
+  Returns the current state of a transaction.
+
+  Primarily useful **inside** a `transaction/2` or `transaction/3` callback to
+  check whether the transaction is still open. After a successful commit or
+  abort, the transaction's ETS tracking is cleaned up, so this function returns
+  `{:error, %Aerospike.Error{}}` rather than `{:ok, :committed}` or
+  `{:ok, :aborted}`.
+
+  ## States
+
+  - `:open` — transaction is active and accepting operations
+  - `:verified` — verify phase completed (intermediate state during commit)
+
+  ## Example
+
+      Aerospike.transaction(:conn, fn txn ->
+        {:ok, :open} = Aerospike.txn_status(:conn, txn)
+        Aerospike.put(:conn, key, %{"x" => 1}, txn: txn)
+      end)
+
+  """
+  @spec txn_status(conn(), Txn.t()) ::
+          {:ok, :open | :verified | :committed | :aborted} | {:error, Error.t()}
+  def txn_status(conn, %Txn{} = txn) when is_atom(conn) do
+    TxnRoll.txn_status(conn, txn)
+  end
+
+  @doc """
+  Runs a function within a new transaction and commits or aborts automatically.
+
+  Creates a new transaction, calls `fun.(txn)` with the transaction handle, then:
+
+  - Commits on success (non-exception return).
+  - Aborts and returns `{:error, e}` if `fun` raises `%Aerospike.Error{}`.
+  - Aborts and re-raises if `fun` raises any other exception, throws, or exits.
+
+  Abort runs on **all** failure paths (not just `%Aerospike.Error{}`), so
+  server-side write locks are released immediately instead of waiting for the
+  MRT timeout to expire.
+
+  Returns `{:ok, fun_result}` on successful commit.
+
+  Do not call `commit/2` or `abort/2` directly inside `fun` — the wrapper
+  manages both automatically. If you call `abort/2` inside the callback and
+  then return normally, the auto-commit will fail because the transaction's
+  tracking state has already been cleaned up. Use `commit/2` and `abort/2`
+  only when managing the transaction lifecycle manually (without this wrapper).
+
+  ## Example
+
+      {:ok, _} =
+        Aerospike.transaction(:conn, fn txn ->
+          Aerospike.put(:conn, key1, %{"x" => 1}, txn: txn)
+          Aerospike.put(:conn, key2, %{"x" => 2}, txn: txn)
+        end)
+
+  """
+  @spec transaction(conn(), (Txn.t() -> term())) :: {:ok, term()} | {:error, Error.t()}
+  def transaction(conn, fun) when is_atom(conn) and is_function(fun, 1) do
+    TxnRoll.transaction(conn, [], fun)
+  end
+
+  @doc """
+  Runs a function within a transaction using a provided handle or options, committing or aborting automatically.
+
+  When `txn_or_opts` is a `%Aerospike.Txn{}`, the existing transaction handle is used and
+  tracking is initialized fresh. When it is a keyword list, a new transaction is created
+  with those options (e.g., `timeout: 5_000`).
+
+  See `transaction/2` for commit/abort behavior.
+
+  ## Example
+
+      {:ok, _} =
+        Aerospike.transaction(:conn, [timeout: 5_000], fn txn ->
+          Aerospike.put(:conn, key, %{"x" => 1}, txn: txn)
+        end)
+
+  """
+  @spec transaction(conn(), Txn.t() | keyword(), (Txn.t() -> term())) ::
+          {:ok, term()} | {:error, Error.t()}
+  def transaction(conn, txn_or_opts, fun)
+      when is_atom(conn) and is_function(fun, 1) do
+    TxnRoll.transaction(conn, txn_or_opts, fun)
   end
 
   defp validate_scan_query_opts(%Scan{} = _scannable, opts) when is_list(opts),

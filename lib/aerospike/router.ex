@@ -229,6 +229,61 @@ defmodule Aerospike.Router do
   end
 
   @doc """
+  Returns `{:ok, pool_pid, node_name}` for a randomly selected active node in the cluster.
+
+  Returns `{:error, %Aerospike.Error{code: :invalid_node}}` if no active nodes exist.
+  """
+  @spec random_node_pool(atom()) :: {:ok, pid(), String.t()} | {:error, Error.t()}
+  def random_node_pool(conn_name) when is_atom(conn_name) do
+    with :ok <- check_ready(conn_name) do
+      conn_name
+      |> Tables.nodes()
+      |> :ets.tab2list()
+      |> Enum.filter(fn {_name, row} -> Map.get(row, :active) end)
+      |> case do
+        [] ->
+          {:error, Error.from_result_code(:invalid_node)}
+
+        active_nodes ->
+          {node_name, %{pool_pid: pool_pid}} = Enum.random(active_nodes)
+          {:ok, pool_pid, node_name}
+      end
+    end
+  end
+
+  @doc """
+  Returns `{:ok, pool_pid, node_name}` for the named node in the cluster.
+
+  Returns `{:error, %Aerospike.Error{code: :invalid_node}}` if the node is not found.
+  """
+  @spec node_pool(atom(), String.t()) :: {:ok, pid(), String.t()} | {:error, Error.t()}
+  def node_pool(conn_name, node_name) when is_atom(conn_name) and is_binary(node_name) do
+    with :ok <- check_ready(conn_name) do
+      lookup_pool(conn_name, node_name)
+    end
+  end
+
+  @doc """
+  Checks out a connection from `pool_pid`, sends `commands` as an info request, and returns the response map.
+  """
+  @spec checkout_and_info(pid(), [String.t()], non_neg_integer()) ::
+          {:ok, map()} | {:error, Error.t()}
+  def checkout_and_info(pool_pid, commands, checkout_timeout)
+      when is_pid(pool_pid) and is_list(commands) and is_integer(checkout_timeout) and
+             checkout_timeout >= 0 do
+    do_checkout(pool_pid, checkout_timeout, fn conn ->
+      case Connection.request_info(conn, commands) do
+        {:ok, conn2, map} ->
+          {{:ok, map}, conn2}
+
+        {:error, reason} ->
+          e = Error.from_result_code(:network_error, message: inspect(reason))
+          {{:error, e}, :close}
+      end
+    end)
+  end
+
+  @doc """
   Checks out a connection from `pool_pid`, sends `wire`, reads one response body.
 
   For single-record commands (put, get, delete, exists, touch, operate).

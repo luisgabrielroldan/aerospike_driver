@@ -318,4 +318,42 @@ defmodule Aerospike.RouterUnitTest do
     assert {:error, %{code: :cluster_not_ready}} =
              Router.group_partitions_by_node(name, "ns", [0], 0)
   end
+
+  test "random_node_pool/1 returns cluster_not_ready when meta flag absent", %{name: name} do
+    assert {:error, %{code: :cluster_not_ready}} = Router.random_node_pool(name)
+  end
+
+  test "random_node_pool/1 returns invalid_node with empty nodes table", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    assert {:error, %{code: :invalid_node}} = Router.random_node_pool(name)
+  end
+
+  test "random_node_pool/1 skips inactive nodes", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    :ets.insert(Tables.nodes(name), {"inactive_node", %{pool_pid: self(), active: false}})
+    assert {:error, %{code: :invalid_node}} = Router.random_node_pool(name)
+  end
+
+  test "random_node_pool/1 returns an active node pool", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    fake_pid = self()
+    :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: fake_pid, active: true}})
+    assert {:ok, ^fake_pid, "node1"} = Router.random_node_pool(name)
+  end
+
+  test "node_pool/2 returns cluster_not_ready when meta flag absent", %{name: name} do
+    assert {:error, %{code: :cluster_not_ready}} = Router.node_pool(name, "node1")
+  end
+
+  test "node_pool/2 returns invalid_node when node not in ETS", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    assert {:error, %{code: :invalid_node}} = Router.node_pool(name, "missing")
+  end
+
+  test "node_pool/2 returns pool for existing node", %{name: name} do
+    :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
+    fake_pid = self()
+    :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: fake_pid, active: true}})
+    assert {:ok, ^fake_pid, "node1"} = Router.node_pool(name, "node1")
+  end
 end
