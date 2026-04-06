@@ -50,20 +50,21 @@ iex> Demo.Examples.Batch.run()
 | `Expire` | Record TTL expiration |
 | `Touch` | Refresh TTL without modifying data |
 | `Batch` | Batch exists, reads, and header reads |
+| `BatchOperate` | Heterogeneous batch: reads, writes, deletes, atomic operate |
 | `ListMap` | List/Map CDT operations |
+| `ScanSerial` | Eager scan with `all/2`, bin projection, namespace-wide scan |
+| `ScanParallel` | Lazy streaming scan with `stream!/2`, pipelines, early termination |
+| `ScanPaginate` | Paginated scan with `page/3` and cursor serialization |
+| `CountSetObjects` | Count records in a set using scan-based `count/2` |
+| `Expressions` | Server-side filter expressions: filter on get/scan, `Op.Exp.read`, `Op.Exp.write` |
+| `QueryAggregate` | Secondary-index query with range filter, expression filter, client-side aggregation |
+| `GeojsonQuery` | GeoJSON queries with geo2dsphere indexes, `geo_within`, `geo_contains` |
+| `Udf` | UDF registration, execution (`apply_udf`), and removal |
+| `TxnConcurrent` | Multi-record transactions: `transaction/2` wrapper, abort rollback, manual commit |
 
-### Stubs (API Not Yet Available)
+### Stubs (Require Special Infrastructure)
 
 | Module | Reason |
 |--------|--------|
-| `Expressions` | Exp builder API not yet available |
-| `ScanSerial` | Scan API not yet available |
-| `ScanParallel` | Scan API not yet available |
-| `ScanPaginate` | Scan/partition API not yet available |
-| `QueryAggregate` | Query/aggregation API not yet available |
-| `GeojsonQuery` | Query/secondary index API not yet available |
-| `Udf` | UDF register/execute API not yet available |
-| `CountSetObjects` | Info command API not yet available |
 | `TlsSecureConnection` | Requires TLS-configured server |
 | `PkiAuth` | Requires Enterprise + PKI auth |
-| `TxnConcurrent` | Transaction API not yet available |

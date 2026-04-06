@@ -127,8 +127,8 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
       assert Value.decode_value(pt, data) == {:ok, nested}
     end
 
-    test "geojson particle decodes as UTF-8 string" do
-      assert Value.decode_value(Operation.particle_geojson(), "{}") == {:ok, "{}"}
+    test "geojson particle decodes as tagged tuple" do
+      assert Value.decode_value(Operation.particle_geojson(), "{}") == {:ok, {:geojson, "{}"}}
     end
 
     test "map particle with trailing bytes errors" do

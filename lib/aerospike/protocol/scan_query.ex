@@ -276,9 +276,11 @@ defmodule Aerospike.Protocol.ScanQuery do
 
   defp max_records_fields(:scan, _), do: []
 
-  defp max_records_fields(:query, n) when is_integer(n) do
+  defp max_records_fields(:query, n) when is_integer(n) and n > 0 do
     [%Field{type: Field.type_max_records(), data: <<n::64-signed-big>>}]
   end
+
+  defp max_records_fields(:query, _), do: []
 
   defp records_per_second_fields(0), do: []
 

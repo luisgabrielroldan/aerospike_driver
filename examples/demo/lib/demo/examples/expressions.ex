@@ -85,10 +85,12 @@ defmodule Demo.Examples.Expressions do
 
     for r <- records do
       age = r.bins["age"]
-      unless age >= 35, do: raise "Unexpected record: age=#{age} is below filter threshold"
+      unless age >= 35, do: raise("Unexpected record: age=#{age} is below filter threshold")
     end
 
-    Logger.info("    #{length(records)} records returned with age>=35 (expected: bob=40, dave=35)")
+    Logger.info(
+      "    #{length(records)} records returned with age>=35 (expected: bob=40, dave=35)"
+    )
   end
 
   defp exp_read_op do
@@ -105,7 +107,9 @@ defmodule Demo.Examples.Expressions do
       raise "Expected is_senior=true for bob (age=40), got #{inspect(record && record.bins["is_senior"])}"
     end
 
-    Logger.info("    bob is_senior=#{record.bins["is_senior"]} computed server-side (age=40 >= 40)")
+    Logger.info(
+      "    bob is_senior=#{record.bins["is_senior"]} computed server-side (age=40 >= 40)"
+    )
   end
 
   defp exp_write_op do

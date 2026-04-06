@@ -215,7 +215,11 @@ defmodule Aerospike.Connection do
     with {:ok, header} <- mod.recv(socket, 8, conn.recv_timeout),
          {:ok, {_version, _type, length}} <- Message.decode_header(header),
          {:ok, body} <- recv_exact(mod, socket, length, conn.recv_timeout) do
-      {:ok, refresh_idle(conn), body, stream_last_frame?(body)}
+      if length == 0 do
+        recv_frame(refresh_idle(conn))
+      else
+        {:ok, refresh_idle(conn), body, stream_last_frame?(body)}
+      end
     end
   end
 
@@ -241,13 +245,21 @@ defmodule Aerospike.Connection do
     with {:ok, header} <- mod.recv(socket, 8, conn.recv_timeout),
          {:ok, {_version, _type, length}} <- Message.decode_header(header),
          {:ok, body} <- recv_exact(mod, socket, length, conn.recv_timeout) do
-      acc = [body | acc]
+      recv_stream_dispatch(conn, mod, socket, acc, body, length)
+    end
+  end
 
-      if ScanResponse.lazy_stream_chunk_terminal?(body) do
-        {:ok, refresh_idle(conn), IO.iodata_to_binary(Enum.reverse(acc))}
-      else
-        recv_stream(conn, mod, socket, acc)
-      end
+  defp recv_stream_dispatch(conn, mod, socket, acc, _body, 0) do
+    recv_stream(conn, mod, socket, acc)
+  end
+
+  defp recv_stream_dispatch(conn, mod, socket, acc, body, _length) do
+    acc = [body | acc]
+
+    if ScanResponse.lazy_stream_chunk_terminal?(body) do
+      {:ok, refresh_idle(conn), IO.iodata_to_binary(Enum.reverse(acc))}
+    else
+      recv_stream(conn, mod, socket, acc)
     end
   end
 

@@ -38,6 +38,9 @@ defmodule Aerospike.TxnRoll do
       {:ok, %{state: :aborted}} ->
         {:error, Error.from_result_code(:txn_already_aborted)}
 
+      {:ok, %{state: :verified}} ->
+        handle_roll_forward_mark(conn_name, txn, opts)
+
       {:ok, _} ->
         do_commit(conn_name, txn, opts)
 
@@ -115,8 +118,12 @@ defmodule Aerospike.TxnRoll do
     case result do
       {:ok, value} ->
         case commit(conn_name, txn, []) do
-          {:ok, _} -> {:ok, value}
-          {:error, _} = err -> err
+          {:ok, _} ->
+            {:ok, value}
+
+          {:error, _} = err ->
+            best_effort_abort(conn_name, txn)
+            err
         end
 
       {:error, _} = err ->
@@ -146,30 +153,31 @@ defmodule Aerospike.TxnRoll do
   end
 
   defp handle_roll_forward_mark(conn_name, txn, opts) do
-    case TxnMonitor.mark_roll_forward(conn_name, txn, opts) do
-      :ok ->
-        finish_commit(conn_name, txn, opts)
+    if TxnOps.monitor_exists?(conn_name, txn) do
+      case TxnMonitor.mark_roll_forward(conn_name, txn, opts) do
+        :ok ->
+          finish_commit(conn_name, txn, opts)
 
-      {:error, %Error{code: :mrt_committed}} ->
-        finish_commit(conn_name, txn, opts)
+        {:error, %Error{code: :mrt_committed}} ->
+          finish_commit(conn_name, txn, opts)
 
-      {:error, %Error{code: :mrt_aborted}} ->
-        TxnOps.set_state(conn_name, txn, :aborted)
-        TxnOps.cleanup(conn_name, txn)
-        {:error, Error.from_result_code(:mrt_aborted)}
+        {:error, %Error{code: :mrt_aborted}} ->
+          TxnOps.set_state(conn_name, txn, :aborted)
+          {:error, Error.from_result_code(:mrt_aborted)}
 
-      {:error, %Error{code: :timeout} = err} ->
-        TxnOps.set_write_in_doubt(conn_name, txn)
-        {:error, err}
-
-      {:error, _} = err ->
-        TxnOps.set_state(conn_name, txn, :aborted)
-        roll_writes(conn_name, txn, opts, :back)
-        close_if_needed(conn_name, txn, opts)
-        TxnOps.cleanup(conn_name, txn)
-        err
+        {:error, %Error{} = err} ->
+          maybe_set_in_doubt(conn_name, txn, err)
+          {:error, err}
+      end
+    else
+      finish_commit(conn_name, txn, opts)
     end
   end
+
+  defp maybe_set_in_doubt(conn_name, txn, %Error{in_doubt: true}),
+    do: TxnOps.set_write_in_doubt(conn_name, txn)
+
+  defp maybe_set_in_doubt(_conn_name, _txn, _err), do: :ok
 
   defp finish_commit(conn_name, txn, opts) do
     TxnOps.set_state(conn_name, txn, :committed)
@@ -223,6 +231,18 @@ defmodule Aerospike.TxnRoll do
       wire = encode_roll_msg(key, txn.id, direction)
       Router.run(conn_name, key, wire, opts)
     end)
+  end
+
+  # Best-effort cleanup after commit failure inside transaction/3.
+  # Attempts abort for server-side rollback + close, then ensures ETS is freed.
+  # If commit already cleaned up (verify failure path), abort gets :not_found — harmless.
+  # If server already aborted (MRT_ABORTED), abort gets :already_aborted — harmless.
+  # Roll commands are idempotent server-side; aborting an in-doubt txn is safe
+  # because the server's state is authoritative.
+  defp best_effort_abort(conn_name, txn) do
+    _ = abort(conn_name, txn, [])
+    _ = TxnOps.cleanup(conn_name, txn)
+    :ok
   end
 
   defp close_if_needed(conn_name, txn, opts) do

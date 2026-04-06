@@ -68,9 +68,19 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
     end
   end
 
-  # GeoJSON is UTF-8 text on the wire (same layout as STRING).
+  # GeoJSON wire layout: 1 byte flags + 2 bytes ncells + (ncells * 8) cell bytes + JSON string.
+  def decode_value(@particle_geojson, <<_flags::8, ncells::16-big, rest::binary>>)
+      when is_binary(rest) do
+    cell_bytes = ncells * 8
+
+    case rest do
+      <<_cells::binary-size(cell_bytes), json::binary>> -> {:ok, {:geojson, json}}
+      _ -> {:ok, {:geojson, rest}}
+    end
+  end
+
   def decode_value(@particle_geojson, data) when is_binary(data) do
-    {:ok, data}
+    {:ok, {:geojson, data}}
   end
 
   def decode_value(particle_type, data) when is_integer(particle_type) and is_binary(data) do
@@ -119,6 +129,11 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
 
   def encode_value({:bytes, bin}) when is_binary(bin) do
     {@particle_blob, bin}
+  end
+
+  def encode_value({:geojson, json}) when is_binary(json) do
+    # Wire layout: 1 byte flags + 2 bytes ncells (0) + JSON string.
+    {@particle_geojson, <<0::8, 0::16-big, json::binary>>}
   end
 
   def encode_value(n) when is_integer(n) do

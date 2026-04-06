@@ -45,9 +45,7 @@ defmodule Demo.Examples.Batch do
     for i <- 0..(@size - 1) do
       exists = Enum.at(exists_array, i)
 
-      Logger.info(
-        "    Record: key=#{@key_prefix}#{i + 1} exists=#{exists}"
-      )
+      Logger.info("    Record: key=#{@key_prefix}#{i + 1} exists=#{exists}")
     end
 
     unless length(exists_array) == @size do
@@ -74,9 +72,7 @@ defmodule Demo.Examples.Batch do
       if record do
         value = record.bins[@bin_name]
 
-        Logger.info(
-          "    Record: key=#{@key_prefix}#{i + 1} bin=#{@bin_name} value=#{value}"
-        )
+        Logger.info("    Record: key=#{@key_prefix}#{i + 1} bin=#{@bin_name} value=#{value}")
       else
         Logger.error("    Record: key=#{@key_prefix}#{i + 1} NOT FOUND")
       end

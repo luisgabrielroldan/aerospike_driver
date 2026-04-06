@@ -1,0 +1,264 @@
+# Secondary Indexes
+
+A secondary index (SI) lets you query records by bin value rather than primary key. The server
+maintains the index on a per-namespace, per-set, per-bin basis and updates it automatically as
+records change.
+
+Secondary indexes are complementary to `Aerospike.Query` — once an index exists, pass
+`Aerospike.Filter` predicates in your query to use it.
+
+## Creating an Index
+
+`Aerospike.create_index/4` sends the creation command to the server. Index building happens
+asynchronously in the background:
+
+```elixir
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "users",
+    bin: "age",
+    name: "users_age_idx",
+    type: :numeric
+  )
+```
+
+Required options:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `:bin` | `string` | The bin name to index |
+| `:name` | `string` | A unique name for this index |
+| `:type` | atom | `:numeric`, `:string`, or `:geo2dsphere` |
+
+## Waiting for the Index to Be Ready
+
+`create_index/4` returns an `%Aerospike.IndexTask{}`. Use `IndexTask.wait/2` to block until
+the server reports the index is fully built:
+
+```elixir
+:ok = Aerospike.IndexTask.wait(task, timeout: 30_000)
+```
+
+Or poll without blocking:
+
+```elixir
+case Aerospike.IndexTask.status(task) do
+  {:ok, :complete}     -> IO.puts("index ready")
+  {:ok, :in_progress}  -> IO.puts("still building...")
+  {:error, err}        -> IO.puts("check failed: #{err.message}")
+end
+```
+
+`IndexTask.wait/2` polls `status/1` in a loop. Options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `:timeout` | no limit | Maximum time to wait in milliseconds |
+| `:poll_interval` | 1000 | Milliseconds between status checks |
+
+## Index Types
+
+### Numeric
+
+Index integer or float bins. Use with `Filter.range/3` or `Filter.equal/2` (integers only):
+
+```elixir
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "metrics",
+    bin: "score",
+    name: "metrics_score_idx",
+    type: :numeric
+  )
+
+:ok = Aerospike.IndexTask.wait(task)
+```
+
+### String
+
+Index string bins. Use with `Filter.equal/2`:
+
+```elixir
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "users",
+    bin: "email",
+    name: "users_email_idx",
+    type: :string
+  )
+
+:ok = Aerospike.IndexTask.wait(task)
+```
+
+### Geo2DSphere
+
+Index GeoJSON point or region bins for geospatial queries:
+
+```elixir
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "locations",
+    bin: "coords",
+    name: "locations_coords_idx",
+    type: :geo2dsphere
+  )
+
+:ok = Aerospike.IndexTask.wait(task)
+```
+
+## Collection Index Types
+
+When the indexed bin holds a List, Map key, or Map value, pass `:collection` to index the
+inner values rather than the bin container itself:
+
+```elixir
+# Index every integer in a list bin named "tags"
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "articles",
+    bin: "tags",
+    name: "articles_tags_idx",
+    type: :numeric,
+    collection: :list
+  )
+
+# Index map keys (strings)
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "profiles",
+    bin: "preferences",
+    name: "profiles_prefs_keys_idx",
+    type: :string,
+    collection: :mapkeys
+  )
+
+# Index map values (integers)
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "scores",
+    bin: "game_scores",
+    name: "scores_game_idx",
+    type: :numeric,
+    collection: :mapvalues
+  )
+```
+
+| `:collection` value | What is indexed |
+|---------------------|----------------|
+| `:list` | Every element in a list bin |
+| `:mapkeys` | Every key in a map bin |
+| `:mapvalues` | Every value in a map bin |
+
+## Querying with an Index
+
+Pair secondary indexes with `Aerospike.Query` and `Aerospike.Filter`:
+
+```elixir
+alias Aerospike.{Filter, Query}
+
+# Range query — requires a numeric index on "age"
+{:ok, records} =
+  Aerospike.query(:aero, %Query{
+    namespace: "test",
+    set: "users",
+    filter: Filter.range("age", 18, 65)
+  })
+
+# Equality query on a string index
+{:ok, records} =
+  Aerospike.query(:aero, %Query{
+    namespace: "test",
+    set: "users",
+    filter: Filter.equal("email", "user@example.com")
+  })
+```
+
+### Combining Index Filters with Expression Filters
+
+Index filters narrow the server-side record set; expression filters refine it further without
+requiring an index:
+
+```elixir
+alias Aerospike.{Exp, Filter, Query}
+
+{:ok, records} =
+  Aerospike.query(:aero, %Query{
+    namespace: "test",
+    set: "users",
+    filter: Filter.range("age", 18, 65)
+  }, filter: Exp.eq(Exp.str_bin("status"), Exp.val("active")))
+```
+
+The index filter runs server-side first (fast path), then the expression filter applies to
+the smaller result set.
+
+## Dropping an Index
+
+```elixir
+:ok = Aerospike.drop_index(:aero, "test", "users_age_idx")
+```
+
+`drop_index/3` returns `:ok` whether or not the index existed.
+
+## Full Example: Build, Query, Drop
+
+```elixir
+alias Aerospike.{Filter, IndexTask, Query}
+
+# Insert test data
+for i <- 1..1000 do
+  key = Aerospike.key("test", "users", "user:#{i}")
+  Aerospike.put(:aero, key, %{"age" => i, "name" => "user#{i}"})
+end
+
+# Create and wait for index
+{:ok, task} =
+  Aerospike.create_index(:aero, "test", "users",
+    bin: "age",
+    name: "users_age_idx",
+    type: :numeric
+  )
+
+:ok = IndexTask.wait(task, timeout: 60_000)
+
+# Query using the index
+{:ok, records} =
+  Aerospike.query(:aero, %Query{
+    namespace: "test",
+    set: "users",
+    filter: Filter.range("age", 18, 30)
+  })
+
+IO.puts("Found #{length(records)} users aged 18–30")
+
+# Tear down the index
+:ok = Aerospike.drop_index(:aero, "test", "users_age_idx")
+```
+
+## Error Handling
+
+```elixir
+case Aerospike.create_index(:aero, "test", "users", bin: "age", name: "age_idx", type: :numeric) do
+  {:ok, task} ->
+    case IndexTask.wait(task, timeout: 30_000) do
+      :ok ->
+        IO.puts("index ready")
+
+      {:error, %Aerospike.Error{code: :timeout}} ->
+        IO.puts("timed out waiting — index may still be building")
+
+      {:error, err} ->
+        IO.puts("polling failed: #{err.message}")
+    end
+
+  {:error, err} ->
+    IO.puts("create_index failed: #{err.message}")
+end
+```
+
+## Notes
+
+- Index names must be unique within a namespace.
+- Creating an index with the same name on a different bin or type returns an error.
+- Indexes persist across server restarts.
+- Dropping an index that does not exist returns `:ok` (idempotent).
+- Background index builds do not block writes — data written during the build is captured.
+
+## Next Steps
+
+- `Aerospike.IndexTask` — polling task struct reference
+- `Aerospike.Filter` — index filter predicates (`equal/2`, `range/3`)
+- [Queries and Scanning](queries-and-scanning.md) — full query API, pagination, partition filters

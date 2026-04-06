@@ -310,8 +310,8 @@ defmodule Aerospike.ScanOps do
 
   defp read_stream_frames(conn, parent, ns, set) do
     case Connection.recv_frame(conn) do
-      {:ok, conn2, body, _proto_last?} ->
-        dispatch_parsed_stream_frame(conn2, body, parent, ns, set)
+      {:ok, conn2, body, proto_last?} ->
+        dispatch_parsed_stream_frame(conn2, body, parent, ns, set, proto_last?)
 
       {:error, reason} ->
         send(parent, {:scan_error, self(), reason})
@@ -319,12 +319,12 @@ defmodule Aerospike.ScanOps do
     end
   end
 
-  defp dispatch_parsed_stream_frame(conn2, body, parent, ns, set) do
+  defp dispatch_parsed_stream_frame(conn2, body, parent, ns, set, proto_last?) do
     case ScanResponse.parse_stream_chunk(body, ns, set) do
       {:ok, rs, _parts, stream_done?} ->
         if rs != [], do: send(parent, {:scan_records, self(), rs})
 
-        if stream_done? do
+        if stream_done? or proto_last? do
           {{:ok, :done}, conn2}
         else
           read_stream_frames(conn2, parent, ns, set)

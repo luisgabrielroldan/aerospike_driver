@@ -50,6 +50,29 @@ defmodule Aerospike.TxnRollTest do
       txn = Txn.new()
       assert {:error, %Error{code: :parameter_error}} = TxnRoll.commit(conn, txn)
     end
+
+    test "verified state with no monitor commits immediately", %{conn: conn, txn: txn} do
+      TxnOps.init_tracking(conn, txn)
+      TxnOps.set_state(conn, txn, :verified)
+
+      assert {:ok, :committed} = TxnRoll.commit(conn, txn)
+    end
+
+    test "verified state with monitor attempts mark_roll_forward", %{conn: conn, txn: txn} do
+      TxnOps.init_tracking(conn, txn)
+      TxnOps.set_state(conn, txn, :verified)
+      TxnOps.set_namespace(conn, txn, "test")
+      TxnOps.set_deadline(conn, txn, 1)
+
+      result = TxnRoll.commit(conn, txn)
+
+      assert {:error, _} = result
+
+      case TxnOps.get_tracking(conn, txn) do
+        {:ok, %{state: state}} -> assert state in [:verified, :aborted]
+        {:error, :not_found} -> :ok
+      end
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -337,6 +360,27 @@ defmodule Aerospike.TxnRollTest do
 
       [{:txn, txn}] = :ets.lookup(captured_txn, :txn)
       assert txn.timeout == 5_000
+    end
+
+    test "ETS tracking is cleaned up when commit fails", %{conn: conn} do
+      captured_txn = :ets.new(:tmp_capture4, [:set, :public])
+
+      # Callback succeeds and simulates a transaction that registered a monitor
+      # (non-zero deadline + namespace), so commit will attempt mark_roll_forward
+      # and fail (no running cluster). transaction/3 should clean up ETS via
+      # best_effort_abort.
+      result =
+        TxnRoll.transaction(conn, [], fn txn ->
+          TxnOps.set_namespace(conn, txn, "test")
+          TxnOps.set_deadline(conn, txn, 1)
+          :ets.insert(captured_txn, {:txn, txn})
+          :some_value
+        end)
+
+      assert {:error, _} = result
+
+      [{:txn, txn}] = :ets.lookup(captured_txn, :txn)
+      assert {:error, :not_found} = TxnOps.get_tracking(conn, txn)
     end
   end
 

@@ -172,7 +172,12 @@ defmodule Aerospike.Protocol.ScanResponse do
           {:ok, %{records: [], partition_done: nil, last?: true}, tail}
         end)
 
-      scan_skip_rc?(meta.rc) ->
+      stream_terminal_rc?(meta.rc) ->
+        skip_ops_then(after_fields, meta.op_count, fn tail ->
+          {:ok, %{records: [], partition_done: nil, last?: true}, tail}
+        end)
+
+      partition_skip_rc?(meta.rc) ->
         skip_ops_then(after_fields, meta.op_count, fn tail ->
           {:ok, %{records: [], partition_done: nil, last?: false}, tail}
         end)
@@ -245,18 +250,29 @@ defmodule Aerospike.Protocol.ScanResponse do
     case ResultCode.from_integer(rc_int) do
       {:ok, :ok} -> :ok
       {:ok, :key_not_found} -> :ok
+      {:ok, :filtered_out} -> :ok
       {:ok, other} -> {:fatal, other}
       {:error, _} -> {:fatal, :server_error}
     end
   end
 
-  defp scan_skip_rc?(rc_int) do
+  # Non-zero RCs that signal end-of-stream (matching Go client behavior).
+  # The server uses these instead of (or in addition to) INFO3_LAST in some
+  # modes — notably SC-namespace query responses.
+  defp stream_terminal_rc?(rc_int) do
     case ResultCode.from_integer(rc_int) do
       {:ok, :ok} -> false
-      {:ok, :key_not_found} -> true
-      {:ok, :filtered_out} -> true
-      {:ok, _} -> true
-      {:error, _} -> true
+      {:ok, :partition_unavailable} -> false
+      _ -> true
+    end
+  end
+
+  # PARTITION_UNAVAILABLE is the only non-zero RC that the Go client allows
+  # mid-stream without terminating. Skip the frame and continue reading.
+  defp partition_skip_rc?(rc_int) do
+    case ResultCode.from_integer(rc_int) do
+      {:ok, :partition_unavailable} -> true
+      _ -> false
     end
   end
 
@@ -409,13 +425,19 @@ defmodule Aerospike.Protocol.ScanResponse do
 
   defp count_dispatch(meta, tail, count) do
     cond do
-      partition_done_flag?(meta) and meta.last? -> finish_count(count, tail)
-      partition_done_flag?(meta) -> do_count(tail, count)
-      meta.last? and fatal_error_rc?(meta.rc) -> count_fatal(meta)
-      meta.last? -> finish_count(count, tail)
-      scan_skip_rc?(meta.rc) -> do_count(tail, count)
+      partition_done_flag?(meta) -> count_partition_done(meta, tail, count)
+      meta.last? or stream_terminal_rc?(meta.rc) -> count_terminal(meta, tail, count)
+      partition_skip_rc?(meta.rc) -> do_count(tail, count)
       true -> do_count(tail, count + 1)
     end
+  end
+
+  defp count_partition_done(meta, tail, count) do
+    if meta.last?, do: finish_count(count, tail), else: do_count(tail, count)
+  end
+
+  defp count_terminal(meta, tail, count) do
+    if fatal_error_rc?(meta.rc), do: count_fatal(meta), else: finish_count(count, tail)
   end
 
   defp count_fatal(meta) do
@@ -476,8 +498,7 @@ defmodule Aerospike.Protocol.ScanResponse do
   defp tcp_stop_after_message?(meta) do
     case ResultCode.from_integer(meta.rc) do
       {:ok, :ok} -> false
-      {:ok, :key_not_found} -> false
-      {:ok, :filtered_out} -> false
+      {:ok, :partition_unavailable} -> false
       _ -> true
     end
   end

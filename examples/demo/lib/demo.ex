@@ -9,7 +9,6 @@ defmodule Demo do
   require Logger
 
   @examples [
-    # Full implementations
     Demo.Examples.Simple,
     Demo.Examples.Put,
     Demo.Examples.Get,
@@ -30,13 +29,13 @@ defmodule Demo do
     Demo.Examples.ScanPaginate,
     Demo.Examples.CountSetObjects,
     Demo.Examples.Expressions,
-    # Stubs (API not yet available — Phase 10)
     Demo.Examples.QueryAggregate,
     Demo.Examples.GeojsonQuery,
     Demo.Examples.Udf,
+    Demo.Examples.TxnConcurrent,
+    # Stubs (require special infrastructure)
     Demo.Examples.TlsSecureConnection,
-    Demo.Examples.PkiAuth,
-    Demo.Examples.TxnConcurrent
+    Demo.Examples.PkiAuth
   ]
 
   @doc """

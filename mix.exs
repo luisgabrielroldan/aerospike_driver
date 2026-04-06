@@ -109,7 +109,10 @@ defmodule Aerospike.MixProject do
         "guides/nested-operations.md",
         "guides/batch-operations.md",
         "guides/queries-and-scanning.md",
-        "guides/expressions.md"
+        "guides/expressions.md",
+        "guides/transactions.md",
+        "guides/secondary-indexes.md",
+        "guides/udfs.md"
       ],
       groups_for_extras: [
         Tutorials: ~r/guides\/.*/

@@ -14,7 +14,12 @@ defmodule Aerospike.CRUDTxnTest do
 
   setup do
     table = Tables.txn_tracking(@conn)
-    :ets.new(table, [:set, :public, :named_table])
+
+    if :ets.whereis(table) == :undefined do
+      :ets.new(table, [:set, :public, :named_table])
+    else
+      :ets.delete_all_objects(table)
+    end
 
     key = Key.new("test", "users", "txn-wire-test")
     txn = %Txn{id: 42_000, timeout: 5_000}

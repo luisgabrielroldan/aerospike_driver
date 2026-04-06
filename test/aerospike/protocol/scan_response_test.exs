@@ -183,9 +183,9 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     assert {:error, %{code: :parse_error}} = ScanResponse.parse_frame(bin, @namespace, @set)
   end
 
-  test "parse: skips non-LAST frame with key_not_found" do
-    skip = %AsmMsg{result_code: 2, fields: [], operations: []}
-    body = AsmMsg.encode(skip) <> AsmMsg.encode(last_msg())
+  test "parse: key_not_found RC terminates stream (no LAST needed)" do
+    terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
+    body = AsmMsg.encode(terminal)
 
     assert {:ok, [], []} = ScanResponse.parse(body, @namespace, @set)
   end
@@ -252,9 +252,9 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       assert {:error, %{code: :timeout}} = ScanResponse.count_records(body)
     end
 
-    test "skips non-LAST frame with key_not_found" do
-      skip = %AsmMsg{result_code: 2, fields: [], operations: []}
-      body = AsmMsg.encode(skip) <> AsmMsg.encode(last_msg())
+    test "key_not_found RC terminates stream (no LAST needed)" do
+      terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
+      body = AsmMsg.encode(terminal)
 
       assert {:ok, 0} = ScanResponse.count_records(body)
     end
@@ -394,22 +394,22 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
-    test "returns true for error result code (non-ok, non-key_not_found, non-filtered_out)" do
+    test "returns true for error result code" do
       error_msg = %AsmMsg{result_code: 9, fields: [], operations: []}
       body = AsmMsg.encode(error_msg)
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
-    test "returns false for key_not_found frame (non-LAST)" do
-      skip_msg = %AsmMsg{result_code: 2, fields: [], operations: []}
-      body = AsmMsg.encode(skip_msg)
-      assert ScanResponse.lazy_stream_chunk_terminal?(body) == false
+    test "returns true for key_not_found frame (stream terminator)" do
+      msg = %AsmMsg{result_code: 2, fields: [], operations: []}
+      body = AsmMsg.encode(msg)
+      assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
-    test "returns false for filtered_out frame (non-LAST)" do
-      skip_msg = %AsmMsg{result_code: 27, fields: [], operations: []}
-      body = AsmMsg.encode(skip_msg)
-      assert ScanResponse.lazy_stream_chunk_terminal?(body) == false
+    test "returns true for filtered_out frame (stream terminator)" do
+      msg = %AsmMsg{result_code: 27, fields: [], operations: []}
+      body = AsmMsg.encode(msg)
+      assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
     test "returns true on short/invalid data" do

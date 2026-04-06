@@ -42,9 +42,7 @@ defmodule Demo.Examples.Generation do
     )
 
     # Set record and fail if it's not the expected generation
-    Logger.info(
-      "  Put with expected generation=#{record.generation}: bin=genbin value=genvalue3"
-    )
+    Logger.info("  Put with expected generation=#{record.generation}: bin=genbin value=genvalue3")
 
     :ok =
       Aerospike.put!(@conn, key, %{bin_name => "genvalue3"},
