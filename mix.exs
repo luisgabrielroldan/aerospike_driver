@@ -108,7 +108,8 @@ defmodule Aerospike.MixProject do
         "guides/list-patterns.md",
         "guides/nested-operations.md",
         "guides/batch-operations.md",
-        "guides/queries-and-scanning.md"
+        "guides/queries-and-scanning.md",
+        "guides/expressions.md"
       ],
       groups_for_extras: [
         Tutorials: ~r/guides\/.*/

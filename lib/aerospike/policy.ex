@@ -47,6 +47,7 @@ defmodule Aerospike.Policy do
     ],
     send_key: [type: :boolean],
     durable_delete: [type: :boolean],
+    filter: [type: {:struct, Exp}],
     pool_checkout_timeout: [type: :non_neg_integer],
     replica: [type: @replica_opt]
   ]
@@ -59,6 +60,7 @@ defmodule Aerospike.Policy do
     header_only: [type: :boolean],
     # Read touch TTL percent for batch/read policies (0 = default).
     read_touch_ttl_percent: [type: :non_neg_integer],
+    filter: [type: {:struct, Exp}],
     pool_checkout_timeout: [type: :non_neg_integer],
     replica: [type: @replica_opt]
   ]
@@ -66,12 +68,14 @@ defmodule Aerospike.Policy do
   @delete_keys [
     timeout: [type: :non_neg_integer],
     durable_delete: [type: :boolean],
+    filter: [type: {:struct, Exp}],
     pool_checkout_timeout: [type: :non_neg_integer],
     replica: [type: @replica_opt]
   ]
 
   @exists_keys [
     timeout: [type: :non_neg_integer],
+    filter: [type: {:struct, Exp}],
     pool_checkout_timeout: [type: :non_neg_integer],
     replica: [type: @replica_opt]
   ]
@@ -79,6 +83,7 @@ defmodule Aerospike.Policy do
   @touch_keys [
     ttl: [type: :non_neg_integer],
     timeout: [type: :non_neg_integer],
+    filter: [type: {:struct, Exp}],
     pool_checkout_timeout: [type: :non_neg_integer],
     replica: [type: @replica_opt]
   ]

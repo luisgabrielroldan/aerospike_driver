@@ -2,8 +2,10 @@ defmodule Aerospike.CRUDTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.CRUD
+  alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Message
   alias Aerospike.Test.Helpers
 
@@ -65,6 +67,55 @@ defmodule Aerospike.CRUDTest do
       assert {:ok, {2, 3, body}} = Message.decode(wire)
       assert {:ok, msg} = AsmMsg.decode(body)
       assert length(msg.operations) == 1
+    end
+  end
+
+  describe "apply_filter_exp/2" do
+    test "appends FILTER_EXP field (type 43) when filter opt is present", %{key: key} do
+      import Bitwise
+
+      exp = Exp.int(1)
+
+      base_msg = %AsmMsg{
+        info1: AsmMsg.info1_read() ||| AsmMsg.info1_get_all(),
+        fields: [
+          Field.namespace(key.namespace),
+          Field.set(key.set),
+          Field.digest(key.digest)
+        ]
+      }
+
+      msg = CRUD.apply_filter_exp(base_msg, filter: exp)
+
+      wire = Message.encode_as_msg(AsmMsg.encode(msg))
+      assert {:ok, {2, 3, body}} = Message.decode(wire)
+      assert {:ok, decoded} = AsmMsg.decode(body)
+
+      filter_fields = Enum.filter(decoded.fields, &(&1.type == Field.type_filter_exp()))
+      assert [%Field{data: data}] = filter_fields
+      assert data == exp.wire
+    end
+
+    test "does not append FILTER_EXP field when filter opt is absent", %{key: key} do
+      import Bitwise
+
+      base_msg = %AsmMsg{
+        info1: AsmMsg.info1_read() ||| AsmMsg.info1_get_all(),
+        fields: [
+          Field.namespace(key.namespace),
+          Field.set(key.set),
+          Field.digest(key.digest)
+        ]
+      }
+
+      msg = CRUD.apply_filter_exp(base_msg, [])
+
+      wire = Message.encode_as_msg(AsmMsg.encode(msg))
+      assert {:ok, {2, 3, body}} = Message.decode(wire)
+      assert {:ok, decoded} = AsmMsg.decode(body)
+
+      filter_fields = Enum.filter(decoded.fields, &(&1.type == Field.type_filter_exp()))
+      assert filter_fields == []
     end
   end
 end

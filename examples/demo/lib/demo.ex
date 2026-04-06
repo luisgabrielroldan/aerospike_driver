@@ -29,8 +29,8 @@ defmodule Demo do
     Demo.Examples.ScanParallel,
     Demo.Examples.ScanPaginate,
     Demo.Examples.CountSetObjects,
-    # Stubs (API not yet available)
     Demo.Examples.Expressions,
+    # Stubs (API not yet available — Phase 10)
     Demo.Examples.QueryAggregate,
     Demo.Examples.GeojsonQuery,
     Demo.Examples.Udf,

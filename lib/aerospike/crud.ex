@@ -12,6 +12,7 @@ defmodule Aerospike.CRUD do
   # 4. Decode the response and emit telemetry.
 
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
@@ -303,6 +304,7 @@ defmodule Aerospike.CRUD do
     |> base_write_msg(ops)
     |> Policy.apply_write_policy(merged)
     |> Policy.apply_send_key(key, merged)
+    |> apply_filter_exp(merged)
     |> AsmMsg.encode()
     |> Message.encode_as_msg()
   end
@@ -315,6 +317,7 @@ defmodule Aerospike.CRUD do
     key
     |> Policy.read_message_for_opts(merged)
     |> Policy.apply_read_policy(merged)
+    |> apply_filter_exp(merged)
     |> AsmMsg.encode()
     |> Message.encode_as_msg()
   end
@@ -323,6 +326,7 @@ defmodule Aerospike.CRUD do
     key
     |> base_delete_msg()
     |> Policy.apply_delete_policy(merged)
+    |> apply_filter_exp(merged)
     |> AsmMsg.encode()
     |> Message.encode_as_msg()
   end
@@ -335,6 +339,7 @@ defmodule Aerospike.CRUD do
     key
     |> base_exists_msg()
     |> Policy.apply_read_policy(merged)
+    |> apply_filter_exp(merged)
     |> AsmMsg.encode()
     |> Message.encode_as_msg()
   end
@@ -347,8 +352,20 @@ defmodule Aerospike.CRUD do
     key
     |> base_touch_msg()
     |> Policy.apply_touch_policy(merged)
+    |> apply_filter_exp(merged)
     |> AsmMsg.encode()
     |> Message.encode_as_msg()
+  end
+
+  @doc false
+  def apply_filter_exp(%AsmMsg{} = msg, opts) do
+    case Keyword.get(opts, :filter) do
+      %Exp{wire: w} ->
+        %{msg | fields: msg.fields ++ [%Field{type: Field.type_filter_exp(), data: w}]}
+
+      _ ->
+        msg
+    end
   end
 
   defp base_touch_msg(%Key{} = key) do
