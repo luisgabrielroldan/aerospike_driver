@@ -19,6 +19,7 @@ defmodule Aerospike.ScanOps do
   alias Aerospike.Tables
 
   @count_per_node_cap 2_147_483_647
+  @max_all_iterations 20
 
   @typep partition_groups :: %{String.t() => Router.node_partition_group()}
 
@@ -39,18 +40,69 @@ defmodule Aerospike.ScanOps do
 
   defp all_after_max_ok(conn_name, scannable, opts) do
     merged = Policy.merge_defaults(conn_name, policy_kind(scannable), opts)
+    max_records = scannable_max_for_distribute(scannable)
+    cmd = scannable_command(:all, scannable)
 
-    case prepare_fanout(conn_name, scannable, merged, &distribute_record_max/2) do
-      {:ok, prepared} ->
-        cmd = scannable_command(:all, scannable)
+    with_scan_telemetry(cmd, conn_name, scannable, fn ->
+      iterate_all(conn_name, scannable, merged, max_records, [], 0)
+    end)
+  end
 
-        with_scan_telemetry(cmd, conn_name, scannable, fn ->
-          run_fanout_all(conn_name, prepared, scannable, merged)
-        end)
+  defp iterate_all(_conn_name, _scannable, _opts, max_records, acc, _iteration)
+       when length(acc) >= max_records do
+    {:ok, Enum.take(acc, max_records)}
+  end
 
-      {:error, _} = err ->
-        err
+  defp iterate_all(_conn_name, _scannable, _opts, _max_records, acc, iteration)
+       when iteration >= @max_all_iterations do
+    {:ok, acc}
+  end
+
+  defp iterate_all(conn_name, scannable, opts, max_records, acc, iteration) do
+    remaining = max_records - length(acc)
+    scannable_with_budget = set_max_records(scannable, remaining)
+
+    with {:ok, prepared} <-
+           prepare_fanout(conn_name, scannable_with_budget, opts, &distribute_record_max/2),
+         {:ok, page} <- run_fanout_page(conn_name, prepared, scannable_with_budget, opts) do
+      apply_page_result(conn_name, scannable, opts, max_records, acc, iteration, page)
     end
+  end
+
+  defp apply_page_result(_conn_name, _scannable, _opts, max_records, acc, _iteration, %Page{
+         records: new_records,
+         done?: true
+       }) do
+    {:ok, Enum.take(acc ++ new_records, max_records)}
+  end
+
+  defp apply_page_result(_conn_name, _scannable, _opts, max_records, acc, _iteration, %Page{
+         records: new_records
+       })
+       when length(acc) + length(new_records) >= max_records do
+    {:ok, Enum.take(acc ++ new_records, max_records)}
+  end
+
+  defp apply_page_result(_conn_name, _scannable, _opts, _max_records, acc, _iteration, %Page{
+         records: []
+       }) do
+    {:ok, acc}
+  end
+
+  defp apply_page_result(conn_name, scannable, opts, max_records, acc, iteration, %Page{
+         records: new_records,
+         cursor: cursor
+       }) do
+    scannable_with_cursor = attach_cursor_partition_filter(scannable, cursor)
+
+    iterate_all(
+      conn_name,
+      scannable_with_cursor,
+      opts,
+      max_records,
+      acc ++ new_records,
+      iteration + 1
+    )
   end
 
   defp page_after_max_ok(conn_name, scannable2, opts2) do
@@ -480,24 +532,6 @@ defmodule Aerospike.ScanOps do
     end
   end
 
-  defp run_fanout_all(conn_name, %{node_wires: wires}, scannable, opts) do
-    {ns, set} = namespace_set(scannable)
-    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
-
-    collect_and_merge(
-      conn_name,
-      wires,
-      fn pool_pid, wire ->
-        with {:ok, body} <- Router.checkout_and_request_stream(pool_pid, wire, checkout_timeout),
-             {:ok, recs, _parts} <- ScanResponse.parse(body, ns, set) do
-          {:ok, recs}
-        end
-      end,
-      fn record_lists -> {:ok, List.flatten(record_lists)} end,
-      opts
-    )
-  end
-
   defp run_fanout_count(conn_name, %{node_wires: wires}, _scannable, opts) do
     checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
 
@@ -711,6 +745,9 @@ defmodule Aerospike.ScanOps do
 
     %{q | partition_filter: %PartitionFilter{begin: 0, count: n, partitions: p}}
   end
+
+  defp set_max_records(%Scan{} = s, n) when is_integer(n) and n > 0, do: %{s | max_records: n}
+  defp set_max_records(%Query{} = q, n) when is_integer(n) and n > 0, do: %{q | max_records: n}
 
   defp require_max_records(%Scan{max_records: n}) when is_integer(n) and n > 0, do: :ok
   defp require_max_records(%Query{max_records: n}) when is_integer(n) and n > 0, do: :ok

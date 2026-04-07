@@ -87,7 +87,7 @@ defmodule Aerospike.MixProject do
       "coveralls.lcov": "coveralls.lcov --include integration",
       "test.coverage": "coveralls.html --include integration",
       "test.all":
-        "test --include integration --include property --include cluster --include enterprise",
+        "test --include integration --include property --include cluster --include enterprise --include tls_stack",
       "test.enterprise": "test --include enterprise"
     ]
   end

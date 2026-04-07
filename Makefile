@@ -1,7 +1,8 @@
 TLS_FIXTURES_DIR ?= test/support/fixtures/tls
 TLS_DAYS ?= 3650
 
-.PHONY: tls-fixtures tls-fixtures-clean test.tls demo-stack-up demo-stack-down
+.PHONY: tls-fixtures tls-fixtures-clean test.tls \
+	deps-up deps-cluster-up deps-enterprise-up deps-all-up deps-down
 
 tls-fixtures:
 	@command -v openssl >/dev/null 2>&1 || (echo "openssl is required" && exit 1)
@@ -27,9 +28,25 @@ tls-fixtures-clean:
 test.tls: tls-fixtures
 	@mix test test/aerospike/connection_tls_test.exs
 
-demo-stack-up: tls-fixtures
-	@docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki
-	@echo "Demo stack ready: localhost:3100 (EE), :4333 (TLS), :4334 (mTLS)"
+# Single-node dependencies (unit/property/basic integration).
+deps-up:
+	@docker compose up -d aerospike
+	@echo "Dependencies ready: localhost:3000"
 
-demo-stack-down:
-	@docker compose --profile enterprise down
+# Multi-node cluster dependencies (cluster integration tests).
+deps-cluster-up:
+	@docker compose --profile cluster up -d aerospike aerospike2 aerospike3
+	@echo "Cluster dependencies ready: localhost:3000, :3010, :3020"
+
+# Enterprise dependencies (enterprise/TLS tests).
+deps-enterprise-up: tls-fixtures
+	@docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki
+	@echo "Enterprise dependencies ready: localhost:3100 (EE), :4333 (TLS), :4334 (mTLS)"
+
+# Full dependency stack for full-suite testing.
+deps-all-up: tls-fixtures
+	@docker compose --profile cluster --profile enterprise up -d
+	@echo "All dependencies ready (single-node, cluster, enterprise)"
+
+deps-down:
+	@docker compose --profile cluster --profile enterprise down

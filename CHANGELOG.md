@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Added `Aerospike.Key.coerce!/1` plus `Aerospike.Key.key_input()` to normalize public key inputs to `%Aerospike.Key{}` internally.
 - Added `String.Chars` and `Inspect` protocol implementations for `%Aerospike.Key{}`.
 - Added tuple-key coverage in facade, batch, and key unit tests.
+- Added `deps-up`, `deps-cluster-up`, `deps-enterprise-up`, `deps-all-up`, and `deps-down` Makefile targets for clearer dependency management.
+
+### Fixed
+- Fixed `Aerospike.all/2` to correctly paginate through all results using cursor-based iteration when `max_records` exceeds the per-page limit, and to respect the `max_records` cap.
 
 ### Changed
 - Updated API docs for `Aerospike`, `Aerospike.Batch`, and `Aerospike.Key` to document tuple-key usage and clarify that digest-only flows should use `key_digest/3`.

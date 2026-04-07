@@ -85,6 +85,20 @@ defmodule Aerospike.Integration.ScanQueryTest do
     assert Enum.all?(records, &match?(%Record{}, &1))
   end
 
+  test "all/2 returns all records when max_records exceeds total", %{conn: conn} do
+    scan = Scan.new(@namespace, @set) |> Scan.max_records(100)
+    assert {:ok, records} = Aerospike.all(conn, scan)
+    assert length(records) == 15
+    assert Enum.all?(records, &match?(%Record{}, &1))
+  end
+
+  test "all/2 respects max_records cap", %{conn: conn} do
+    scan = Scan.new(@namespace, @set) |> Scan.max_records(5)
+    assert {:ok, records} = Aerospike.all(conn, scan)
+    assert length(records) == 5
+    assert Enum.all?(records, &match?(%Record{}, &1))
+  end
+
   test "scan with select returns projected bins", %{conn: conn} do
     scan =
       Scan.new(@namespace, @set)
