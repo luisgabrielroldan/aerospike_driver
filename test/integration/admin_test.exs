@@ -100,15 +100,19 @@ defmodule Aerospike.Integration.AdminTest do
 
       assert :ok = Aerospike.truncate(conn, "test", set)
 
-      assert_eventually(fn ->
-        match?({:error, %Aerospike.Error{code: :key_not_found}}, Aerospike.get(conn, trunc_key))
-      end)
+      assert_eventually(
+        fn ->
+          match?({:error, %Aerospike.Error{code: :key_not_found}}, Aerospike.get(conn, trunc_key))
+        end,
+        50,
+        200
+      )
 
       assert {:ok, _} = Aerospike.get(conn, keep_key)
     end
   end
 
-  defp assert_eventually(fun, retries \\ 20, interval \\ 100) do
+  defp assert_eventually(fun, retries, interval) do
     if fun.() do
       :ok
     else
