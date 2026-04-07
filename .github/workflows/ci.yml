@@ -225,9 +225,30 @@ jobs:
 
       - name: Verify enterprise roster
         run: |
-          docker exec aerospike-ee asinfo -v 'roster:namespace=test' | grep -v 'roster=null'
-          docker exec aerospike-ee-tls asinfo -v 'roster:namespace=test' | grep -v 'roster=null'
-          docker exec aerospike-ee-pki asinfo -v 'roster:namespace=test' | grep -v 'roster=null'
+          ensure_roster() {
+            local ctr="$1"
+            echo "Checking roster on $ctr..."
+            for i in $(seq 1 15); do
+              ROSTER=$(docker exec "$ctr" asinfo -v 'roster:namespace=test' 2>/dev/null || true)
+              if echo "$ROSTER" | grep -q 'roster=' && ! echo "$ROSTER" | grep -q 'roster=null'; then
+                echo "$ctr: roster OK"
+                return 0
+              fi
+              if echo "$ROSTER" | grep -q 'roster=null'; then
+                NODE_ID=$(docker exec "$ctr" asinfo -v 'node' 2>/dev/null | tr -d '[:space:]')
+                echo "$ctr: roster=null, setting roster -> $NODE_ID"
+                docker exec "$ctr" asinfo -v "roster-set:namespace=test;nodes=$NODE_ID" || true
+                docker exec "$ctr" asinfo -v 'recluster:' || true
+              fi
+              sleep 2
+            done
+            echo "$ctr: roster not ready after 30s"
+            docker exec "$ctr" asinfo -v 'roster:namespace=test' || true
+            return 1
+          }
+          ensure_roster aerospike-ee
+          ensure_roster aerospike-ee-tls
+          ensure_roster aerospike-ee-pki
 
       - name: Run enterprise and TLS tests
         run: mix test --include enterprise --include tls_stack
