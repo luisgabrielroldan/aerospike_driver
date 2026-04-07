@@ -95,7 +95,7 @@ Supported operations: `get`, `exists`, `put`, `delete`, `touch`, `append`, `prep
 ## Manual Commit and Abort
 
 When you need full control over the transaction lifecycle, call `commit/2` and `abort/2`
-directly. You must also initialize ETS tracking explicitly via `Aerospike.TxnOps.init_tracking/2`:
+directly. You must also initialize ETS tracking explicitly via `TxnOps.init_tracking/2`:
 
 ```elixir
 alias Aerospike.{Txn, TxnOps}

@@ -137,6 +137,11 @@ defmodule Aerospike.MixProject do
         ],
         Batch: [
           Aerospike.Batch,
+          Aerospike.Batch.Read,
+          Aerospike.Batch.Put,
+          Aerospike.Batch.Delete,
+          Aerospike.Batch.Operate,
+          Aerospike.Batch.UDF,
           Aerospike.BatchResult
         ],
         Transactions: [

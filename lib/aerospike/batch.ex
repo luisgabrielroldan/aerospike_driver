@@ -30,35 +30,35 @@ defmodule Aerospike.Batch do
   alias Aerospike.Op
 
   defmodule Read do
-    @moduledoc false
+    @moduledoc "Batch read operation. Built by `Aerospike.Batch.read/2`."
     @enforce_keys [:key]
     defstruct [:key, :opts]
     @type t :: %__MODULE__{key: Key.t(), opts: keyword()}
   end
 
   defmodule Put do
-    @moduledoc false
+    @moduledoc "Batch put operation. Built by `Aerospike.Batch.put/3`."
     @enforce_keys [:key, :bins]
     defstruct [:key, :bins, :opts]
     @type t :: %__MODULE__{key: Key.t(), bins: map(), opts: keyword()}
   end
 
   defmodule Delete do
-    @moduledoc false
+    @moduledoc "Batch delete operation. Built by `Aerospike.Batch.delete/2`."
     @enforce_keys [:key]
     defstruct [:key, :opts]
     @type t :: %__MODULE__{key: Key.t(), opts: keyword()}
   end
 
   defmodule Operate do
-    @moduledoc false
+    @moduledoc "Batch multi-op operation. Built by `Aerospike.Batch.operate/3`."
     @enforce_keys [:key, :ops]
     defstruct [:key, :ops, :opts]
     @type t :: %__MODULE__{key: Key.t(), ops: list(Op.t()), opts: keyword()}
   end
 
   defmodule UDF do
-    @moduledoc false
+    @moduledoc "Batch UDF invocation. Built by `Aerospike.Batch.udf/5`."
     @enforce_keys [:key, :package, :function]
     defstruct [:key, :package, :function, :args, :opts]
 

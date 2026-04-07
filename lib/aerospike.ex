@@ -75,9 +75,8 @@ defmodule Aerospike do
   Starts the client supervision tree under a registered supervisor name.
 
   Returns `{:ok, pid}` on success. If no seed is reachable at startup, the
-  cluster retries on each tend cycle until a seed becomes available. Use
-  `Aerospike.Router` readiness checks (or poll the `:cluster_ready` ETS flag)
-  to detect when the cluster is operational.
+  cluster retries on each tend cycle until a seed becomes available. Poll the
+  `:cluster_ready` ETS flag to detect when the cluster is operational.
 
   ## Options
 
