@@ -246,10 +246,10 @@ defmodule Aerospike.BatchOps do
     :telemetry.span([:aerospike, :command], meta, fn ->
       case fun.() do
         {:ok, _} = ok ->
-          {ok, Map.put(%{result: :ok}, :batch_size, batch_size(keys_or_ops))}
+          {ok, Map.merge(meta, %{result: :ok, batch_size: batch_size(keys_or_ops)})}
 
         {:error, %Error{code: code}} = err ->
-          {err, %{result: {:error, code}, batch_size: batch_size(keys_or_ops)}}
+          {err, Map.merge(meta, %{result: {:error, code}, batch_size: batch_size(keys_or_ops)})}
       end
     end)
   end

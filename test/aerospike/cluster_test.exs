@@ -2,6 +2,7 @@ defmodule Aerospike.ClusterTest do
   use ExUnit.Case, async: false
 
   import Bitwise
+  import ExUnit.CaptureLog
 
   alias Aerospike.Cluster
   alias Aerospike.NodeSupervisor
@@ -78,15 +79,14 @@ defmodule Aerospike.ClusterTest do
       end)
     end
 
-    @tag :known_bug
-    test "missing peers are not removed during tend", %{name: name} do
-      peer = start_info_server("PEER_B", partition_generation: 1, partitions: [1])
+    test "tend removes peers no longer reported by peers-clear-std", %{name: name} do
+      peer = start_info_server("B_PEER", partition_generation: 1, partitions: [1])
       on_exit(fn -> stop_info_server(peer) end)
 
       seed =
         start_info_server(
-          "SEED_A",
-          peers: peers_payload(1, [{"PEER_B", "127.0.0.1", peer.port}]),
+          "A_SEED",
+          peers: peers_payload(1, [{"B_PEER", "127.0.0.1", peer.port}]),
           partitions: [0]
         )
 
@@ -94,14 +94,18 @@ defmodule Aerospike.ClusterTest do
 
       {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
       await_cluster_ready(name)
-      assert_await(fn -> match?([{"PEER_B", _}], :ets.lookup(Tables.nodes(name), "PEER_B")) end)
+      assert_await(fn -> match?([{"B_PEER", _}], :ets.lookup(Tables.nodes(name), "B_PEER")) end)
+      assert [{{"test", 1, 0}, "B_PEER"}] = :ets.lookup(Tables.partitions(name), {"test", 1, 0})
+      assert_tend_connection_present(name, "B_PEER")
 
       update_info_server(seed, peers: peers_payload(2, []))
       send_tend(name)
-      Process.sleep(100)
 
-      # Current behavior: peer rows/pools are never pruned once discovered.
-      assert match?([{"PEER_B", _}], :ets.lookup(Tables.nodes(name), "PEER_B"))
+      assert_await(fn ->
+        [] == :ets.lookup(Tables.nodes(name), "B_PEER") and
+          [] == :ets.lookup(Tables.partitions(name), {"test", 1, 0}) and
+          not tend_connection_present?(name, "B_PEER")
+      end)
     end
 
     test "unreachable seeds keep cluster not ready", %{name: name} do
@@ -116,17 +120,24 @@ defmodule Aerospike.ClusterTest do
         tend_interval: 50
       ]
 
-      {:ok, sup} = start_supervised({Supervisor, opts})
-      assert is_pid(sup)
-      assert is_pid(Process.whereis(NodeSupervisor.sup_name(name)))
+      log =
+        capture_log(fn ->
+          {:ok, sup} = start_supervised({Supervisor, opts})
+          assert is_pid(sup)
+          assert is_pid(Process.whereis(NodeSupervisor.sup_name(name)))
 
-      # Current behavior: supervisor starts, but cluster crashes/retries while seeds are unreachable.
-      refute match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
+          # Cluster stays alive but never becomes ready while seeds are unreachable.
+          cluster_pid = Process.whereis(Cluster.cluster_name(name))
+          assert is_pid(cluster_pid)
+          refute match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
 
-      assert_await(fn ->
-        cluster_pid = Process.whereis(Cluster.cluster_name(name))
-        cluster_pid == nil or not Process.alive?(cluster_pid)
-      end)
+          # Wait through several tend cycles; cluster remains alive and not-ready.
+          Process.sleep(200)
+          assert Process.alive?(cluster_pid)
+          refute match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
+        end)
+
+      assert log =~ "seed connection failed"
     end
   end
 
@@ -139,6 +150,19 @@ defmodule Aerospike.ClusterTest do
       recv_timeout: 1_000,
       tend_interval: 100
     ]
+  end
+
+  defp assert_tend_connection_present(name, node_name) do
+    assert tend_connection_present?(name, node_name)
+  end
+
+  defp tend_connection_present?(name, node_name) do
+    name
+    |> Cluster.cluster_name()
+    |> Process.whereis()
+    |> :sys.get_state()
+    |> Map.fetch!(:tend_conns)
+    |> Map.has_key?(node_name)
   end
 
   defp send_tend(name) do

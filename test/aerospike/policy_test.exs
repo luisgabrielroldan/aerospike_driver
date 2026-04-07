@@ -278,6 +278,60 @@ defmodule Aerospike.PolicyTest do
     end
   end
 
+  describe "wire-flag policy mappings" do
+    test "write gen_policy expect_gen_equal sets info2 generation bit", %{key: key} do
+      # info2_generation bit is 0x04.
+      msg = base_write(key)
+      applied = Policy.apply_write_policy(msg, generation: 11, gen_policy: :expect_gen_equal)
+      assert band(applied.info2, AsmMsg.info2_generation()) == AsmMsg.info2_generation()
+      assert applied.generation == 11
+    end
+
+    test "read header_only sets READ and NOBINDATA bits", %{key: key} do
+      # info1_read is 0x01 and info1_nobindata is 0x20.
+      msg = Policy.read_message_for_opts(key, header_only: true)
+      assert band(msg.info1, AsmMsg.info1_read()) == AsmMsg.info1_read()
+      assert band(msg.info1, AsmMsg.info1_nobindata()) == AsmMsg.info1_nobindata()
+    end
+
+    test "delete durable_delete sets info2 durable-delete bit", %{key: key} do
+      # info2_durable_delete bit is 0x10.
+      msg = AsmMsg.delete_command(key.namespace, key.set, key.digest)
+      applied = Policy.apply_delete_policy(msg, durable_delete: true)
+      assert band(applied.info2, AsmMsg.info2_durable_delete()) == AsmMsg.info2_durable_delete()
+    end
+
+    test "operate write path sets info3 update-only bit", %{key: key} do
+      # info3_update_only bit is 0x08.
+      msg = base_write(key)
+
+      applied =
+        Policy.apply_operate_policy(msg, [exists: :update_only, timeout: 777, ttl: 8], true)
+
+      assert band(applied.info3, AsmMsg.info3_update_only()) == AsmMsg.info3_update_only()
+      assert applied.timeout == 777
+      assert applied.expiration == 8
+    end
+
+    test "operate read-only path ignores write-only generation flags", %{key: key} do
+      # info2_generation bit is 0x04; read-only operate should not set it.
+      msg = AsmMsg.read_command(key.namespace, key.set, key.digest)
+
+      applied =
+        Policy.apply_operate_policy(msg, [generation: 9, gen_policy: :expect_gen_equal], false)
+
+      assert band(applied.info2, AsmMsg.info2_generation()) == 0
+      assert applied.generation == 0
+    end
+
+    test "batch outer timeout maps option into AsmMsg timeout", %{key: key} do
+      # timeout is a header field on the outer batch AsmMsg (int32 on wire).
+      msg = AsmMsg.read_command(key.namespace, key.set, key.digest)
+      applied = Policy.apply_batch_outer_timeout(msg, timeout: 5_432)
+      assert applied.timeout == 5_432
+    end
+  end
+
   describe "validation_error_message/1" do
     test "formats NimbleOptions error" do
       {:error, e} = Policy.validate_write(bad: 1)

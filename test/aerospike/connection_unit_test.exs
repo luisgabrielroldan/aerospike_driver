@@ -2,6 +2,7 @@ defmodule Aerospike.ConnectionUnitTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Connection
+  alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Message
   alias Aerospike.Test.MockTcpServer
@@ -391,6 +392,113 @@ defmodule Aerospike.ConnectionUnitTest do
       {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
       assert {:error, :short_body} = Connection.login(conn, user: "u", credential: "c")
       Connection.close(conn)
+      Task.await(server)
+    end
+  end
+
+  describe "recv_stream edge cases" do
+    test "request_stream skips zero-length frames and keeps reading" do
+      {:ok, lsock, port} = MockTcpServer.start()
+
+      terminal_body =
+        AsmMsg.encode(%AsmMsg{
+          info3: AsmMsg.info3_last(),
+          result_code: 0,
+          fields: [],
+          operations: []
+        })
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            {:ok, _, _} = MockTcpServer.recv_message(client)
+            :ok = :gen_tcp.send(client, Message.encode_header(2, Message.type_as_msg(), 0))
+            :ok = :gen_tcp.send(client, Message.encode(2, Message.type_as_msg(), terminal_body))
+          end)
+        end)
+
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      request = Message.encode(Message.proto_version(), Message.type_info(), <<0>>)
+
+      assert {:ok, conn2, body} = Connection.request_stream(conn, request)
+      assert body == terminal_body
+      Connection.close(conn2)
+      Task.await(server)
+    end
+
+    test "request_stream handles multiple frames sent in one tcp write" do
+      {:ok, lsock, port} = MockTcpServer.start()
+      body1 = AsmMsg.encode(%AsmMsg{result_code: 0, fields: [], operations: []})
+
+      body2 =
+        AsmMsg.encode(%AsmMsg{
+          info3: AsmMsg.info3_last(),
+          result_code: 0,
+          fields: [],
+          operations: []
+        })
+
+      frame1 = Message.encode(2, Message.type_as_msg(), body1)
+      frame2 = Message.encode(2, Message.type_as_msg(), body2)
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            {:ok, _, _} = MockTcpServer.recv_message(client)
+            :ok = :gen_tcp.send(client, frame1 <> frame2)
+          end)
+        end)
+
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      request = Message.encode(Message.proto_version(), Message.type_info(), <<1>>)
+
+      assert {:ok, conn2, combined} = Connection.request_stream(conn, request)
+      assert combined == body1 <> body2
+      Connection.close(conn2)
+      Task.await(server)
+    end
+
+    test "request_stream returns closed when server closes mid-frame" do
+      {:ok, lsock, port} = MockTcpServer.start()
+      partial = :binary.copy(<<0>>, 16)
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            {:ok, _, _} = MockTcpServer.recv_message(client)
+            :ok = :gen_tcp.send(client, Message.encode_header(2, Message.type_as_msg(), 100))
+            :ok = :gen_tcp.send(client, partial)
+          end)
+        end)
+
+      {:ok, conn} = Connection.connect(host: "127.0.0.1", port: port, timeout: 2_000)
+      request = Message.encode(Message.proto_version(), Message.type_info(), <<2>>)
+
+      assert {:error, :closed} = Connection.request_stream(conn, request)
+      Connection.close(conn)
+      Task.await(server)
+    end
+
+    test "request_stream reads a 1MB frame body without crashing" do
+      {:ok, lsock, port} = MockTcpServer.start()
+      large_body = :binary.copy(<<170>>, 1_048_576)
+
+      server =
+        Task.async(fn ->
+          MockTcpServer.accept_once(lsock, fn client ->
+            {:ok, _, _} = MockTcpServer.recv_message(client)
+            :ok = :gen_tcp.send(client, Message.encode(2, Message.type_as_msg(), large_body))
+          end)
+        end)
+
+      {:ok, conn} =
+        Connection.connect(host: "127.0.0.1", port: port, timeout: 5_000, recv_timeout: 5_000)
+
+      request = Message.encode(Message.proto_version(), Message.type_info(), <<3>>)
+
+      assert {:ok, conn2, body} = Connection.request_stream(conn, request)
+      assert body == large_body
+      Connection.close(conn2)
       Task.await(server)
     end
   end

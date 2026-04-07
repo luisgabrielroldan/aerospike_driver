@@ -14,6 +14,8 @@ defmodule Aerospike.Cluster do
 
   use GenServer
 
+  require Logger
+
   alias Aerospike.Connection
   alias Aerospike.NodeSupervisor
   alias Aerospike.Protocol.PartitionMap
@@ -74,7 +76,10 @@ defmodule Aerospike.Cluster do
       peers_generation: nil,
       # Long-lived info-only connections kept open between tend cycles, keyed by node name.
       tend_conns: %{},
-      node_supervisor: nil
+      node_supervisor: nil,
+      # Set to true after the first successful initial tend. While false, the
+      # tend timer retries seed bootstrap instead of running periodic maintenance.
+      bootstrapped: false
     }
 
     {:ok, state, {:continue, :initial_tend}}
@@ -87,9 +92,9 @@ defmodule Aerospike.Cluster do
   end
 
   # Initial tend runs synchronously in handle_continue so the cluster is ready
-  # before the first user request. Failure here stops the GenServer (and thus
-  # the whole supervision subtree), which is intentional — no point running
-  # without at least one reachable seed.
+  # before the first user request. If seeds are unreachable, the GenServer stays
+  # alive and retries on the next tend cycle rather than crash-looping through
+  # the supervisor.
   @impl true
   def handle_continue(:initial_tend, state) do
     sup = Process.whereis(NodeSupervisor.sup_name(state.name))
@@ -102,11 +107,31 @@ defmodule Aerospike.Cluster do
       case do_initial_tend(state) do
         {:ok, new_state} ->
           _ = schedule_tend(new_state)
-          {:noreply, new_state}
+          {:noreply, %{new_state | bootstrapped: true}}
 
         {:error, reason} ->
-          {:stop, reason, state}
+          Logger.warning(
+            "Cluster #{state.name}: seed connection failed (#{inspect(reason)}), retrying"
+          )
+
+          _ = schedule_tend(state)
+          {:noreply, state}
       end
+    end
+  end
+
+  # Not yet bootstrapped — retry seed connection on each tend tick.
+  @impl true
+  def handle_info(:tend, %{bootstrapped: false} = state) do
+    case do_initial_tend(state) do
+      {:ok, new_state} ->
+        Logger.info("Cluster #{state.name}: seed connected, cluster ready")
+        _ = schedule_tend(new_state)
+        {:noreply, %{new_state | bootstrapped: true}}
+
+      {:error, _reason} ->
+        _ = schedule_tend(state)
+        {:noreply, state}
     end
   end
 
@@ -298,9 +323,47 @@ defmodule Aerospike.Cluster do
          {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw),
          true <- gen != state.peers_generation do
       add_peer_nodes(state, peers, node_name)
-      %{state | peers_generation: gen, tend_conns: Map.put(state.tend_conns, node_name, conn)}
+
+      state
+      |> prune_departed_peers(peers, node_name)
+      |> Map.put(:peers_generation, gen)
+      |> Map.update!(:tend_conns, &Map.put(&1, node_name, conn))
     else
       _ -> state
+    end
+  end
+
+  defp prune_departed_peers(state, peers, reporting_node_name) do
+    current_peer_names = MapSet.new(Enum.map(peers, & &1.node_name))
+
+    Tables.nodes(state.name)
+    |> :ets.tab2list()
+    |> Enum.map(fn {node_name, _row} -> node_name end)
+    |> Enum.reduce(state, fn
+      ^reporting_node_name, st ->
+        st
+
+      node_name, st ->
+        if MapSet.member?(current_peer_names, node_name) do
+          st
+        else
+          prune_departed_peer(st, node_name)
+        end
+    end)
+  end
+
+  defp prune_departed_peer(state, node_name) do
+    _ = NodeSupervisor.stop_pool(state.node_supervisor, node_name)
+    :ets.delete(Tables.nodes(state.name), node_name)
+    _ = :ets.select_delete(Tables.partitions(state.name), [{{:"$1", node_name}, [], [true]}])
+
+    case Map.pop(state.tend_conns, node_name) do
+      {nil, tend_conns} ->
+        %{state | tend_conns: tend_conns}
+
+      {conn, tend_conns} ->
+        _ = Connection.close(conn)
+        %{state | tend_conns: tend_conns}
     end
   end
 

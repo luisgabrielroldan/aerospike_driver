@@ -183,11 +183,21 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     assert {:error, %{code: :parse_error}} = ScanResponse.parse_frame(bin, @namespace, @set)
   end
 
-  test "parse: key_not_found RC terminates stream (no LAST needed)" do
+  test "parse: key_not_found RC is skipped (not a stream terminator)" do
+    terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
+    body = AsmMsg.encode(terminal) <> AsmMsg.encode(last_msg())
+
+    assert {:ok, [], []} = ScanResponse.parse(body, @namespace, @set)
+  end
+
+  test "parse: key_not_found RC without LAST is incomplete" do
     terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
     body = AsmMsg.encode(terminal)
 
-    assert {:ok, [], []} = ScanResponse.parse(body, @namespace, @set)
+    assert {:error, %{code: :parse_error, message: msg}} =
+             ScanResponse.parse(body, @namespace, @set)
+
+    assert msg =~ "incomplete"
   end
 
   describe "count_records/1" do
@@ -252,11 +262,21 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       assert {:error, %{code: :timeout}} = ScanResponse.count_records(body)
     end
 
-    test "key_not_found RC terminates stream (no LAST needed)" do
+    test "key_not_found RC is skipped (not a stream terminator)" do
+      terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
+      body = AsmMsg.encode(terminal) <> AsmMsg.encode(last_msg())
+
+      assert {:ok, 0} = ScanResponse.count_records(body)
+    end
+
+    test "key_not_found RC without LAST is incomplete" do
       terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
       body = AsmMsg.encode(terminal)
 
-      assert {:ok, 0} = ScanResponse.count_records(body)
+      assert {:error, %{code: :parse_error, message: msg}} =
+               ScanResponse.count_records(body)
+
+      assert msg =~ "incomplete"
     end
 
     test "agrees with parse record count" do
@@ -400,16 +420,16 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
-    test "returns true for key_not_found frame (stream terminator)" do
+    test "returns false for key_not_found frame (per-record skip, not terminal)" do
       msg = %AsmMsg{result_code: 2, fields: [], operations: []}
       body = AsmMsg.encode(msg)
-      assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
+      assert ScanResponse.lazy_stream_chunk_terminal?(body) == false
     end
 
-    test "returns true for filtered_out frame (stream terminator)" do
+    test "returns false for filtered_out frame (per-record skip, not terminal)" do
       msg = %AsmMsg{result_code: 27, fields: [], operations: []}
       body = AsmMsg.encode(msg)
-      assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
+      assert ScanResponse.lazy_stream_chunk_terminal?(body) == false
     end
 
     test "returns true on short/invalid data" do

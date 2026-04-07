@@ -11,6 +11,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.BatchEncoder
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.MessagePack
 
   # Decode the outer wire message, then extract the BATCH_INDEX field data.
   # Returns {outer_msg, batch_body} where batch_body is the raw batch index payload.
@@ -19,6 +20,28 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
     {:ok, msg} = AsmMsg.decode(body)
     [%Field{type: 41, data: batch_body}] = Enum.filter(msg.fields, &(&1.type == 41))
     {msg, batch_body}
+  end
+
+  defp single_operate_entry_inner(batch_body) do
+    <<_key_count::32-big, _flags::8, _idx::32-big, _digest::binary-20, inner::binary>> =
+      batch_body
+
+    inner
+  end
+
+  defp decode_batch_inner_fields(inner) do
+    <<_entry_flags::8, _r::8, _w::8, _i::8, _gen::16-big, _exp::32-big, field_count::16-big,
+      op_count::16-big, rest::binary>> = inner
+
+    {fields, remaining} = decode_n_fields(rest, field_count, [])
+    {field_count, op_count, fields, remaining}
+  end
+
+  defp decode_n_fields(rest, 0, acc), do: {Enum.reverse(acc), rest}
+
+  defp decode_n_fields(rest, n, acc) when n > 0 do
+    {:ok, field, rest_after_field} = Field.decode(rest)
+    decode_n_fields(rest_after_field, n - 1, [field | acc])
   end
 
   setup do
@@ -317,6 +340,55 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
       # bytes 0-3: key_count = 0
       <<key_count::32-big, _rest::binary>> = batch_body
       assert key_count == 0
+    end
+
+    test "batch UDF entry has ns, set, and 3 UDF fields (no UDF_OP) with zero ops", %{
+      key: key
+    } do
+      wire =
+        BatchEncoder.encode_batch_operate(
+          [{0, Batch.udf(key, "pkg", "fn", ["x"])}],
+          []
+        )
+
+      {_msg, batch_body} = decode_batch_body(wire)
+      inner = single_operate_entry_inner(batch_body)
+      {field_count, op_count, fields, remaining} = decode_batch_inner_fields(inner)
+
+      assert op_count == 0
+      assert remaining == <<>>
+      assert field_count == 5
+
+      batch_udf_types = Enum.map(fields, & &1.type)
+
+      assert batch_udf_types == [
+               Field.type_namespace(),
+               Field.type_table(),
+               Field.type_udf_package_name(),
+               Field.type_udf_function(),
+               Field.type_udf_arglist()
+             ]
+
+      refute Enum.member?(batch_udf_types, Field.type_udf_op())
+    end
+
+    test "batch UDF arglist uses particle-string encoding matching apply_udf semantics", %{
+      key: key
+    } do
+      wire =
+        BatchEncoder.encode_batch_operate(
+          [{0, Batch.udf(key, "pkg", "fn", ["x"])}],
+          []
+        )
+
+      {_msg, batch_body} = decode_batch_body(wire)
+      inner = single_operate_entry_inner(batch_body)
+      {_field_count, _op_count, fields, _remaining} = decode_batch_inner_fields(inner)
+      arglist_field = Enum.find(fields, &(&1.type == Field.type_udf_arglist()))
+
+      refute is_nil(arglist_field)
+      assert arglist_field.data == MessagePack.pack!([{:particle_string, "x"}])
+      assert arglist_field.data != MessagePack.pack!(["x"])
     end
   end
 end

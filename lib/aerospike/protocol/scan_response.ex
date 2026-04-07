@@ -259,19 +259,28 @@ defmodule Aerospike.Protocol.ScanResponse do
   # Non-zero RCs that signal end-of-stream (matching Go client behavior).
   # The server uses these instead of (or in addition to) INFO3_LAST in some
   # modes — notably SC-namespace query responses.
+  #
+  # Per-record codes like :key_not_found and :filtered_out are NOT terminal —
+  # they appear in batch/scan/query responses for individual records that are
+  # missing or filtered. The Go client treats them as skip-and-continue
+  # (multi_command.go: parseResult).
   defp stream_terminal_rc?(rc_int) do
     case ResultCode.from_integer(rc_int) do
       {:ok, :ok} -> false
       {:ok, :partition_unavailable} -> false
+      {:ok, :key_not_found} -> false
+      {:ok, :filtered_out} -> false
       _ -> true
     end
   end
 
-  # PARTITION_UNAVAILABLE is the only non-zero RC that the Go client allows
-  # mid-stream without terminating. Skip the frame and continue reading.
+  # Non-zero RCs that appear mid-stream as per-record statuses. The frame
+  # carries no record data — skip it and continue reading the next frame.
   defp partition_skip_rc?(rc_int) do
     case ResultCode.from_integer(rc_int) do
       {:ok, :partition_unavailable} -> true
+      {:ok, :key_not_found} -> true
+      {:ok, :filtered_out} -> true
       _ -> false
     end
   end
@@ -499,6 +508,8 @@ defmodule Aerospike.Protocol.ScanResponse do
     case ResultCode.from_integer(meta.rc) do
       {:ok, :ok} -> false
       {:ok, :partition_unavailable} -> false
+      {:ok, :key_not_found} -> false
+      {:ok, :filtered_out} -> false
       _ -> true
     end
   end

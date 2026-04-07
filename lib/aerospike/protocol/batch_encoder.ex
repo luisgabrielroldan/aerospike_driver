@@ -381,11 +381,24 @@ defmodule Aerospike.Protocol.BatchEncoder do
   end
 
   defp udf_extra_fields(package, function, args) do
-    arg_body = MessagePack.pack!(args)
+    arg_body = args |> Enum.map(&pack_udf_arg/1) |> MessagePack.pack!()
 
     Field.encode(%Field{type: Field.type_udf_package_name(), data: package}) <>
       Field.encode(%Field{type: Field.type_udf_function(), data: function}) <>
       Field.encode(%Field{type: Field.type_udf_arglist(), data: arg_body})
+  end
+
+  defp pack_udf_arg(s) when is_binary(s), do: {:particle_string, s}
+  defp pack_udf_arg({:bytes, b}) when is_binary(b), do: {:bytes, b}
+  defp pack_udf_arg(nil), do: nil
+  defp pack_udf_arg(true), do: true
+  defp pack_udf_arg(false), do: false
+  defp pack_udf_arg(n) when is_integer(n), do: n
+  defp pack_udf_arg(f) when is_float(f), do: f
+  defp pack_udf_arg(list) when is_list(list), do: Enum.map(list, &pack_udf_arg/1)
+
+  defp pack_udf_arg(%{} = map) do
+    Map.new(map, fn {k, v} -> {pack_udf_arg(k), pack_udf_arg(v)} end)
   end
 
   defp batch_flags_byte(opts) do

@@ -74,7 +74,10 @@ defmodule Aerospike do
   @doc """
   Starts the client supervision tree under a registered supervisor name.
 
-  Returns `{:ok, pid}` on success. Fails fast if no seed host is reachable.
+  Returns `{:ok, pid}` on success. If no seed is reachable at startup, the
+  cluster retries on each tend cycle until a seed becomes available. Use
+  `Aerospike.Router` readiness checks (or poll the `:cluster_ready` ETS flag)
+  to detect when the cluster is operational.
 
   ## Options
 

@@ -2,12 +2,18 @@ defmodule Aerospike.CRUDTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.CRUD
+  alias Aerospike.Error
   alias Aerospike.Exp
   alias Aerospike.Key
+  alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.Response
+  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
+  alias Aerospike.Txn
+  alias Aerospike.TxnOps
 
   setup do
     key = Key.new("test", "users", "wire-test-key")
@@ -116,6 +122,77 @@ defmodule Aerospike.CRUDTest do
 
       filter_fields = Enum.filter(decoded.fields, &(&1.type == Field.type_filter_exp()))
       assert filter_fields == []
+    end
+  end
+
+  describe "error paths" do
+    test "write response generation error is surfaced as Error struct" do
+      msg = %AsmMsg{result_code: 3}
+      assert {:error, %Error{code: :generation_error}} = Response.parse_write_response(msg)
+    end
+
+    test "invalid write policy options are rejected by NimbleOptions" do
+      assert {:error, %NimbleOptions.ValidationError{}} = Policy.validate_write(unknown_opt: true)
+    end
+
+    test "nil key namespace is rejected before building wire message" do
+      assert_raise ArgumentError, fn ->
+        Key.new(nil, "users", "k1")
+      end
+    end
+
+    test "transaction-aware path adds MRT_ID field to message", %{key: key} do
+      conn = unique_conn_name()
+      txn = Txn.new()
+      create_txn_tracking_table(conn)
+      on_exit(fn -> maybe_delete_txn_tracking_table(conn) end)
+      TxnOps.init_tracking(conn, txn)
+
+      base_msg = %AsmMsg{
+        fields: [Field.namespace(key.namespace), Field.set(key.set), Field.digest(key.digest)]
+      }
+
+      applied = CRUD.maybe_add_mrt_fields(base_msg, conn, key, [txn: txn], true)
+      mrt_ids = Enum.filter(applied.fields, &(&1.type == Field.type_mrt_id()))
+
+      assert length(mrt_ids) == 1
+      assert [%Field{data: <<_::64-little-signed>>}] = mrt_ids
+    end
+
+    test "timeout/deadline field is added on writes, not reads", %{key: key} do
+      conn = unique_conn_name()
+      txn = Txn.new()
+      create_txn_tracking_table(conn)
+      on_exit(fn -> maybe_delete_txn_tracking_table(conn) end)
+      TxnOps.init_tracking(conn, txn)
+      TxnOps.set_deadline(conn, txn, 500)
+
+      base_msg = %AsmMsg{
+        fields: [Field.namespace(key.namespace), Field.set(key.set), Field.digest(key.digest)]
+      }
+
+      write_msg = CRUD.maybe_add_mrt_fields(base_msg, conn, key, [txn: txn], true)
+      read_msg = CRUD.maybe_add_mrt_fields(base_msg, conn, key, [txn: txn], false)
+
+      write_deadlines = Enum.filter(write_msg.fields, &(&1.type == Field.type_mrt_deadline()))
+      read_deadlines = Enum.filter(read_msg.fields, &(&1.type == Field.type_mrt_deadline()))
+
+      assert [%Field{data: <<500::32-little-signed>>}] = write_deadlines
+      assert read_deadlines == []
+    end
+  end
+
+  defp unique_conn_name do
+    :"crud_test_#{System.unique_integer([:positive, :monotonic])}"
+  end
+
+  defp create_txn_tracking_table(conn) do
+    :ets.new(Tables.txn_tracking(conn), [:named_table, :set, :public])
+  end
+
+  defp maybe_delete_txn_tracking_table(conn) do
+    if :ets.whereis(Tables.txn_tracking(conn)) != :undefined do
+      :ets.delete(Tables.txn_tracking(conn))
     end
   end
 end

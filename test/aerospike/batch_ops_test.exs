@@ -136,7 +136,7 @@ defmodule Aerospike.BatchOpsTest do
       :telemetry.attach_many(
         handler_id,
         events,
-        fn event, _measurements, meta, {pid, r} -> send(pid, {r, event, meta}) end,
+        &__MODULE__.forward_telemetry/4,
         {self(), ref}
       )
 
@@ -146,12 +146,15 @@ defmodule Aerospike.BatchOpsTest do
 
       assert_receive {^ref, [:aerospike, :command, :start], %{command: :batch_get}}
 
-      # telemetry 1.4.1 span/3 passes only the span function's returned map to the stop event
-      # (plus telemetry_span_context). It does NOT merge start_metadata in (see telemetry.erl:365).
-      # As a result, the stop event is missing command/conn/namespace/set, which limits handler
-      # filtering. Fix: return Map.merge(meta, %{result: ...}) from with_telemetry instead of
-      # a fresh map — but that is a lib change outside T2 scope.
-      assert_receive {^ref, [:aerospike, :command, :stop], %{result: :ok, batch_size: 0}}
+      assert_receive {^ref, [:aerospike, :command, :stop],
+                      %{
+                        command: :batch_get,
+                        conn: ^conn,
+                        namespace: "",
+                        set: "",
+                        result: :ok,
+                        batch_size: 0
+                      }}
     end
   end
 
@@ -282,5 +285,10 @@ defmodule Aerospike.BatchOpsTest do
                 %BatchResult{status: :error, error: %Error{code: :no_response}}
               ]} = BatchOps.batch_operate(conn, [op0, op1], [])
     end
+  end
+
+  @doc false
+  def forward_telemetry(event, _measurements, meta, {pid, ref}) do
+    send(pid, {ref, event, meta})
   end
 end
