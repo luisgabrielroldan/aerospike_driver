@@ -45,6 +45,37 @@ defmodule Aerospike.BatchTest do
     end
   end
 
+  describe "tuple key support" do
+    test "read/2 accepts tuple key" do
+      assert %Batch.Read{key: %Key{}} = Batch.read({"ns", "set", "uk"})
+    end
+
+    test "put/3 accepts tuple key" do
+      assert %Batch.Put{key: %Key{}, bins: %{"a" => 1}} =
+               Batch.put({"ns", "set", "uk"}, %{"a" => 1})
+    end
+
+    test "delete/2 accepts tuple key with integer user key" do
+      assert %Batch.Delete{key: %Key{}} = Batch.delete({"ns", "set", 42})
+    end
+
+    test "operate/3 accepts tuple key" do
+      op = Op.get("x")
+      assert %Batch.Operate{key: %Key{}, ops: [^op]} = Batch.operate({"ns", "set", "uk"}, [op])
+    end
+
+    test "udf/5 accepts tuple key" do
+      assert %Batch.UDF{key: %Key{}, package: "pkg", function: "fn"} =
+               Batch.udf({"ns", "set", "uk"}, "pkg", "fn")
+    end
+
+    test "invalid tuple key raises ArgumentError" do
+      assert_raise ArgumentError, fn ->
+        Batch.read({123, "set", "uk"})
+      end
+    end
+  end
+
   describe "BatchResult" do
     test "ok/0" do
       r = BatchResult.ok()

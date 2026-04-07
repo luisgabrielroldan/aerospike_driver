@@ -23,7 +23,22 @@ defmodule Aerospike do
       {:ok, rec2} = Aerospike.operate(:aero, key, [put("status", "ok"), get("name")])
       rec2.bins["name"] == "Ada"
 
+      # Tuple key form (namespace, set, user_key)
+      :ok = Aerospike.put!(:aero, {"test", "users", "user:2"}, %{"name" => "Grace"})
+      {:ok, rec3} = Aerospike.get(:aero, {"test", "users", "user:2"})
+      rec3.bins["name"] == "Grace"
+
       Aerospike.close(:aero)
+
+  ## Key Input Forms
+
+  Single-record APIs accept keys in either form:
+
+  * `%Aerospike.Key{}`
+  * `{namespace, set, user_key}` tuple
+
+  Tuple keys are a convenience for user-key flows. For digest-only workflows,
+  call `key_digest/3` explicitly.
 
   """
 
@@ -141,6 +156,8 @@ defmodule Aerospike do
   @doc """
   Writes bins for the given key.
 
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}` tuple keys.
+
   Per-call `opts` are merged over connection `defaults` (`Keyword.merge/2`).
 
   ## Options
@@ -148,12 +165,22 @@ defmodule Aerospike do
   Write policy options: `:ttl`, `:timeout`, `:generation`, `:gen_policy`, `:exists`,
   `:send_key`, `:durable_delete`, `:pool_checkout_timeout`, `:replica`.
 
+  ## Example
+
+      key = Aerospike.key("test", "users", "user:1")
+      :ok = Aerospike.put(:aero, key, %{"name" => "Ada"})
+
+      :ok = Aerospike.put(:aero, {"test", "users", "user:2"}, %{"name" => "Grace"})
+
   """
-  @spec put(conn, Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def put(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
-    case Policy.validate_write(opts) do
-      {:ok, call_opts} ->
-        CRUD.put(conn, key, bins, call_opts)
+  @spec put(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
+  def put(conn, key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_write(opts) do
+      CRUD.put(conn, key, bins, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -164,8 +191,8 @@ defmodule Aerospike do
   @doc """
   Same as `put/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec put!(conn, Key.t(), map(), keyword()) :: :ok
-  def put!(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec put!(conn, Key.key_input(), map(), keyword()) :: :ok
+  def put!(conn, key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
     case put(conn, key, bins, opts) do
       :ok -> :ok
       {:error, %Error{} = e} -> raise e
@@ -175,15 +202,20 @@ defmodule Aerospike do
   @doc """
   Reads a record for the key.
 
+  Accepts tuple keys; see `put/4`.
+
   ## Options
 
   Read policy: `:timeout`, `:bins`, `:header_only`, `:pool_checkout_timeout`, `:replica`.
   """
-  @spec get(conn, Key.t(), keyword()) :: {:ok, Aerospike.Record.t()} | {:error, Error.t()}
-  def get(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    case Policy.validate_read(opts) do
-      {:ok, call_opts} ->
-        CRUD.get(conn, key, call_opts)
+  @spec get(conn, Key.key_input(), keyword()) :: {:ok, Aerospike.Record.t()} | {:error, Error.t()}
+  def get(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_read(opts) do
+      CRUD.get(conn, key, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -194,8 +226,8 @@ defmodule Aerospike do
   @doc """
   Same as `get/3` but returns the record or raises `Aerospike.Error`.
   """
-  @spec get!(conn, Key.t(), keyword()) :: Aerospike.Record.t()
-  def get!(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec get!(conn, Key.key_input(), keyword()) :: Aerospike.Record.t()
+  def get!(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
     case get(conn, key, opts) do
       {:ok, record} -> record
       {:error, %Error{} = e} -> raise e
@@ -205,15 +237,20 @@ defmodule Aerospike do
   @doc """
   Deletes the record. Returns `{:ok, true}` if a record was removed, `{:ok, false}` if absent.
 
+  Accepts tuple keys; see `put/4`.
+
   ## Options
 
   `:timeout`, `:durable_delete`, `:pool_checkout_timeout`, `:replica`.
   """
-  @spec delete(conn, Key.t(), keyword()) :: {:ok, boolean()} | {:error, Error.t()}
-  def delete(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    case Policy.validate_delete(opts) do
-      {:ok, call_opts} ->
-        CRUD.delete(conn, key, call_opts)
+  @spec delete(conn, Key.key_input(), keyword()) :: {:ok, boolean()} | {:error, Error.t()}
+  def delete(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_delete(opts) do
+      CRUD.delete(conn, key, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -224,8 +261,8 @@ defmodule Aerospike do
   @doc """
   Same as `delete/3` but returns the boolean or raises `Aerospike.Error`.
   """
-  @spec delete!(conn, Key.t(), keyword()) :: boolean()
-  def delete!(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec delete!(conn, Key.key_input(), keyword()) :: boolean()
+  def delete!(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
     case delete(conn, key, opts) do
       {:ok, deleted?} -> deleted?
       {:error, %Error{} = e} -> raise e
@@ -235,15 +272,20 @@ defmodule Aerospike do
   @doc """
   Returns whether a record exists for the key.
 
+  Accepts tuple keys; see `put/4`.
+
   ## Options
 
   `:timeout`, `:pool_checkout_timeout`, `:replica`.
   """
-  @spec exists(conn, Key.t(), keyword()) :: {:ok, boolean()} | {:error, Error.t()}
-  def exists(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    case Policy.validate_exists(opts) do
-      {:ok, call_opts} ->
-        CRUD.exists(conn, key, call_opts)
+  @spec exists(conn, Key.key_input(), keyword()) :: {:ok, boolean()} | {:error, Error.t()}
+  def exists(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_exists(opts) do
+      CRUD.exists(conn, key, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -254,8 +296,8 @@ defmodule Aerospike do
   @doc """
   Same as `exists/3` but returns the boolean or raises `Aerospike.Error`.
   """
-  @spec exists!(conn, Key.t(), keyword()) :: boolean()
-  def exists!(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec exists!(conn, Key.key_input(), keyword()) :: boolean()
+  def exists!(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
     case exists(conn, key, opts) do
       {:ok, exists?} -> exists?
       {:error, %Error{} = e} -> raise e
@@ -265,15 +307,20 @@ defmodule Aerospike do
   @doc """
   Refreshes TTL without changing bins.
 
+  Accepts tuple keys; see `put/4`.
+
   ## Options
 
   `:ttl`, `:timeout`, `:pool_checkout_timeout`, `:replica`.
   """
-  @spec touch(conn, Key.t(), keyword()) :: :ok | {:error, Error.t()}
-  def touch(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
-    case Policy.validate_touch(opts) do
-      {:ok, call_opts} ->
-        CRUD.touch(conn, key, call_opts)
+  @spec touch(conn, Key.key_input(), keyword()) :: :ok | {:error, Error.t()}
+  def touch(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_touch(opts) do
+      CRUD.touch(conn, key, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -284,8 +331,8 @@ defmodule Aerospike do
   @doc """
   Same as `touch/3` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec touch!(conn, Key.t(), keyword()) :: :ok
-  def touch!(conn, %Key{} = key, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec touch!(conn, Key.key_input(), keyword()) :: :ok
+  def touch!(conn, key, opts \\ []) when is_atom(conn) and is_list(opts) do
     case touch(conn, key, opts) do
       :ok -> :ok
       {:error, %Error{} = e} -> raise e
@@ -295,6 +342,8 @@ defmodule Aerospike do
   @doc """
   Runs multiple read/write operations on one record in a single atomic round-trip.
 
+  Accepts tuple keys; see `put/4`.
+
   Pass a list of operations from `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, etc.
 
   ## Options
@@ -303,13 +352,16 @@ defmodule Aerospike do
   `:exists`, `:send_key`, `:durable_delete`, `:respond_per_each_op`, `:pool_checkout_timeout`,
   `:replica`.
   """
-  @spec operate(conn, Key.t(), [Aerospike.Op.t()], keyword()) ::
+  @spec operate(conn, Key.key_input(), [Aerospike.Op.t()], keyword()) ::
           {:ok, Aerospike.Record.t()} | {:error, Error.t()}
-  def operate(conn, %Key{} = key, ops, opts \\ [])
+  def operate(conn, key, ops, opts \\ [])
       when is_atom(conn) and is_list(ops) and is_list(opts) do
-    case Policy.validate_operate(opts) do
-      {:ok, call_opts} ->
-        CRUD.operate(conn, key, ops, call_opts)
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_operate(opts) do
+      CRUD.operate(conn, key, ops, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -320,8 +372,8 @@ defmodule Aerospike do
   @doc """
   Same as `operate/4` but returns `%Aerospike.Record{}` or raises `Aerospike.Error`.
   """
-  @spec operate!(conn, Key.t(), [Aerospike.Op.t()], keyword()) :: Aerospike.Record.t()
-  def operate!(conn, %Key{} = key, ops, opts \\ [])
+  @spec operate!(conn, Key.key_input(), [Aerospike.Op.t()], keyword()) :: Aerospike.Record.t()
+  def operate!(conn, key, ops, opts \\ [])
       when is_atom(conn) and is_list(ops) and is_list(opts) do
     case operate(conn, key, ops, opts) do
       {:ok, record} -> record
@@ -331,6 +383,8 @@ defmodule Aerospike do
 
   @doc """
   Atomically adds integer deltas to bins.
+
+  Accepts tuple keys; see `put/4`.
 
   If the record does not exist, Aerospike implicitly creates it — bins start at the
   added value. This makes `add` the idiomatic way to implement counters.
@@ -345,12 +399,15 @@ defmodule Aerospike do
       :ok = Aerospike.add(:aero, key, %{"login_count" => 1, "bytes_used" => 256})
 
   """
-  @spec add(conn, Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def add(conn, %Key{} = key, bins, opts \\ [])
+  @spec add(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
+  def add(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
-    case Policy.validate_write(opts) do
-      {:ok, call_opts} ->
-        CRUD.add(conn, key, bins, call_opts)
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_write(opts) do
+      CRUD.add(conn, key, bins, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -361,8 +418,8 @@ defmodule Aerospike do
   @doc """
   Same as `add/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec add!(conn, Key.t(), map(), keyword()) :: :ok
-  def add!(conn, %Key{} = key, bins, opts \\ [])
+  @spec add!(conn, Key.key_input(), map(), keyword()) :: :ok
+  def add!(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     case add(conn, key, bins, opts) do
       :ok -> :ok
@@ -372,6 +429,8 @@ defmodule Aerospike do
 
   @doc """
   Atomically appends string suffixes to bins.
+
+  Accepts tuple keys; see `put/4`.
 
   If the record does not exist, Aerospike implicitly creates it — the bin value
   becomes the appended string (not appended to an empty string).
@@ -386,12 +445,15 @@ defmodule Aerospike do
       :ok = Aerospike.append(:aero, key, %{"greeting" => " world"})
 
   """
-  @spec append(conn, Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def append(conn, %Key{} = key, bins, opts \\ [])
+  @spec append(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
+  def append(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
-    case Policy.validate_write(opts) do
-      {:ok, call_opts} ->
-        CRUD.append(conn, key, bins, call_opts)
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_write(opts) do
+      CRUD.append(conn, key, bins, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -402,8 +464,8 @@ defmodule Aerospike do
   @doc """
   Same as `append/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec append!(conn, Key.t(), map(), keyword()) :: :ok
-  def append!(conn, %Key{} = key, bins, opts \\ [])
+  @spec append!(conn, Key.key_input(), map(), keyword()) :: :ok
+  def append!(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     case append(conn, key, bins, opts) do
       :ok -> :ok
@@ -413,6 +475,8 @@ defmodule Aerospike do
 
   @doc """
   Atomically prepends string prefixes to bins.
+
+  Accepts tuple keys; see `put/4`.
 
   If the record does not exist, Aerospike implicitly creates it — the bin value
   becomes the prepended string (not prepended to an empty string).
@@ -427,12 +491,15 @@ defmodule Aerospike do
       :ok = Aerospike.prepend(:aero, key, %{"greeting" => "hello "})
 
   """
-  @spec prepend(conn, Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def prepend(conn, %Key{} = key, bins, opts \\ [])
+  @spec prepend(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
+  def prepend(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
-    case Policy.validate_write(opts) do
-      {:ok, call_opts} ->
-        CRUD.prepend(conn, key, bins, call_opts)
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_write(opts) do
+      CRUD.prepend(conn, key, bins, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -443,8 +510,8 @@ defmodule Aerospike do
   @doc """
   Same as `prepend/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec prepend!(conn, Key.t(), map(), keyword()) :: :ok
-  def prepend!(conn, %Key{} = key, bins, opts \\ [])
+  @spec prepend!(conn, Key.key_input(), map(), keyword()) :: :ok
+  def prepend!(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     case prepend(conn, key, bins, opts) do
       :ok -> :ok
@@ -477,16 +544,20 @@ defmodule Aerospike do
       {:ok, records} = Aerospike.batch_get(:aero, keys, bins: ["name", "age"])
 
   """
-  @spec batch_get(conn, [Key.t()], keyword()) ::
+  @spec batch_get(conn, [Key.key_input()], keyword()) ::
           {:ok, [Aerospike.Record.t() | nil]} | {:error, Error.t()}
   def batch_get(conn, keys, opts \\ []) when is_atom(conn) and is_list(keys) and is_list(opts) do
     # `Keyword.split/2` returns `{taken_for_these_keys, rest}`.
     {read_kw, batch_kw} = Keyword.split(opts, @batch_read_opts)
 
-    with {:ok, bopts} <- Policy.validate_batch(batch_kw),
+    with {:ok, keys} <- coerce_keys(keys),
+         {:ok, bopts} <- Policy.validate_batch(batch_kw),
          {:ok, ropts} <- Policy.validate_read(read_kw) do
       BatchOps.batch_get(conn, keys, Keyword.merge(bopts, ropts))
     else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
          Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
@@ -501,7 +572,7 @@ defmodule Aerospike do
       records = Aerospike.batch_get!(:aero, keys, bins: ["name"])
 
   """
-  @spec batch_get!(conn, [Key.t()], keyword()) :: [Aerospike.Record.t() | nil]
+  @spec batch_get!(conn, [Key.key_input()], keyword()) :: [Aerospike.Record.t() | nil]
   def batch_get!(conn, keys, opts \\ []) when is_atom(conn) and is_list(keys) and is_list(opts) do
     case batch_get(conn, keys, opts) do
       {:ok, recs} -> recs
@@ -525,12 +596,16 @@ defmodule Aerospike do
       {:ok, [true, false, true]} = Aerospike.batch_exists(:aero, keys)
 
   """
-  @spec batch_exists(conn, [Key.t()], keyword()) :: {:ok, [boolean()]} | {:error, Error.t()}
+  @spec batch_exists(conn, [Key.key_input()], keyword()) ::
+          {:ok, [boolean()]} | {:error, Error.t()}
   def batch_exists(conn, keys, opts \\ [])
       when is_atom(conn) and is_list(keys) and is_list(opts) do
-    case Policy.validate_batch(opts) do
-      {:ok, bopts} ->
-        BatchOps.batch_exists(conn, keys, bopts)
+    with {:ok, keys} <- coerce_keys(keys),
+         {:ok, bopts} <- Policy.validate_batch(opts) do
+      BatchOps.batch_exists(conn, keys, bopts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
@@ -546,7 +621,7 @@ defmodule Aerospike do
       [true, false] = Aerospike.batch_exists!(:aero, [key1, key2])
 
   """
-  @spec batch_exists!(conn, [Key.t()], keyword()) :: [boolean()]
+  @spec batch_exists!(conn, [Key.key_input()], keyword()) :: [boolean()]
   def batch_exists!(conn, keys, opts \\ [])
       when is_atom(conn) and is_list(keys) and is_list(opts) do
     case batch_exists(conn, keys, opts) do
@@ -1057,6 +1132,8 @@ defmodule Aerospike do
   @doc """
   Executes a UDF (User Defined Function) on a single record.
 
+  Accepts tuple keys; see `put/4`.
+
   `package` is the Lua module name as registered on the server (without the `.lua`
   extension). `function` is the Lua function name. `args` is the list of arguments
   passed to the function.
@@ -1074,11 +1151,13 @@ defmodule Aerospike do
       {:ok, result} = Aerospike.apply_udf(:aero, key, "my", "double_n", [])
 
   """
-  @spec apply_udf(conn(), Key.t(), String.t(), String.t(), list()) ::
+  @spec apply_udf(conn(), Key.key_input(), String.t(), String.t(), list()) ::
           {:ok, term()} | {:error, Error.t()}
-  def apply_udf(conn, %Key{} = key, package, function, args)
+  def apply_udf(conn, key, package, function, args)
       when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) do
-    CRUD.apply_udf(conn, key, package, function, args, [])
+    with {:ok, key} <- coerce_key(key) do
+      CRUD.apply_udf(conn, key, package, function, args, [])
+    end
   end
 
   @doc """
@@ -1094,14 +1173,17 @@ defmodule Aerospike do
   * `:replica` — replica routing: `:master`, `:sequence`, or `:any`.
 
   """
-  @spec apply_udf(conn(), Key.t(), String.t(), String.t(), list(), keyword()) ::
+  @spec apply_udf(conn(), Key.key_input(), String.t(), String.t(), list(), keyword()) ::
           {:ok, term()} | {:error, Error.t()}
-  def apply_udf(conn, %Key{} = key, package, function, args, opts)
+  def apply_udf(conn, key, package, function, args, opts)
       when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
              is_list(opts) do
-    case Policy.validate_udf(opts) do
-      {:ok, validated} ->
-        CRUD.apply_udf(conn, key, package, function, args, validated)
+    with {:ok, key} <- coerce_key(key),
+         {:ok, validated} <- Policy.validate_udf(opts) do
+      CRUD.apply_udf(conn, key, package, function, args, validated)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
 
       {:error, e} ->
         {:error,
@@ -1249,6 +1331,20 @@ defmodule Aerospike do
   def transaction(conn, txn_or_opts, fun)
       when is_atom(conn) and is_function(fun, 1) do
     TxnRoll.transaction(conn, txn_or_opts, fun)
+  end
+
+  defp coerce_key(key) do
+    {:ok, Key.coerce!(key)}
+  rescue
+    e in ArgumentError ->
+      {:error, Error.from_result_code(:parameter_error, message: e.message)}
+  end
+
+  defp coerce_keys(keys) do
+    {:ok, Enum.map(keys, &Key.coerce!/1)}
+  rescue
+    e in ArgumentError ->
+      {:error, Error.from_result_code(:parameter_error, message: e.message)}
   end
 
   defp validate_scan_query_opts(%Scan{} = _scannable, opts) when is_list(opts),

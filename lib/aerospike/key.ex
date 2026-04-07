@@ -77,6 +77,17 @@ defmodule Aerospike.Key do
           digest: <<_::160>>
         }
 
+  @typedoc "Tuple key form: `{namespace, set, user_key}`."
+  @type key_tuple :: {String.t(), String.t(), String.t() | integer()}
+
+  @typedoc """
+  Accepted key input at public API boundaries.
+
+  Use `%Aerospike.Key{}` directly, or pass `{namespace, set, user_key}` for
+  convenience when you have user-key components.
+  """
+  @type key_input :: t() | key_tuple()
+
   @doc """
   Returns the partition id (0..4095) derived from the digest.
 
@@ -175,6 +186,37 @@ defmodule Aerospike.Key do
           "namespace must be a non-empty string, set must be a string, digest must be a 20-byte binary"
   end
 
+  @doc """
+  Coerces a public key input into `%Aerospike.Key{}`.
+
+  Passes `%Aerospike.Key{}` through unchanged. For tuple keys, delegates to
+  `new/3`, so tuple validation and int64 checks follow the same rules.
+
+  Raises `ArgumentError` for non-key inputs.
+  """
+  @spec coerce!(key_input()) :: t()
+  def coerce!(%__MODULE__{} = key), do: key
+
+  def coerce!({namespace, set, user_key}),
+    do: new(namespace, set, user_key)
+
+  def coerce!(_key) do
+    raise ArgumentError,
+          "expected %Aerospike.Key{} or {namespace, set, user_key} tuple where user_key is a string or int64 integer"
+  end
+
+  @doc """
+  Formats a key as `namespace:set:user_key:digest_hex`.
+
+  If `user_key` is unavailable (keys built with `from_digest/3`), the
+  user-key segment is rendered as `_`.
+  """
+  @spec to_string(t()) :: String.t()
+  def to_string(%__MODULE__{} = key) do
+    digest_hex = Base.encode16(key.digest, case: :lower)
+    "#{key.namespace}:#{key.set}:#{user_key_segment(key.user_key)}:#{digest_hex}"
+  end
+
   defp compute_digest_integer(set, user_key) when is_integer(user_key) do
     data = <<set::binary, @particle_integer::8, user_key::64-signed-big>>
     :crypto.hash(:ripemd160, data)
@@ -183,5 +225,21 @@ defmodule Aerospike.Key do
   defp compute_digest_string(set, user_key) when is_binary(user_key) do
     data = <<set::binary, @particle_string::8, user_key::binary>>
     :crypto.hash(:ripemd160, data)
+  end
+
+  defp user_key_segment(nil), do: "_"
+  defp user_key_segment(user_key) when is_binary(user_key), do: user_key
+  defp user_key_segment(user_key) when is_integer(user_key), do: Integer.to_string(user_key)
+end
+
+defimpl String.Chars, for: Aerospike.Key do
+  def to_string(%Aerospike.Key{} = key), do: Aerospike.Key.to_string(key)
+end
+
+defimpl Inspect, for: Aerospike.Key do
+  import Inspect.Algebra
+
+  def inspect(%Aerospike.Key{} = key, _opts) do
+    concat(["#Aerospike.Key<", Aerospike.Key.to_string(key), ">"])
   end
 end

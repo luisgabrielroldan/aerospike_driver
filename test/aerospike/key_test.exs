@@ -48,6 +48,30 @@ defmodule Aerospike.KeyTest do
     assert byte_size(k.digest) == 20
   end
 
+  describe "string and inspect formatting" do
+    test "formats key as namespace:set:user_key:digest_hex" do
+      k = Key.new("test", "demo", "foo")
+      digest_hex = Base.encode16(k.digest, case: :lower)
+
+      assert to_string(k) == "test:demo:foo:#{digest_hex}"
+    end
+
+    test "formats digest-only key with underscore user_key placeholder" do
+      digest = :crypto.hash(:ripemd160, "digest-only")
+      k = Key.from_digest("test", "demo", digest)
+      digest_hex = Base.encode16(digest, case: :lower)
+
+      assert to_string(k) == "test:demo:_:#{digest_hex}"
+    end
+
+    test "inspect uses compact key representation" do
+      k = Key.new("test", "demo", "foo")
+      digest_hex = Base.encode16(k.digest, case: :lower)
+
+      assert inspect(k) == "#Aerospike.Key<test:demo:foo:#{digest_hex}>"
+    end
+  end
+
   describe "partition_id/1" do
     test "matches first digest bytes (namespace,set,0)" do
       k = Key.new("namespace", "set", 0)
@@ -90,6 +114,57 @@ defmodule Aerospike.KeyTest do
   test "int64? returns false for non-integer" do
     refute Key.int64?("hello")
     refute Key.int64?(3.14)
+  end
+
+  describe "coerce!/1" do
+    test "returns the same key struct for %Key{} input" do
+      key = Key.new("ns", "set", "uk")
+
+      assert Key.coerce!(key) === key
+    end
+
+    test "coerces tuple with string user key" do
+      tuple_key = {"ns", "set", "uk"}
+
+      assert Key.coerce!(tuple_key) == Key.new("ns", "set", "uk")
+    end
+
+    test "coerces tuple with integer user key" do
+      tuple_key = {"ns", "set", 42}
+
+      assert Key.coerce!(tuple_key) == Key.new("ns", "set", 42)
+    end
+
+    test "accepts int64 boundary integer user keys" do
+      min_tuple_key = {"ns", "set", -9_223_372_036_854_775_808}
+      max_tuple_key = {"ns", "set", 9_223_372_036_854_775_807}
+
+      assert Key.coerce!(min_tuple_key) == Key.new("ns", "set", -9_223_372_036_854_775_808)
+      assert Key.coerce!(max_tuple_key) == Key.new("ns", "set", 9_223_372_036_854_775_807)
+    end
+
+    test "raises ArgumentError for invalid tuple values and invalid inputs" do
+      invalid_inputs = [
+        {"", "set", "uk"},
+        {"ns", "set", 9_223_372_036_854_775_808},
+        {"ns", "set"},
+        {"ns", "set", "uk", "extra"},
+        {123, "set", "uk"},
+        {"ns", 123, "uk"},
+        {"ns", "set", :uk},
+        {"ns", "set", 1.23},
+        {"ns", "set", ["uk"]},
+        :uk,
+        "uk",
+        nil
+      ]
+
+      Enum.each(invalid_inputs, fn input ->
+        assert_raise ArgumentError, fn ->
+          Key.coerce!(input)
+        end
+      end)
+    end
   end
 
   describe "property" do

@@ -12,7 +12,7 @@ defmodule Aerospike.Batch do
 
       {:ok, results} =
         Aerospike.batch_operate(:aero, [
-          Batch.read(key1, bins: ["name"]),
+          Batch.read({"test", "users", "user:1"}, bins: ["name"]),
           Batch.put(key2, %{"x" => 1}),
           Batch.delete(key3)
         ])
@@ -86,9 +86,12 @@ defmodule Aerospike.Batch do
   @doc """
   Batch read for one key. Options: `:bins` (list of bin names), `:header_only` (boolean).
 
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}` tuple keys.
+
   ## Example
 
       Batch.read(key)                          # read all bins
+      Batch.read({"test", "users", "user:1"}) # tuple key form
       Batch.read(key, bins: ["name", "age"])    # project specific bins
       Batch.read(key, header_only: true)        # generation + TTL only
 
@@ -100,13 +103,16 @@ defmodule Aerospike.Batch do
   `record: nil`, matching the \"missing data\" shape of `batch_get/3` (nil for absent bins /
   missing keys) rather than a per-key error.
   """
-  @spec read(Key.t(), keyword()) :: Read.t()
-  def read(%Key{} = key, opts \\ []) when is_list(opts) do
+  @spec read(Key.key_input(), keyword()) :: Read.t()
+  def read(key, opts \\ []) when is_list(opts) do
+    key = Key.coerce!(key)
     %Read{key: key, opts: opts}
   end
 
   @doc """
   Batch put for one key. Bin names may be atoms or strings (normalized to strings).
+
+  Accepts tuple keys; see `read/2`.
 
   Write-related options: `:ttl`, `:timeout`, `:generation`, `:gen_policy`, `:exists`,
   `:send_key`, `:durable_delete` (merged in `batch_operate`; timeout also applies at batch level).
@@ -117,13 +123,16 @@ defmodule Aerospike.Batch do
       Batch.put(key, %{"temp" => "data"}, ttl: 3600)
 
   """
-  @spec put(Key.t(), map(), keyword()) :: Put.t()
-  def put(%Key{} = key, bins, opts \\ []) when is_map(bins) and is_list(opts) do
+  @spec put(Key.key_input(), map(), keyword()) :: Put.t()
+  def put(key, bins, opts \\ []) when is_map(bins) and is_list(opts) do
+    key = Key.coerce!(key)
     %Put{key: key, bins: CRUD.normalize_bins(bins), opts: opts}
   end
 
   @doc """
   Batch delete for one key. Options: `:durable_delete`, `:timeout`.
+
+  Accepts tuple keys; see `read/2`.
 
   ## Example
 
@@ -131,13 +140,16 @@ defmodule Aerospike.Batch do
       Batch.delete(key, durable_delete: true)
 
   """
-  @spec delete(Key.t(), keyword()) :: Delete.t()
-  def delete(%Key{} = key, opts \\ []) when is_list(opts) do
+  @spec delete(Key.key_input(), keyword()) :: Delete.t()
+  def delete(key, opts \\ []) when is_list(opts) do
+    key = Key.coerce!(key)
     %Delete{key: key, opts: opts}
   end
 
   @doc """
   Batch atomic multi-operation on one key (same operation list as `Aerospike.operate/4`).
+
+  Accepts tuple keys; see `read/2`.
 
   Options mirror write/read policies where applicable: `:ttl`, `:timeout`, `:generation`,
   `:gen_policy`, `:exists`, `:send_key`, `:durable_delete`, `:respond_per_each_op`.
@@ -148,13 +160,16 @@ defmodule Aerospike.Batch do
       Batch.operate(key, [add("hits", 1), get("hits")])
 
   """
-  @spec operate(Key.t(), [Op.t()], keyword()) :: Operate.t()
-  def operate(%Key{} = key, ops, opts \\ []) when is_list(ops) and is_list(opts) do
+  @spec operate(Key.key_input(), [Op.t()], keyword()) :: Operate.t()
+  def operate(key, ops, opts \\ []) when is_list(ops) and is_list(opts) do
+    key = Key.coerce!(key)
     %Operate{key: key, ops: ops, opts: opts}
   end
 
   @doc """
   Batch UDF invocation on one key.
+
+  Accepts tuple keys; see `read/2`.
 
   `args` is a list of values passed to the server-side function (encoded like other wire values).
 
@@ -168,9 +183,10 @@ defmodule Aerospike.Batch do
   > Registering UDF modules is not part of this phase; ensure the module exists on the
   > server before calling this in production.
   """
-  @spec udf(Key.t(), String.t(), String.t(), list(), keyword()) :: UDF.t()
-  def udf(%Key{} = key, package, function, args \\ [], opts \\ [])
+  @spec udf(Key.key_input(), String.t(), String.t(), list(), keyword()) :: UDF.t()
+  def udf(key, package, function, args \\ [], opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    key = Key.coerce!(key)
     %UDF{key: key, package: package, function: function, args: args, opts: opts}
   end
 end
