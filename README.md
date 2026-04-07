@@ -1,8 +1,9 @@
 # Aerospike
 
-[![Hex.pm](https://img.shields.io/hexpm/v/aerospike.svg)](https://hex.pm/packages/aerospike)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/aerospike/)
-[![License](https://img.shields.io/hexpm/l/aerospike.svg)](https://github.com/luisgabrielroldan/aerospike_driver/blob/main/LICENSE)
+[![Hex.pm](https://img.shields.io/hexpm/v/aerospike_driver.svg)](https://hex.pm/packages/aerospike_driver)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/aerospike_driver/)
+[![License](https://img.shields.io/hexpm/l/aerospike_driver.svg)](https://github.com/luisgabrielroldan/aerospike_driver/blob/main/LICENSE)
+[![Last Updated](https://img.shields.io/github/last-commit/luisgabrielroldan/aerospike_driver.svg)](https://github.com/luisgabrielroldan/aerospike_driver/commits/main)
 
 An idiomatic Elixir client for the [Aerospike](https://aerospike.com/) database.
 Connects directly over the Aerospike binary wire protocol — pure Elixir, no NIFs.
