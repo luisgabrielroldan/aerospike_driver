@@ -8,7 +8,7 @@ services:
       - "3001:3001" # fabric
       - "3002:3002" # heartbeat (clustering)
     volumes:
-      - ./aerospike.conf:/opt/aerospike/aerospike.conf
+      - ./docker/aerospike.conf:/opt/aerospike/aerospike.conf
     command: ["--config-file", "/opt/aerospike/aerospike.conf"]
     healthcheck:
       test: ["CMD", "asinfo", "-v", "status"]
@@ -27,7 +27,7 @@ services:
       - "3011:3001"
       - "3012:3002"
     volumes:
-      - ./aerospike.conf:/opt/aerospike/aerospike.conf
+      - ./docker/aerospike.conf:/opt/aerospike/aerospike.conf
     command: ["--config-file", "/opt/aerospike/aerospike.conf"]
     healthcheck:
       test: ["CMD", "asinfo", "-v", "status"]
@@ -46,7 +46,7 @@ services:
       - "3021:3001"
       - "3022:3002"
     volumes:
-      - ./aerospike.conf:/opt/aerospike/aerospike.conf
+      - ./docker/aerospike.conf:/opt/aerospike/aerospike.conf
     command: ["--config-file", "/opt/aerospike/aerospike.conf"]
     healthcheck:
       test: ["CMD", "asinfo", "-v", "status"]
@@ -65,7 +65,7 @@ services:
       - "3101:3001" # fabric
       - "3102:3002" # heartbeat
     volumes:
-      - ./aerospike-enterprise.conf:/opt/aerospike/aerospike.conf
+      - ./docker/aerospike-enterprise.conf:/opt/aerospike/aerospike.conf
     command: ["--config-file", "/opt/aerospike/aerospike.conf"]
     healthcheck:
       test: ["CMD", "asinfo", "-v", "status"]
@@ -84,7 +84,7 @@ services:
       - "3111:3001" # fabric
       - "3112:3002" # heartbeat
     volumes:
-      - ./aerospike-enterprise-tls.conf:/opt/aerospike/aerospike.conf
+      - ./docker/aerospike-enterprise-tls.conf:/opt/aerospike/aerospike.conf
       - ./test/support/fixtures/tls:/opt/aerospike/tls:ro
     command: ["--config-file", "/opt/aerospike/aerospike.conf"]
     healthcheck:
@@ -104,7 +104,7 @@ services:
       - "3121:3001" # fabric
       - "3122:3002" # heartbeat
     volumes:
-      - ./aerospike-enterprise-pki.conf:/opt/aerospike/aerospike.conf
+      - ./docker/aerospike-enterprise-pki.conf:/opt/aerospike/aerospike.conf
       - ./test/support/fixtures/tls:/opt/aerospike/tls:ro
     command: ["--config-file", "/opt/aerospike/aerospike.conf"]
     healthcheck:
