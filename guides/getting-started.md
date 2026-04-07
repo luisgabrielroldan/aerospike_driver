@@ -10,12 +10,12 @@ and understanding key concepts in the Elixir client.
 
 ## Installation
 
-Add `aerospike` to your `mix.exs` dependencies:
+Add `aerospike_driver` to your `mix.exs` dependencies:
 
 ```elixir
 def deps do
   [
-    {:aerospike, "~> 0.1.0"}
+    {:aerospike_driver, "~> 0.1.0"}
   ]
 end
 ```

@@ -32,12 +32,12 @@ See the [CHANGELOG](CHANGELOG.md) for what shipped in each version.
 
 ## Installation
 
-Add `aerospike` to your list of dependencies in `mix.exs`:
+Add `aerospike_driver` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:aerospike, "~> 0.1.0"}
+    {:aerospike_driver, "~> 0.1.0"}
   ]
 end
 ```

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-07
+
 ### Added
 - Added GeoJSON wire encoding/decoding with proper binary layout (flags + ncells + cells + JSON)
 - Added `{:geojson, json}` tuple representation for GeoJSON bin values

@@ -44,6 +44,7 @@ defmodule Aerospike.MixProject do
 
   defp package do
     [
+      name: "aerospike_driver",
       maintainers: ["Gabriel Roldan"],
       licenses: ["Apache-2.0"],
       links: %{
@@ -96,7 +97,7 @@ defmodule Aerospike.MixProject do
       main: "readme",
       source_url: @source_url,
       source_ref: "v#{@version}",
-      homepage_url: "https://hexdocs.pm/aerospike",
+      homepage_url: @source_url,
       formatters: ["html"],
       extras: [
         {"README.md", [title: "Overview"]},
