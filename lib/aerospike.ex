@@ -173,8 +173,9 @@ defmodule Aerospike do
       :ok = Aerospike.put(:aero, {"test", "users", "user:2"}, %{"name" => "Grace"})
 
   """
-  @spec put(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def put(conn, key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec put(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def put(conn, key, bins, opts \\ []) when is_atom(conn) and is_map(bins) and is_list(opts) do
     with {:ok, key} <- coerce_key(key),
          {:ok, call_opts} <- Policy.validate_write(opts) do
       CRUD.put(conn, key, bins, call_opts)
@@ -191,8 +192,8 @@ defmodule Aerospike do
   @doc """
   Same as `put/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec put!(conn, Key.key_input(), map(), keyword()) :: :ok
-  def put!(conn, key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec put!(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) :: :ok
+  def put!(conn, key, bins, opts \\ []) when is_atom(conn) and is_map(bins) and is_list(opts) do
     case put(conn, key, bins, opts) do
       :ok -> :ok
       {:error, %Error{} = e} -> raise e
@@ -399,7 +400,8 @@ defmodule Aerospike do
       :ok = Aerospike.add(:aero, key, %{"login_count" => 1, "bytes_used" => 256})
 
   """
-  @spec add(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
+  @spec add(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
   def add(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     with {:ok, key} <- coerce_key(key),
@@ -418,7 +420,7 @@ defmodule Aerospike do
   @doc """
   Same as `add/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec add!(conn, Key.key_input(), map(), keyword()) :: :ok
+  @spec add!(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) :: :ok
   def add!(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     case add(conn, key, bins, opts) do
@@ -445,7 +447,8 @@ defmodule Aerospike do
       :ok = Aerospike.append(:aero, key, %{"greeting" => " world"})
 
   """
-  @spec append(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
+  @spec append(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
   def append(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     with {:ok, key} <- coerce_key(key),
@@ -464,7 +467,7 @@ defmodule Aerospike do
   @doc """
   Same as `append/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec append!(conn, Key.key_input(), map(), keyword()) :: :ok
+  @spec append!(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) :: :ok
   def append!(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     case append(conn, key, bins, opts) do
@@ -491,7 +494,8 @@ defmodule Aerospike do
       :ok = Aerospike.prepend(:aero, key, %{"greeting" => "hello "})
 
   """
-  @spec prepend(conn, Key.key_input(), map(), keyword()) :: :ok | {:error, Error.t()}
+  @spec prepend(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
   def prepend(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     with {:ok, key} <- coerce_key(key),
@@ -510,7 +514,7 @@ defmodule Aerospike do
   @doc """
   Same as `prepend/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec prepend!(conn, Key.key_input(), map(), keyword()) :: :ok
+  @spec prepend!(conn, Key.key_input(), Aerospike.Record.bins_input(), keyword()) :: :ok
   def prepend!(conn, key, bins, opts \\ [])
       when is_atom(conn) and is_map(bins) and is_list(opts) do
     case prepend(conn, key, bins, opts) do

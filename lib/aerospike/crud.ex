@@ -31,7 +31,7 @@ defmodule Aerospike.CRUD do
 
   # Coerces atom bin names to strings; the wire protocol uses string bin names.
   @doc false
-  @spec normalize_bins(map()) :: %{String.t() => term()}
+  @spec normalize_bins(Aerospike.Record.bins_input()) :: Aerospike.Record.bins()
   def normalize_bins(bins) when is_map(bins) do
     Map.new(bins, fn
       {k, v} when is_atom(k) -> {Atom.to_string(k), v}
@@ -43,8 +43,10 @@ defmodule Aerospike.CRUD do
   @doc """
   Writes bins for `key` using merged connection defaults and `opts`.
   """
-  @spec put(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def put(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec put(atom(), Key.t(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def put(conn, %Key{} = key, bins, opts \\ [])
+      when is_atom(conn) and is_map(bins) and is_list(opts) do
     bins = normalize_bins(bins)
     merged = Policy.merge_defaults(conn, :write, opts)
 
@@ -56,8 +58,10 @@ defmodule Aerospike.CRUD do
   @doc """
   Atomically adds integer deltas to bins for `key`.
   """
-  @spec add(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def add(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec add(atom(), Key.t(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def add(conn, %Key{} = key, bins, opts \\ [])
+      when is_atom(conn) and is_map(bins) and is_list(opts) do
     bins = normalize_bins(bins)
     merged = Policy.merge_defaults(conn, :write, opts)
 
@@ -69,8 +73,10 @@ defmodule Aerospike.CRUD do
   @doc """
   Atomically appends string suffixes to bins for `key`.
   """
-  @spec append(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def append(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec append(atom(), Key.t(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def append(conn, %Key{} = key, bins, opts \\ [])
+      when is_atom(conn) and is_map(bins) and is_list(opts) do
     bins = normalize_bins(bins)
     merged = Policy.merge_defaults(conn, :write, opts)
 
@@ -82,8 +88,10 @@ defmodule Aerospike.CRUD do
   @doc """
   Atomically prepends string prefixes to bins for `key`.
   """
-  @spec prepend(atom(), Key.t(), map(), keyword()) :: :ok | {:error, Error.t()}
-  def prepend(conn, %Key{} = key, bins, opts \\ []) when is_atom(conn) and is_list(opts) do
+  @spec prepend(atom(), Key.t(), Aerospike.Record.bins_input(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def prepend(conn, %Key{} = key, bins, opts \\ [])
+      when is_atom(conn) and is_map(bins) and is_list(opts) do
     bins = normalize_bins(bins)
     merged = Policy.merge_defaults(conn, :write, opts)
 

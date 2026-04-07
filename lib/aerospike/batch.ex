@@ -40,7 +40,7 @@ defmodule Aerospike.Batch do
     @moduledoc "Batch put operation. Built by `Aerospike.Batch.put/3`."
     @enforce_keys [:key, :bins]
     defstruct [:key, :bins, :opts]
-    @type t :: %__MODULE__{key: Key.t(), bins: map(), opts: keyword()}
+    @type t :: %__MODULE__{key: Key.t(), bins: Aerospike.Record.bins(), opts: keyword()}
   end
 
   defmodule Delete do
@@ -123,7 +123,7 @@ defmodule Aerospike.Batch do
       Batch.put(key, %{"temp" => "data"}, ttl: 3600)
 
   """
-  @spec put(Key.key_input(), map(), keyword()) :: Put.t()
+  @spec put(Key.key_input(), Aerospike.Record.bins_input(), keyword()) :: Put.t()
   def put(key, bins, opts \\ []) when is_map(bins) and is_list(opts) do
     key = Key.coerce!(key)
     %Put{key: key, bins: CRUD.normalize_bins(bins), opts: opts}

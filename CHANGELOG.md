@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Added tuple key input support at public API boundaries: callers can now pass `{namespace, set, user_key}` anywhere `%Aerospike.Key{}` is accepted in single-key facade operations, batch read/exists key lists, and `Aerospike.Batch` constructors.
 - Added `Aerospike.Key.coerce!/1` plus `Aerospike.Key.key_input()` to normalize public key inputs to `%Aerospike.Key{}` internally.
+- Added `String.Chars` and `Inspect` protocol implementations for `%Aerospike.Key{}`.
 - Added tuple-key coverage in facade, batch, and key unit tests.
 
 ### Changed
