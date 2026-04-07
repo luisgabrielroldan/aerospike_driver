@@ -419,7 +419,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
         Field.encode(Field.set(key.set))
 
     if send_key? and key.user_key != nil do
-      case Field.key_from_user_key(key) do
+      case Field.key_from_user_key(%{user_key: key.user_key}) do
         nil -> base
         kf -> base <> Field.encode(kf)
       end

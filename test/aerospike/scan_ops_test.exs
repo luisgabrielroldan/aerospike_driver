@@ -451,7 +451,7 @@ defmodule Aerospike.ScanOpsTest do
       :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: fake_pool}})
 
       scan = %{Scan.new("fault_ns") | partition_filter: PartitionFilter.by_id(42)}
-      stream = ScanOps.stream(name, scan, pool_checkout_timeout: 100)
+      stream = ScanOps.stream(name, scan, pool_checkout_timeout: 5_000)
       err = assert_raise Error, fn -> Enum.to_list(stream) end
       assert %Error{code: :network_error} = err
     end

@@ -24,7 +24,6 @@ defmodule Aerospike.Integration.SCQueryTest do
   alias Aerospike.Test.Helpers
 
   @moduletag :enterprise
-  @moduletag :integration
 
   @namespace "test"
   @set "sc_query_bug"

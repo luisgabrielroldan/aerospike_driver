@@ -1,4 +1,6 @@
 defmodule Aerospike.Cursor do
+  @dialyzer :no_match
+
   @moduledoc """
   Opaque pagination cursor for scans and queries.
 
@@ -27,7 +29,7 @@ defmodule Aerospike.Cursor do
           optional(:bval) => integer() | nil
         }
 
-  @type t :: %__MODULE__{partitions: [partition_entry()]}
+  @type t :: %__MODULE__{partitions: list(partition_entry())}
 
   @min_int64 -9_223_372_036_854_775_808
   @max_int64 9_223_372_036_854_775_807
@@ -150,15 +152,19 @@ defmodule Aerospike.Cursor do
     end
   end
 
-  defp digest_consistent?(false, digest, zero_digest) do
-    if digest == zero_digest, do: :ok, else: {:error, inconsistent_cursor()}
+  defp digest_consistent?(has_digest?, digest, zero_digest) do
+    case has_digest? do
+      true -> :ok
+      false -> if(digest == zero_digest, do: :ok, else: {:error, inconsistent_cursor()})
+    end
   end
 
-  defp digest_consistent?(true, _digest, _zero), do: :ok
-
-  defp bval_consistent?(false, 0), do: :ok
-  defp bval_consistent?(false, _), do: {:error, inconsistent_cursor()}
-  defp bval_consistent?(true, _bval), do: :ok
+  defp bval_consistent?(has_bval?, bval) do
+    case has_bval? do
+      true -> :ok
+      false -> if(bval == 0, do: :ok, else: {:error, inconsistent_cursor()})
+    end
+  end
 
   defp inconsistent_cursor do
     Error.from_result_code(:parse_error, message: "invalid cursor binary")

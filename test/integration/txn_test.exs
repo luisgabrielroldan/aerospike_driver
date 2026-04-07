@@ -20,7 +20,6 @@ defmodule Aerospike.Integration.TxnTest do
   alias Aerospike.TxnOps
 
   @moduletag :enterprise
-  @moduletag :integration
 
   setup do
     host = System.get_env("AEROSPIKE_EE_HOST", "127.0.0.1")

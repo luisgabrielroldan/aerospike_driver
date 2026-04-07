@@ -5,9 +5,11 @@ defmodule Aerospike.TxnMonitor do
 
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.Op
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
+  alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.AsmMsg.Value
+  alias Aerospike.Protocol.CDT
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ResultCode
@@ -16,6 +18,7 @@ defmodule Aerospike.TxnMonitor do
   alias Aerospike.TxnOps
 
   @monitor_set "<ERO~MRT"
+  @list_append_op 1
 
   # List policy: ordered (1) + AddUnique | NoFail | Partial (13)
   @keyds_list_policy %{order: 1, flags: 13}
@@ -66,12 +69,18 @@ defmodule Aerospike.TxnMonitor do
   end
 
   defp register_ops(conn_name, txn, cmd_key) do
-    append_op = Op.List.append("keyds", cmd_key.digest, policy: @keyds_list_policy)
+    append_op =
+      CDT.list_modify_op(
+        "keyds",
+        @list_append_op,
+        [cmd_key.digest, @keyds_list_policy.order, @keyds_list_policy.flags]
+      )
 
     if TxnOps.monitor_exists?(conn_name, txn) do
       [append_op]
     else
-      [Op.put("id", txn.id), append_op]
+      put_id_ops = Value.encode_bin_operations(%{"id" => txn.id})
+      put_id_ops ++ [append_op]
     end
   end
 
@@ -94,7 +103,7 @@ defmodule Aerospike.TxnMonitor do
   def mark_roll_forward(conn_name, %Txn{} = txn, opts \\ []) do
     with {:ok, ns} <- fetch_namespace(conn_name, txn) do
       mkey = monitor_key(txn, ns)
-      ops = [Op.put("fwd", true)]
+      ops = Value.encode_bin_operations(%{"fwd" => true})
 
       wire = encode_monitor_msg(ns, mkey.digest, AsmMsg.info2_write(), 0, ops)
       send_and_check(conn_name, mkey, wire, opts)
@@ -135,7 +144,7 @@ defmodule Aerospike.TxnMonitor do
 
   @doc false
   @spec encode_monitor_msg(String.t(), binary(), non_neg_integer(), non_neg_integer(), [
-          Aerospike.Op.t()
+          Operation.t()
         ]) :: binary()
   def encode_monitor_msg(namespace, digest, info2, expiration, operations) do
     %AsmMsg{

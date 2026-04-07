@@ -34,9 +34,6 @@ defmodule Aerospike.Router do
     else
       {:error, %Error{} = e} ->
         {:error, e}
-
-      {:error, other} ->
-        {:error, Error.from_result_code(:parse_error, message: inspect(other))}
     end
   end
 

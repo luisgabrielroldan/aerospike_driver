@@ -13,7 +13,6 @@ defmodule Aerospike.Integration.MultiNodeTest do
   alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
-  @moduletag :integration
   @moduletag :cluster
 
   setup do

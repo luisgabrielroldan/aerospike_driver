@@ -33,30 +33,42 @@ defmodule Aerospike.Batch do
     @moduledoc false
     @enforce_keys [:key]
     defstruct [:key, :opts]
+    @type t :: %__MODULE__{key: Key.t(), opts: keyword()}
   end
 
   defmodule Put do
     @moduledoc false
     @enforce_keys [:key, :bins]
     defstruct [:key, :bins, :opts]
+    @type t :: %__MODULE__{key: Key.t(), bins: map(), opts: keyword()}
   end
 
   defmodule Delete do
     @moduledoc false
     @enforce_keys [:key]
     defstruct [:key, :opts]
+    @type t :: %__MODULE__{key: Key.t(), opts: keyword()}
   end
 
   defmodule Operate do
     @moduledoc false
     @enforce_keys [:key, :ops]
     defstruct [:key, :ops, :opts]
+    @type t :: %__MODULE__{key: Key.t(), ops: list(Op.t()), opts: keyword()}
   end
 
   defmodule UDF do
     @moduledoc false
     @enforce_keys [:key, :package, :function]
     defstruct [:key, :package, :function, :args, :opts]
+
+    @type t :: %__MODULE__{
+            key: Key.t(),
+            package: String.t(),
+            function: String.t(),
+            args: list(),
+            opts: keyword()
+          }
   end
 
   @type t :: Read.t() | Put.t() | Delete.t() | Operate.t() | UDF.t()

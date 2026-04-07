@@ -420,7 +420,7 @@ defmodule Aerospike.Policy do
   @spec apply_send_key(AsmMsg.t(), Key.t(), keyword()) :: AsmMsg.t()
   def apply_send_key(%AsmMsg{} = msg, %Key{} = key, opts) when is_list(opts) do
     if Keyword.get(opts, :send_key) == true do
-      case Field.key_from_user_key(key) do
+      case Field.key_from_user_key(%{user_key: key.user_key}) do
         nil -> msg
         field -> %{msg | fields: msg.fields ++ [field]}
       end

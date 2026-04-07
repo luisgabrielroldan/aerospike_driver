@@ -1,4 +1,6 @@
 defmodule Aerospike.Protocol.BatchResponse do
+  @dialyzer :no_match
+
   @moduledoc false
 
   import Bitwise
@@ -15,16 +17,14 @@ defmodule Aerospike.Protocol.BatchResponse do
   alias Aerospike.Record
 
   @doc false
-  @spec parse_batch_get(binary(), [Key.t()]) :: {:ok, [Record.t() | nil]} | {:error, Error.t()}
+  @spec parse_batch_get(binary(), list(Key.t())) ::
+          {:ok, list(Record.t() | nil)} | {:error, Error.t()}
+  def parse_batch_get(body, []) when is_binary(body), do: {:ok, []}
+
   def parse_batch_get(body, keys) when is_binary(body) and is_list(keys) do
     n = length(keys)
-
-    if n == 0 do
-      {:ok, []}
-    else
-      keys_t = List.to_tuple(keys)
-      do_parse_get(body, keys_t, n, %{})
-    end
+    keys_t = List.to_tuple(keys)
+    do_parse_get(body, keys_t, n, %{})
   end
 
   defp do_parse_get(<<>>, _keys_t, n, slots), do: {:ok, slots_to_list(n, slots, nil)}
@@ -186,12 +186,10 @@ defmodule Aerospike.Protocol.BatchResponse do
   @doc false
   @spec parse_batch_exists(binary(), non_neg_integer()) ::
           {:ok, [boolean()]} | {:error, Error.t()}
+  def parse_batch_exists(body, 0) when is_binary(body), do: {:ok, []}
+
   def parse_batch_exists(body, count) when is_binary(body) and count >= 0 do
-    if count == 0 do
-      {:ok, []}
-    else
-      do_parse_exists(body, %{}, count)
-    end
+    do_parse_exists(body, %{}, count)
   end
 
   defp do_parse_exists(<<>>, slots, count), do: {:ok, slots_to_list(count, slots, false)}
@@ -228,17 +226,14 @@ defmodule Aerospike.Protocol.BatchResponse do
   end
 
   @doc false
-  @spec parse_batch_operate(binary(), [Batch.t()]) ::
-          {:ok, [BatchResult.t() | nil]} | {:error, Error.t()}
+  @spec parse_batch_operate(binary(), list(Batch.t())) ::
+          {:ok, list(BatchResult.t() | nil)} | {:error, Error.t()}
+  def parse_batch_operate(body, []) when is_binary(body), do: {:ok, []}
+
   def parse_batch_operate(body, batch_ops) when is_binary(body) and is_list(batch_ops) do
     n = length(batch_ops)
-
-    if n == 0 do
-      {:ok, []}
-    else
-      ops_t = List.to_tuple(batch_ops)
-      do_parse_operate(body, ops_t, n, %{})
-    end
+    ops_t = List.to_tuple(batch_ops)
+    do_parse_operate(body, ops_t, n, %{})
   end
 
   defp do_parse_operate(<<>>, _ops_t, n, slots), do: {:ok, slots_to_list(n, slots, nil)}

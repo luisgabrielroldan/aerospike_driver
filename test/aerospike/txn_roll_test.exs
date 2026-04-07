@@ -18,7 +18,11 @@ defmodule Aerospike.TxnRollTest do
     {:ok, pid} = TableOwner.start_link(name: name)
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+      catch
+        :exit, _ -> :ok
+      end
     end)
 
     txn = Txn.new()

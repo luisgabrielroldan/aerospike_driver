@@ -427,7 +427,6 @@ defmodule Aerospike.Protocol.ScanResponse do
          {:ok, tail} <- skip_operations(after_fields, meta.op_count) do
       count_dispatch(meta, tail, count)
     else
-      {:error, %Error{}} = err -> err
       {:error, reason} -> {:error, Error.from_result_code(:parse_error, message: inspect(reason))}
     end
   end

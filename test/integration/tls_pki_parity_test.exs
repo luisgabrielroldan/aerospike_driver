@@ -3,7 +3,6 @@ defmodule Aerospike.Integration.TlsPkiParityTest do
 
   alias Aerospike.Tables
 
-  @moduletag :integration
   @moduletag :tls_stack
 
   @namespace "test"

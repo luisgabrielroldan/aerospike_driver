@@ -12,17 +12,22 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 - **OTP-native** — starts under a supervisor, pools connections automatically via NimblePool
 - **Cluster-aware** — discovers nodes, maintains partition maps, routes operations to the correct node
 - **Single-record CRUD** — `put`, `get`, `delete`, `exists`, `touch` with bang variants
+- **Operate** — atomic multi-operation per record (`add`, `append`, `prepend`, custom op lists)
+- **Batch operations** — `batch_get`, `batch_exists`, `batch_operate` for multi-key round-trips
+- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`
+- **CDT operations** — List, Map, Bit, and HLL operations with nested context (`Ctx`)
+- **Server-side expressions** — filter results with `Aerospike.Exp` expressions
+- **Secondary indexes** — `create_index` / `drop_index` with async `IndexTask` polling
+- **UDF management** — `register_udf`, `remove_udf`, `apply_udf` for Lua user-defined functions
+- **Transactions** — multi-record transactions (`transaction/2`, `commit/2`, `abort/2`) on Enterprise Edition
 - **Write policies** — TTL, generation checks (CAS), create/update/replace semantics, durable delete
 - **Read policies** — selective bin projection, header-only reads
 - **Policy defaults** — set read/write timeouts and options once at connection time; override per call
+- **TLS support** — optional TLS and mTLS for node connections
 - **Telemetry** — emits `[:aerospike, :command, :start | :stop | :exception]` events
 - **Pure Elixir** — only runtime dependencies are `nimble_options`, `nimble_pool`, and `telemetry`; crypto uses Erlang's `:crypto` (RIPEMD-160 digests)
 
-### Roadmap
-
-Batch operations, scan/query with streaming, CDT operations (list/map/bitwise/HLL),
-server-side expressions, transactions, UDF management, and secondary indexes are planned
-for upcoming releases. See the [CHANGELOG](CHANGELOG.md) for what shipped in each version.
+See the [CHANGELOG](CHANGELOG.md) for what shipped in each version.
 
 ## Installation
 

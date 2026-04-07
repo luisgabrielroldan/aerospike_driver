@@ -109,19 +109,16 @@ jobs:
       - name: Compile
         run: mix compile
 
-      - name: Run unit tests
-        run: mix test
+      - name: Generate TLS fixtures
+        run: make tls-fixtures
+
+      - name: Run unit and property tests
+        run: mix test --include property
 
   integration-test:
     name: Integration tests
     runs-on: ubuntu-latest
     needs: [unit-test]
-
-    services:
-      aerospike:
-        image: aerospike/aerospike-server:latest
-        ports:
-          - 3000:3000
 
     steps:
       - uses: actions/checkout@v6
@@ -149,10 +146,13 @@ jobs:
       - name: Compile
         run: mix compile
 
+      - name: Start Aerospike
+        run: docker compose up -d
+
       - name: Wait for Aerospike
         run: |
           for i in $(seq 1 30); do
-            if nc -z localhost 3000 2>/dev/null; then
+            if docker compose exec -T aerospike asinfo -v status 2>/dev/null | grep -q ok; then
               echo "Aerospike is ready"
               exit 0
             fi
@@ -164,6 +164,139 @@ jobs:
 
       - name: Run integration tests
         run: mix test --include integration
+        env:
+          AEROSPIKE_HOST: localhost
+          AEROSPIKE_PORT: 3000
+
+  enterprise-test:
+    name: Enterprise tests (SC, TLS, transactions)
+    runs-on: ubuntu-latest
+    needs: [unit-test]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: "1.18"
+          otp-version: "27"
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Generate TLS fixtures
+        run: make tls-fixtures
+
+      - name: Start Aerospike Enterprise
+        run: docker compose --profile enterprise up -d
+
+      - name: Wait for Aerospike Enterprise
+        run: |
+          for svc in aerospike1 aerospike-ee aerospike-ee-tls aerospike-ee-pki; do
+            echo "Waiting for $svc..."
+            for i in $(seq 1 30); do
+              if docker exec $svc asinfo -v status 2>/dev/null | grep -q ok; then
+                echo "$svc is ready"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "$svc did not start in time"
+                docker logs $svc
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+
+      - name: Verify enterprise roster
+        run: |
+          docker exec aerospike-ee asinfo -v 'roster:namespace=test' | grep -v 'roster=null'
+          docker exec aerospike-ee-tls asinfo -v 'roster:namespace=test' | grep -v 'roster=null'
+          docker exec aerospike-ee-pki asinfo -v 'roster:namespace=test' | grep -v 'roster=null'
+
+      - name: Run enterprise and TLS tests
+        run: mix test --include enterprise --include tls_stack
+        env:
+          AEROSPIKE_HOST: localhost
+          AEROSPIKE_PORT: 3000
+
+  cluster-test:
+    name: Cluster tests (multi-node)
+    runs-on: ubuntu-latest
+    needs: [unit-test]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: "1.18"
+          otp-version: "27"
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Start Aerospike cluster
+        run: docker compose --profile cluster up -d
+
+      - name: Wait for cluster formation
+        run: |
+          for svc in aerospike1 aerospike2 aerospike3; do
+            echo "Waiting for $svc..."
+            for i in $(seq 1 30); do
+              if docker exec $svc asinfo -v status 2>/dev/null | grep -q ok; then
+                echo "$svc is ready"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "$svc did not start in time"
+                docker logs $svc
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+          echo "Waiting for cluster to stabilize..."
+          sleep 10
+          CLUSTER_SIZE=$(docker exec aerospike1 asinfo -v 'statistics' | tr ';' '\n' | grep cluster_size | cut -d= -f2)
+          echo "Cluster size: $CLUSTER_SIZE"
+          if [ "$CLUSTER_SIZE" != "3" ]; then
+            echo "Expected cluster size 3, got $CLUSTER_SIZE"
+            exit 1
+          fi
+
+      - name: Run cluster tests
+        run: mix test --include cluster
         env:
           AEROSPIKE_HOST: localhost
           AEROSPIKE_PORT: 3000
