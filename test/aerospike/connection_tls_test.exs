@@ -239,4 +239,61 @@ defmodule Aerospike.ConnectionTlsTest do
       Task.await(server)
     end
   end
+
+  describe "mTLS with client certificate" do
+    test "connect succeeds when server requires peer cert from fixtures" do
+      if mtls_fixtures_present?() do
+        dir = mtls_fixtures_dir()
+
+        server_opts = [
+          certfile: to_charlist(Path.join(dir, "server.crt")),
+          keyfile: to_charlist(Path.join(dir, "server.key")),
+          cacertfile: to_charlist(Path.join(dir, "ca.crt")),
+          verify: :verify_peer,
+          fail_if_no_peer_cert: true
+        ]
+
+        client_opts = [
+          verify: :verify_none,
+          certfile: to_charlist(Path.join(dir, "client.crt")),
+          keyfile: to_charlist(Path.join(dir, "client.key"))
+        ]
+
+        {:ok, lsock, port} = MockTlsServer.start()
+
+        server =
+          Task.async(fn ->
+            MockTlsServer.accept_once_tls(lsock, server_opts, fn _ssl ->
+              :ok
+            end)
+          end)
+
+        assert {:ok, conn} =
+                 Connection.connect(
+                   host: "127.0.0.1",
+                   port: port,
+                   timeout: 5_000,
+                   tls: true,
+                   tls_opts: client_opts
+                 )
+
+        assert {:ssl, _} = conn.transport
+        Connection.close(conn)
+        Task.await(server)
+      end
+    end
+  end
+
+  defp mtls_fixtures_present? do
+    dir = mtls_fixtures_dir()
+
+    Enum.all?(
+      ~w(ca.crt server.crt server.key client.crt client.key),
+      &File.exists?(Path.join(dir, &1))
+    )
+  end
+
+  defp mtls_fixtures_dir do
+    Path.expand("../support/fixtures/tls", __DIR__)
+  end
 end

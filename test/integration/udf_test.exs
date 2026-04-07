@@ -3,6 +3,7 @@ defmodule Aerospike.Integration.UDFTest do
 
   alias Aerospike.Error
   alias Aerospike.Tables
+  alias Aerospike.Test.Helpers
 
   @moduletag :integration
 
@@ -33,7 +34,7 @@ defmodule Aerospike.Integration.UDFTest do
     {:ok, task} = Aerospike.register_udf(name, @udf_fixture, @server_name)
     :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000)
 
-    {:ok, conn: name}
+    {:ok, conn: name, host: host, port: port}
   end
 
   describe "apply_udf/5 — echo function" do
@@ -95,9 +96,54 @@ defmodule Aerospike.Integration.UDFTest do
     end
   end
 
+  describe "demo parity — lifecycle and batch UDF" do
+    test "register inline package, mutate record, remove package", %{
+      conn: conn,
+      host: host,
+      port: port
+    } do
+      package = "demo_parity_udf_#{System.unique_integer([:positive])}"
+      server_name = "#{package}.lua"
+      key = unique_key()
+
+      source = """
+      function put_value(rec, bin_name, value)
+        rec[bin_name] = value
+        aerospike:update(rec)
+        return rec[bin_name]
+      end
+      """
+
+      on_exit(fn ->
+        Helpers.cleanup_key(key, host: host, port: port)
+        maybe_remove_udf(conn, server_name)
+      end)
+
+      assert {:ok, task} = Aerospike.register_udf(conn, source, server_name)
+      assert :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000)
+      Process.sleep(300)
+
+      assert :ok = Aerospike.put(conn, key, %{"v" => 1})
+      assert {:ok, 99} = Aerospike.apply_udf(conn, key, package, "put_value", ["z", 99])
+      assert {:ok, rec} = Aerospike.get(conn, key)
+      assert rec.bins["z"] == 99
+
+      assert :ok = Aerospike.remove_udf(conn, server_name)
+      assert {:error, %Error{}} = Aerospike.apply_udf(conn, key, package, "put_value", ["z", 100])
+    end
+  end
+
   defp unique_key do
     suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
     Aerospike.key("test", "udf_itest", suffix)
+  end
+
+  defp maybe_remove_udf(conn, server_name) do
+    if :ets.whereis(Tables.meta(conn)) != :undefined do
+      _ = Aerospike.remove_udf(conn, server_name)
+    end
+
+    :ok
   end
 
   defp await_cluster_ready(name, timeout \\ 5_000) do

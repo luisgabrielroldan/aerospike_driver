@@ -10,17 +10,57 @@ defmodule Demo.Examples.TxnConcurrent do
 
   Transactions require Aerospike Enterprise Edition with strong-consistency
   namespaces. On Community Edition this example will report an error.
+
+  Starts its own connection to the EE instance (default `localhost:3100`).
+  Override with `AEROSPIKE_EE_HOST` and `AEROSPIKE_EE_PORT` env vars.
+  Requires `make demo-stack-up` (or `docker compose --profile enterprise up -d`).
   """
 
   require Logger
 
   alias Aerospike.Txn
 
-  @conn :aero
+  @conn :aero_ee
   @namespace "test"
   @set "demo_txn"
 
   def run do
+    {host, port} = ee_host_port()
+
+    if ee_reachable?(host, port) do
+      run_with_ee(host, port)
+    else
+      Logger.warning("  TxnConcurrent: skipped — EE not reachable on #{host}:#{port}")
+      :skipped
+    end
+  end
+
+  defp run_with_ee(host, port) do
+    opts = [
+      name: @conn,
+      hosts: ["#{host}:#{port}"],
+      pool_size: 2,
+      connect_timeout: 5_000,
+      tend_interval: 60_000
+    ]
+
+    case Aerospike.start_link(opts) do
+      {:ok, _pid} ->
+        Process.sleep(1_500)
+        result = run_examples()
+        Aerospike.close(@conn)
+        result
+
+      {:error, reason} ->
+        Logger.warning(
+          "  TxnConcurrent: skipped — could not start EE connection: #{inspect(reason)}"
+        )
+
+        :skipped
+    end
+  end
+
+  defp run_examples do
     case transaction_wrapper() do
       :ok ->
         abort_rollback()
@@ -114,4 +154,21 @@ defmodule Demo.Examples.TxnConcurrent do
   end
 
   defp key(id), do: Aerospike.key(@namespace, @set, id)
+
+  defp ee_host_port do
+    host = System.get_env("AEROSPIKE_EE_HOST", "127.0.0.1")
+    port = System.get_env("AEROSPIKE_EE_PORT", "3100") |> String.to_integer()
+    {host, port}
+  end
+
+  defp ee_reachable?(host, port) do
+    case :gen_tcp.connect(~c"#{host}", port, [], 1_000) do
+      {:ok, sock} ->
+        :gen_tcp.close(sock)
+        true
+
+      {:error, _} ->
+        false
+    end
+  end
 end

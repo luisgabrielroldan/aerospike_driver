@@ -198,6 +198,27 @@ defmodule Aerospike.Integration.TxnTest do
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(conn, key)
   end
 
+  test "transaction/2 rollback preserves pre-existing record value on abort", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key = Helpers.unique_key("test", "txn_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    assert :ok = Aerospike.put(conn, key, %{"val" => 1})
+
+    result =
+      Aerospike.transaction(conn, fn txn ->
+        assert :ok = Aerospike.put(conn, key, %{"val" => 999}, txn: txn)
+        raise Error.from_result_code(:parameter_error, message: "deliberate abort")
+      end)
+
+    assert {:error, %Error{code: :parameter_error}} = result
+    assert {:ok, rec} = Aerospike.get(conn, key)
+    assert rec.bins["val"] == 1
+  end
+
   test "transaction/3 with verify failure aborts and returns error", %{
     conn: conn,
     host: host,
@@ -226,6 +247,34 @@ defmodule Aerospike.Integration.TxnTest do
     # The external write persists; the transaction did not roll it back
     assert {:ok, after_record} = Aerospike.get(conn, key)
     assert after_record.bins["v"] == 2
+  end
+
+  test "transaction/3 accepts pre-created Txn struct with timeout", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key1 = Helpers.unique_key("test", "txn_itest")
+    key2 = Helpers.unique_key("test", "txn_itest")
+
+    on_exit(fn ->
+      Helpers.cleanup_key(key1, host: host, port: port)
+      Helpers.cleanup_key(key2, host: host, port: port)
+    end)
+
+    txn = Txn.new(timeout: 5_000)
+
+    assert {:ok, :committed} =
+             Aerospike.transaction(conn, txn, fn tx ->
+               :ok = Aerospike.put(conn, key1, %{"v" => 50}, txn: tx)
+               :ok = Aerospike.put(conn, key2, %{"v" => 75}, txn: tx)
+               :committed
+             end)
+
+    assert {:ok, r1} = Aerospike.get(conn, key1)
+    assert {:ok, r2} = Aerospike.get(conn, key2)
+    assert r1.bins["v"] == 50
+    assert r2.bins["v"] == 75
   end
 
   # ---------------------------------------------------------------------------

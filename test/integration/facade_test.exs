@@ -1,6 +1,7 @@
 defmodule Aerospike.Integration.FacadeTest do
   use ExUnit.Case, async: false
 
+  alias Aerospike.Exp
   alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
@@ -348,6 +349,29 @@ defmodule Aerospike.Integration.FacadeTest do
     assert after_touch.ttl > before.ttl
   end
 
+  test "record expires after short ttl", %{conn: conn, host: host, port: port} do
+    key = Helpers.unique_key("test", "facade_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, key, %{"x" => 1}, ttl: 2)
+
+    assert_eventually(fn ->
+      match?({:error, %Aerospike.Error{code: :key_not_found}}, Aerospike.get(conn, key))
+    end)
+  end
+
+  test "touch keeps record alive past original ttl", %{conn: conn, host: host, port: port} do
+    key = Helpers.unique_key("test", "facade_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, key, %{"x" => 1}, ttl: 2)
+    :ok = Aerospike.touch!(conn, key, ttl: 6)
+
+    Process.sleep(3_000)
+    assert {:ok, rec} = Aerospike.get(conn, key)
+    assert rec.bins["x"] == 1
+  end
+
   test "delete! returns boolean on success", %{conn: conn, host: host, port: port} do
     key = Helpers.unique_key("test", "facade_itest")
     on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
@@ -414,6 +438,37 @@ defmodule Aerospike.Integration.FacadeTest do
     assert record.bins["v"] == 1
   end
 
+  test "put with nil removes a bin", %{conn: conn, host: host, port: port} do
+    key = Helpers.unique_key("test", "facade_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, key, %{"a" => 1, "b" => 2})
+    :ok = Aerospike.put!(conn, key, %{"b" => nil})
+    assert {:ok, record} = Aerospike.get(conn, key)
+    assert record.bins["a"] == 1
+    refute Map.has_key?(record.bins, "b")
+  end
+
+  test "delete with filter expression can reject and then allow deletion", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key = Helpers.unique_key("test", "facade_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, key, %{"age" => 10})
+
+    deny_filter = Exp.gt(Exp.int_bin("age"), Exp.val(20))
+    allow_filter = Exp.gt(Exp.int_bin("age"), Exp.val(5))
+
+    assert {:error, %Aerospike.Error{code: :filtered_out}} =
+             Aerospike.delete(conn, key, filter: deny_filter)
+
+    assert {:ok, true} = Aerospike.delete(conn, key, filter: allow_filter)
+    assert {:ok, false} = Aerospike.delete(conn, key)
+  end
+
   test "close stops supervisor with default timeout", %{conn: conn} do
     sup = Aerospike.Supervisor.sup_name(conn)
     assert Process.whereis(sup) != nil
@@ -460,5 +515,18 @@ defmodule Aerospike.Integration.FacadeTest do
 
   defp cluster_ready?(name) do
     match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
+  end
+
+  defp assert_eventually(fun, retries \\ 20, interval \\ 200) do
+    if fun.() do
+      :ok
+    else
+      if retries == 0 do
+        flunk("condition did not become true within timeout")
+      else
+        Process.sleep(interval)
+        assert_eventually(fun, retries - 1, interval)
+      end
+    end
   end
 end

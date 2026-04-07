@@ -11,6 +11,12 @@ for all demo checks (enterprise + TLS + mTLS):
 make demo-stack-up
 ```
 
+## Configuration
+
+Connection settings for the shared `:aero` connection live in `config/config.exs`
+(defaults to `localhost:3000`, pool size 4). Examples that require special
+infrastructure (TLS, mTLS) manage their own connections.
+
 ## Running All Examples
 
 ```bash

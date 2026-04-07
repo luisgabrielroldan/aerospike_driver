@@ -77,6 +77,26 @@ defmodule Aerospike.Integration.OperateTest do
     assert rec.bins["s"] == "a"
   end
 
+  test "operate supports add + put + get in one round-trip", %{conn: conn, host: host, port: port} do
+    key = Helpers.unique_key("test", "operate_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    assert :ok = Aerospike.put(conn, key, %{"n" => 1, "s" => "hello"})
+
+    import Op
+
+    assert {:ok, rec} =
+             Aerospike.operate(conn, key, [
+               add("n", 4),
+               put("tag", "ok"),
+               get("n"),
+               get("tag")
+             ])
+
+    assert rec.bins["n"] == 5
+    assert rec.bins["tag"] == "ok"
+  end
+
   test "list append remove size", %{conn: conn, host: host, port: port} do
     key = Helpers.unique_key("test", "operate_itest")
     on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
@@ -99,6 +119,34 @@ defmodule Aerospike.Integration.OperateTest do
     assert rec.bins["tags"] == 1
   end
 
+  test "list operations cover insert, pop, sort and rank reads", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key = Helpers.unique_key("test", "operate_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    assert :ok = Aerospike.put(conn, key, %{"nums" => [3, 1, 2]})
+
+    assert {:ok, _} =
+             Aerospike.operate(conn, key, [
+               ListOp.insert("nums", 1, 5),
+               ListOp.sort("nums")
+             ])
+
+    assert {:ok, rec1} =
+             Aerospike.operate(conn, key, [
+               ListOp.get_by_rank("nums", 0),
+               ListOp.pop("nums", 0)
+             ])
+
+    assert rec1.bins["nums"] == 1
+
+    assert {:ok, rec2} = Aerospike.get(conn, key)
+    assert rec2.bins["nums"] == [2, 3, 5]
+  end
+
   test "map put get_by_key remove_by_key", %{conn: conn, host: host, port: port} do
     key = Helpers.unique_key("test", "operate_itest")
     on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
@@ -117,6 +165,42 @@ defmodule Aerospike.Integration.OperateTest do
              Aerospike.operate(conn, key, [
                MapOp.remove_by_key("prefs", "lang", return_type: MapOp.return_none())
              ])
+  end
+
+  test "map increment and get_by_rank_range_from", %{conn: conn, host: host, port: port} do
+    key = Helpers.unique_key("test", "operate_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    assert :ok = Aerospike.put(conn, key, %{"_seed" => 0})
+
+    assert {:ok, _} =
+             Aerospike.operate(conn, key, [
+               MapOp.put_items("metrics", %{"a" => 1, "b" => 2, "c" => 3})
+             ])
+
+    assert {:ok, _} = Aerospike.operate(conn, key, [MapOp.increment("metrics", "b", 5)])
+
+    assert {:ok, rec} =
+             Aerospike.operate(conn, key, [
+               MapOp.get_by_rank_range_from("metrics", 0, return_type: MapOp.return_key_value())
+             ])
+
+    entries = rec.bins["metrics"]
+
+    case entries do
+      m when is_map(m) ->
+        assert m["b"] == 7 or m[:b] == 7
+
+      list when is_list(list) ->
+        assert Enum.any?(list, fn
+                 {"b", 7} -> true
+                 {:b, 7} -> true
+                 _ -> false
+               end)
+
+      other ->
+        flunk("unexpected map rank-range payload: #{inspect(other)}")
+    end
   end
 
   test "bit set and get", %{conn: conn, host: host, port: port} do
@@ -178,5 +262,25 @@ defmodule Aerospike.Integration.OperateTest do
              ])
 
     assert rec.bins["profile"] == 45.52
+  end
+
+  test "list/map round-trip supports nested and mixed values", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key = Helpers.unique_key("test", "operate_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    payload = %{
+      "list_bin" => [1, "two", true, %{"k" => "v"}],
+      "map_bin" => %{"n" => 1, "s" => "x", "l" => [1, 2], "m" => %{"deep" => true}}
+    }
+
+    assert :ok = Aerospike.put(conn, key, payload)
+    assert {:ok, rec} = Aerospike.get(conn, key)
+
+    assert rec.bins["list_bin"] == payload["list_bin"]
+    assert rec.bins["map_bin"] == payload["map_bin"]
   end
 end
