@@ -20,7 +20,7 @@ defmodule Demo.MixProject do
 
   defp deps do
     [
-      {:aerospike, path: "../.."},
+      {:aerospike_driver, path: "../.."},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end

@@ -1,13 +1,13 @@
 defmodule Aerospike.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
   @source_url "https://github.com/luisgabrielroldan/aerospike_driver"
   @description "Idiomatic Elixir client for the Aerospike database"
 
   def project do
     [
-      app: :aerospike,
+      app: :aerospike_driver,
       version: @version,
       elixir: "~> 1.15",
       aliases: aliases(),
