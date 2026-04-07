@@ -94,6 +94,11 @@ defmodule Aerospike.Op.List do
 
   alias Aerospike.Protocol.CDT
 
+  @typedoc """
+  Opaque list-CDT operation for `Aerospike.operate/4`.
+
+  Construct via `Aerospike.Op.List.*` builder functions and pass in an operation list.
+  """
   @opaque t :: Aerospike.Op.t()
 
   # Operation type integers — `official_libs/aerospike-client-go/cdt_list.go`

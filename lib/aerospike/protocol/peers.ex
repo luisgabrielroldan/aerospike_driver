@@ -8,6 +8,20 @@ defmodule Aerospike.Protocol.Peers do
   # Captures: 1=node_name, 2=tls_name (may be empty), 3=comma-separated addresses.
   @peer_regex ~r/\[([^,\[\]]+),([^,\[\]]*),\[([^\]]*)\]\]/
 
+  @typedoc """
+  One peer from `peers-clear-std`.
+
+  Field `node_name` is the cluster node identifier (ETS key in the nodes table). It is not
+  renamed to `name`; public APIs use `t:Aerospike.node_info/0` with a `name` field instead.
+  """
+  @type peer :: %{node_name: String.t(), host: String.t(), port: :inet.port_number()}
+
+  @type parse_result :: %{
+          generation: non_neg_integer(),
+          default_port: :inet.port_number(),
+          peers: [peer()]
+        }
+
   @doc """
   Parses `peers-clear-std` info value.
 
@@ -15,14 +29,7 @@ defmodule Aerospike.Protocol.Peers do
 
   Empty peer list: `0,3000,[]`
   """
-  @spec parse_peers_clear_std(String.t()) ::
-          {:ok,
-           %{
-             generation: non_neg_integer(),
-             default_port: :inet.port_number(),
-             peers: [%{node_name: String.t(), host: String.t(), port: :inet.port_number()}]
-           }}
-          | :error
+  @spec parse_peers_clear_std(String.t()) :: {:ok, parse_result()} | :error
   def parse_peers_clear_std(s) when is_binary(s) do
     s = String.trim(s)
 

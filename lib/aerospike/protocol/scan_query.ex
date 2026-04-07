@@ -5,6 +5,7 @@ defmodule Aerospike.Protocol.ScanQuery do
 
   alias Aerospike.Exp
   alias Aerospike.Filter
+  alias Aerospike.PartitionFilter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
@@ -20,11 +21,7 @@ defmodule Aerospike.Protocol.ScanQuery do
           required(:record_max) => non_neg_integer()
         }
 
-  @type partial_partition :: %{
-          required(:id) => integer(),
-          required(:digest) => binary(),
-          optional(:bval) => integer() | nil
-        }
+  @type partial_partition :: PartitionFilter.partition_entry()
 
   @doc """
   Builds a framed AS_MSG wire binary for a partition scan on one node.

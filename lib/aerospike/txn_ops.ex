@@ -15,12 +15,22 @@ defmodule Aerospike.TxnOps do
   alias Aerospike.Tables
   alias Aerospike.Txn
 
+  @typedoc """
+  Per-transaction row in the `txn_tracking` ETS table (`Tables.txn_tracking/1`).
+
+  Lifecycle: `state` progresses `:open` → `:verified` → `:committed` or `:aborted` (or
+  directly to `:aborted` on failure). `namespace` is set on the first participating key
+  and must match thereafter. `deadline` is set when the server-side monitor record is
+  registered. `reads` maps each read key to its record version for the verify phase;
+  `writes` collects keys that completed a successful write. `write_in_doubt` is set when
+  the server reports an ambiguous write outcome during roll-forward.
+  """
   @type tracking :: %{
           state: :open | :verified | :committed | :aborted,
           namespace: String.t() | nil,
           deadline: integer(),
           reads: %{Key.t() => term()},
-          writes: MapSet.t(),
+          writes: MapSet.t(Key.t()),
           write_in_doubt: boolean()
         }
 
@@ -219,6 +229,7 @@ defmodule Aerospike.TxnOps do
     }
   end
 
+  @spec update_tracking(atom(), Txn.t(), (tracking() -> tracking())) :: true
   defp update_tracking(conn_name, %Txn{} = txn, fun) do
     case :ets.lookup(Tables.txn_tracking(conn_name), txn.id) do
       [{_, data}] ->

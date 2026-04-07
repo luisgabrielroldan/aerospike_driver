@@ -67,6 +67,11 @@ defmodule Aerospike do
   """
   @type conn :: atom()
 
+  @typedoc """
+  One cluster node as returned by `nodes/1`: display `name`, TCP `host`, and `port`.
+  """
+  @type node_info :: %{name: String.t(), host: String.t(), port: non_neg_integer()}
+
   @doc """
   Returns a child specification for supervision trees.
 
@@ -921,14 +926,14 @@ defmodule Aerospike do
   @doc """
   Returns the list of cluster nodes with their name, host, and port.
 
+  Each element matches `t:Aerospike.node_info/0`.
+
   ## Example
 
       {:ok, [%{name: "BB9...", host: "127.0.0.1", port: 3000}]} = Aerospike.nodes(:aero)
 
   """
-  @spec nodes(conn()) ::
-          {:ok, [%{name: String.t(), host: String.t(), port: integer()}]}
-          | {:error, Error.t()}
+  @spec nodes(conn()) :: {:ok, [node_info()]} | {:error, Error.t()}
   def nodes(conn) when is_atom(conn), do: Admin.nodes(conn)
 
   @doc """

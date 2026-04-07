@@ -3,7 +3,7 @@ defmodule Aerospike.Tables do
   # Canonical ETS table name helpers for one named connection.
   # All cluster state lives in these four tables, owned by TableOwner.
 
-  # {node_name, %{host, port, pool_pid, active, features, rack_id}}
+  # {node_name, row} — `row` is `t:Aerospike.Cluster.node_row/0` (see `insert_node_registry/5`).
   @doc false
   def nodes(name) when is_atom(name), do: :"#{name}_nodes"
 

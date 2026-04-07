@@ -45,6 +45,9 @@ defmodule Aerospike.Router do
   """
   @typedoc """
   Keys grouped per node with the `NimblePool` pid used to reach that node.
+
+  Invariant: for a given node name, every entry in the map shares the same `pool_pid`
+  (enforced when building the map; mismatch yields `{:error, %Aerospike.Error{}}`).
   """
   @type node_batch_group :: %{
           pool_pid: pid(),
@@ -128,11 +131,14 @@ defmodule Aerospike.Router do
 
   @typedoc """
   Scan/query partitions grouped per node with pool PID and PID vs digest partition lists.
+
+  Invariant: for a given node name, `parts_full` and `parts_partial` belong to the same
+  `pool_pid` (enforced when building the map; mismatch yields `{:error, %Aerospike.Error{}}`).
   """
   @type node_partition_group :: %{
           pool_pid: pid(),
           parts_full: [non_neg_integer()],
-          parts_partial: [map()]
+          parts_partial: [PartitionFilter.partition_entry()]
         }
 
   @doc """
@@ -233,6 +239,7 @@ defmodule Aerospike.Router do
   @spec random_node_pool(atom()) :: {:ok, pid(), String.t()} | {:error, Error.t()}
   def random_node_pool(conn_name) when is_atom(conn_name) do
     with :ok <- check_ready(conn_name) do
+      # ETS row shape: `t:Aerospike.Cluster.node_row/0` (`insert_node_registry/5`).
       conn_name
       |> Tables.nodes()
       |> :ets.tab2list()
@@ -397,6 +404,7 @@ defmodule Aerospike.Router do
     end
   end
 
+  # ETS row shape: `t:Aerospike.Cluster.node_row/0` (`insert_node_registry/5`).
   defp lookup_pool(name, node_name) do
     case :ets.lookup(Tables.nodes(name), node_name) do
       [] ->

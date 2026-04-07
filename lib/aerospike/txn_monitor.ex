@@ -122,6 +122,7 @@ defmodule Aerospike.TxnMonitor do
     end
   end
 
+  @spec fetch_namespace(atom(), Txn.t()) :: {:ok, String.t()} | {:error, Error.t()}
   defp fetch_namespace(conn_name, txn) do
     case TxnOps.get_tracking(conn_name, txn) do
       {:ok, %{namespace: ns}} when is_binary(ns) ->

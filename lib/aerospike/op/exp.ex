@@ -27,6 +27,11 @@ defmodule Aerospike.Op.Exp do
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.MessagePack
 
+  @typedoc """
+  Opaque expression operation for `Aerospike.operate/4`.
+
+  Construct with `read/3` or `write/3` and pass in an operation list.
+  """
   @opaque t :: Aerospike.Op.t()
 
   @doc """

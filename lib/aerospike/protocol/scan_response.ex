@@ -12,6 +12,12 @@ defmodule Aerospike.Protocol.ScanResponse do
   alias Aerospike.Protocol.ResultCode
   alias Aerospike.Record
 
+  @typedoc """
+  Partition progress from a scan/query AS_MSG frame (`partition_done` field).
+
+  Same keys and meaning as `t:Aerospike.PartitionFilter.partition_entry/0` (`id`, `digest`, `bval`);
+  kept as a separate type because values are produced by the wire decoder, not user input.
+  """
   @type partition_done_info :: %{
           id: integer(),
           digest: binary() | nil,

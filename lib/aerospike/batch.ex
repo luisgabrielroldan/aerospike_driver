@@ -71,6 +71,12 @@ defmodule Aerospike.Batch do
           }
   end
 
+  @typedoc """
+  One batch operation entry for `Aerospike.batch_operate/3`.
+
+  A batch request can mix reads, writes, deletes, `operate`, and UDF invocations.
+  The server returns one `Aerospike.BatchResult.t()` per input entry in input order.
+  """
   @type t :: Read.t() | Put.t() | Delete.t() | Operate.t() | UDF.t()
 
   @doc """

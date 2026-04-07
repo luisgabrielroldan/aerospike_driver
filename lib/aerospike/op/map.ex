@@ -91,6 +91,11 @@ defmodule Aerospike.Op.Map do
 
   alias Aerospike.Protocol.CDT
 
+  @typedoc """
+  Opaque map-CDT operation for `Aerospike.operate/4`.
+
+  Construct via `Aerospike.Op.Map.*` builder functions and pass in an operation list.
+  """
   @opaque t :: Aerospike.Op.t()
 
   @set_type 64

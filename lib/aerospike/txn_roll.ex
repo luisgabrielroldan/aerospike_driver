@@ -27,6 +27,7 @@ defmodule Aerospike.TxnRoll do
   alias Aerospike.TxnMonitor
   alias Aerospike.TxnOps
 
+  # Branches pattern-match `t:Aerospike.TxnOps.tracking/0` from `TxnOps.get_tracking/2`.
   @doc false
   @spec commit(atom(), Txn.t(), keyword()) ::
           {:ok, :committed | :already_committed} | {:error, Error.t()}
@@ -49,6 +50,7 @@ defmodule Aerospike.TxnRoll do
     end
   end
 
+  # Branches pattern-match `t:Aerospike.TxnOps.tracking/0` from `TxnOps.get_tracking/2`.
   @doc false
   @spec abort(atom(), Txn.t(), keyword()) ::
           {:ok, :aborted | :already_aborted} | {:error, Error.t()}
@@ -68,6 +70,7 @@ defmodule Aerospike.TxnRoll do
     end
   end
 
+  # Success tuple carries `t:Aerospike.TxnOps.tracking/0`.state from `TxnOps.get_tracking/2`.
   @doc false
   @spec txn_status(atom(), Txn.t()) ::
           {:ok, :open | :verified | :committed | :aborted} | {:error, Error.t()}

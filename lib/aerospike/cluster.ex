@@ -27,6 +27,18 @@ defmodule Aerospike.Cluster do
   @default_tend_interval 1_000
   @default_pool_size 10
 
+  @typedoc """
+  One row in the nodes ETS table (`Tables.nodes/1`): TCP endpoint, pool pid, liveness, features, rack id.
+  """
+  @type node_row :: %{
+          host: String.t(),
+          port: non_neg_integer(),
+          pool_pid: pid(),
+          active: boolean(),
+          features: MapSet.t(),
+          rack_id: term()
+        }
+
   @doc false
   def child_spec(opts) when is_list(opts) do
     name = Keyword.fetch!(opts, :name)
@@ -496,8 +508,16 @@ defmodule Aerospike.Cluster do
 
   # Writes the node's metadata into the nodes ETS table. The Router reads
   # this to look up pool PIDs when routing requests.
+  @spec insert_node_registry(map(), String.t(), String.t(), non_neg_integer(), pid()) :: :ok
   defp insert_node_registry(state, node_name, host, port, pool_pid) do
-    row = %{
+    row = node_registry_row(host, port, pool_pid)
+    :ets.insert(Tables.nodes(state.name), {node_name, row})
+    :ok
+  end
+
+  @spec node_registry_row(String.t(), non_neg_integer(), pid()) :: node_row()
+  defp node_registry_row(host, port, pool_pid) do
+    %{
       host: host,
       port: port,
       # PID of the NimblePool for this node.
@@ -508,9 +528,6 @@ defmodule Aerospike.Cluster do
       # Rack-aware routing; nil until rack config is supported.
       rack_id: nil
     }
-
-    :ets.insert(Tables.nodes(state.name), {node_name, row})
-    :ok
   end
 
   # Signals to the Router that the cluster is ready to serve requests.

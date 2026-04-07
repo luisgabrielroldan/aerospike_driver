@@ -18,6 +18,11 @@ defmodule Aerospike.PartitionFilter do
             digest: nil,
             partitions: []
 
+  @typedoc """
+  One partition slot in a filter or cursor: `id`, optional 20-byte record `digest` for resume,
+  optional `bval`. Canonical map shape for scan/query routing, wire DIGEST_ARRAY rows, and
+  decoded partition-done markers (see `Aerospike.Protocol.ScanResponse.partition_done_info/0`).
+  """
   @type partition_entry :: %{
           required(:id) => integer(),
           optional(:digest) => binary() | nil,

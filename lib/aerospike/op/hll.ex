@@ -15,6 +15,11 @@ defmodule Aerospike.Op.HLL do
 
   alias Aerospike.Protocol.CDT
 
+  @typedoc """
+  Opaque HyperLogLog operation for `Aerospike.operate/4`.
+
+  Construct via `Aerospike.Op.HLL.*` builder functions and pass in an operation list.
+  """
   @opaque t :: Aerospike.Op.t()
 
   @init 0

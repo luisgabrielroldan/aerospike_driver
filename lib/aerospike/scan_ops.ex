@@ -20,6 +20,14 @@ defmodule Aerospike.ScanOps do
 
   @count_per_node_cap 2_147_483_647
 
+  @typep partition_groups :: %{String.t() => Router.node_partition_group()}
+
+  @typep fanout_prepared :: %{
+           groups: partition_groups(),
+           node_wires: [{pid(), iodata(), ScanQuery.node_partitions()}],
+           replica_index: non_neg_integer()
+         }
+
   @doc false
   @spec distribute_record_max(pos_integer(), pos_integer()) :: [pos_integer()]
   def distribute_record_max(total, num_nodes)
@@ -336,6 +344,12 @@ defmodule Aerospike.ScanOps do
     end
   end
 
+  @spec prepare_fanout(
+          atom(),
+          Scan.t() | Query.t(),
+          keyword(),
+          (term(), pos_integer() -> [pos_integer()])
+        ) :: {:ok, fanout_prepared()} | {:error, Error.t()}
   defp prepare_fanout(conn_name, scannable, opts, distribute_fn) do
     replica_index = replica_index_from_opts(opts)
     {full_ids, partials} = Router.expand_partition_filter(scannable.partition_filter)
@@ -386,6 +400,7 @@ defmodule Aerospike.ScanOps do
   defp scannable_set(%Scan{set: s}), do: s || ""
   defp scannable_set(%Query{set: s}), do: s
 
+  @spec ensure_has_node_groups(partition_groups()) :: :ok | {:error, Error.t()}
   defp ensure_has_node_groups(groups) do
     if map_size(groups) == 0 do
       {:error, Error.from_result_code(:invalid_cluster_partition_map)}
@@ -394,6 +409,14 @@ defmodule Aerospike.ScanOps do
     end
   end
 
+  @spec merge_partial_entries(
+          atom(),
+          String.t(),
+          String.t(),
+          partition_groups(),
+          [PartitionFilter.partition_entry()],
+          non_neg_integer()
+        ) :: {:ok, partition_groups()} | {:error, Error.t()}
   defp merge_partial_entries(conn_name, namespace, set, groups, partials, replica_index) do
     with {:ok, groups2} <-
            Enum.reduce_while(partials, {:ok, groups}, fn entry, {:ok, acc} ->
@@ -699,7 +722,10 @@ defmodule Aerospike.ScanOps do
   defp namespace_set(%Scan{namespace: ns, set: set}), do: {ns, set}
   defp namespace_set(%Query{namespace: ns, set: set}), do: {ns, set}
 
+  @spec build_wire(Scan.t(), ScanQuery.node_partitions(), keyword()) :: binary()
   defp build_wire(%Scan{} = s, np, opts), do: ScanQuery.build_scan(s, np, opts)
+
+  @spec build_wire(Query.t(), ScanQuery.node_partitions(), keyword()) :: binary()
   defp build_wire(%Query{} = q, np, opts), do: ScanQuery.build_query(q, np, opts)
 
   defp replica_index_from_opts(opts) do

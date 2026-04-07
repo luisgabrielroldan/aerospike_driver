@@ -42,11 +42,10 @@ defmodule Aerospike.Admin do
   end
 
   @doc false
-  @spec nodes(atom()) ::
-          {:ok, [%{name: String.t(), host: String.t(), port: integer()}]}
-          | {:error, Error.t()}
+  @spec nodes(atom()) :: {:ok, [Aerospike.node_info()]} | {:error, Error.t()}
   def nodes(conn_name) when is_atom(conn_name) do
     with :ok <- check_ready(conn_name) do
+      # `row` is `t:Aerospike.Cluster.node_row/0` from `insert_node_registry/5`.
       node_list =
         conn_name
         |> Tables.nodes()

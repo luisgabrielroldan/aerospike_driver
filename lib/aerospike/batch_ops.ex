@@ -12,6 +12,8 @@ defmodule Aerospike.BatchOps do
   alias Aerospike.Router
   alias Aerospike.Tables
 
+  @typep batch_groups :: %{String.t() => Router.node_batch_group()}
+
   @spec batch_get(atom(), [Key.t()], keyword()) ::
           {:ok, [Aerospike.Record.t() | nil]} | {:error, Error.t()}
   def batch_get(conn, keys, opts) when is_atom(conn) and is_list(keys) and is_list(opts) do
@@ -90,6 +92,8 @@ defmodule Aerospike.BatchOps do
     {:ok, filled}
   end
 
+  @spec run_per_node_get(atom(), batch_groups(), [Key.t()], keyword()) ::
+          {:ok, [Aerospike.Record.t() | nil]} | {:error, Error.t()}
   defp run_per_node_get(conn, groups, all_keys, merged) do
     merge_slot_results(
       conn,
@@ -122,6 +126,8 @@ defmodule Aerospike.BatchOps do
     ])
   end
 
+  @spec run_per_node_exists(atom(), batch_groups(), non_neg_integer(), keyword()) ::
+          {:ok, [boolean()]} | {:error, Error.t()}
   defp run_per_node_exists(conn, groups, count, merged) do
     merge_slot_results(
       conn,
@@ -140,6 +146,8 @@ defmodule Aerospike.BatchOps do
     )
   end
 
+  @spec run_per_node_operate(atom(), batch_groups(), [Batch.t()], keyword()) ::
+          {:ok, [Aerospike.BatchResult.t() | nil]} | {:error, Error.t()}
   defp run_per_node_operate(conn, groups, all_ops, merged) do
     n = length(all_ops)
     ops_tuple = List.to_tuple(all_ops)
@@ -164,6 +172,15 @@ defmodule Aerospike.BatchOps do
     )
   end
 
+  @spec merge_slot_results(
+          atom(),
+          batch_groups(),
+          (String.t(), Router.node_batch_group() ->
+             {:ok, list()} | {:error, Error.t()}),
+          non_neg_integer(),
+          term(),
+          keyword()
+        ) :: {:ok, list()} | {:error, Error.t()}
   defp merge_slot_results(conn, groups, fun, slot_count, empty_val, merged) do
     timeout_ms = batch_task_await_timeout_ms(merged)
     task_sup = Tables.task_sup(conn)

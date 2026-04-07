@@ -17,6 +17,11 @@ defmodule Aerospike.Op.Bit do
 
   alias Aerospike.Protocol.CDT
 
+  @typedoc """
+  Opaque bitwise operation for `Aerospike.operate/4`.
+
+  Construct via `Aerospike.Op.Bit.*` builder functions and pass in an operation list.
+  """
   @opaque t :: Aerospike.Op.t()
 
   @resize 0

@@ -11,7 +11,24 @@ defmodule Aerospike.Filter do
   @enforce_keys [:bin_name, :index_type, :particle_type, :begin, :end]
   defstruct [:bin_name, :index_type, :particle_type, :begin, :end, :index_name, :ctx]
 
+  @typedoc """
+  Secondary-index source type for query predicates.
+
+  - `:default` — scalar bin index
+  - `:list` — list element index
+  - `:mapkeys` — map-key index
+  - `:mapvalues` — map-value index
+  - `:geo_within` — points-within-region geospatial query
+  - `:geo_contains` — region-contains-point geospatial query
+  """
   @type index_type :: :default | :list | :mapkeys | :mapvalues | :geo_within | :geo_contains
+
+  @typedoc """
+  Indexed value family used in filter predicate encoding.
+
+  This client currently supports signed int64 (`:integer`) and UTF-8 string (`:string`)
+  filter values.
+  """
   @type particle_type :: :integer | :string
 
   @type t :: %__MODULE__{

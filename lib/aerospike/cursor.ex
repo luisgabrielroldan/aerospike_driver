@@ -10,6 +10,7 @@ defmodule Aerospike.Cursor do
   import Bitwise
 
   alias Aerospike.Error
+  alias Aerospike.PartitionFilter
 
   @enforce_keys [:partitions]
   defstruct [:partitions]
@@ -23,13 +24,7 @@ defmodule Aerospike.Cursor do
   @flag_digest 1
   @flag_bval 2
 
-  @type partition_entry :: %{
-          required(:id) => integer(),
-          optional(:digest) => binary() | nil,
-          optional(:bval) => integer() | nil
-        }
-
-  @type t :: %__MODULE__{partitions: list(partition_entry())}
+  @type t :: %__MODULE__{partitions: [PartitionFilter.partition_entry()]}
 
   @min_int64 -9_223_372_036_854_775_808
   @max_int64 9_223_372_036_854_775_807
