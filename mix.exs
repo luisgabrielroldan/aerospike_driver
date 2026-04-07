@@ -111,6 +111,7 @@ defmodule Aerospike.MixProject do
         "guides/batch-operations.md",
         "guides/queries-and-scanning.md",
         "guides/expressions.md",
+        "guides/policies.md",
         "guides/transactions.md",
         "guides/secondary-indexes.md",
         "guides/udfs.md"
