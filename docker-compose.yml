@@ -73,3 +73,43 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  aerospike-ee-tls:
+    image: aerospike/aerospike-server-enterprise:latest
+    container_name: aerospike-ee-tls
+    hostname: aerospike-ee-tls
+    profiles: [enterprise]
+    ports:
+      - "4333:4333" # TLS client protocol
+      - "3111:3001" # fabric
+      - "3112:3002" # heartbeat
+    volumes:
+      - ./aerospike-enterprise-tls.conf:/opt/aerospike/aerospike.conf
+      - ./test/support/fixtures/tls:/opt/aerospike/tls:ro
+    command: ["--config-file", "/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  aerospike-ee-pki:
+    image: aerospike/aerospike-server-enterprise:latest
+    container_name: aerospike-ee-pki
+    hostname: aerospike-ee-pki
+    profiles: [enterprise]
+    ports:
+      - "4334:4334" # TLS+mTLS client protocol
+      - "3121:3001" # fabric
+      - "3122:3002" # heartbeat
+    volumes:
+      - ./aerospike-enterprise-pki.conf:/opt/aerospike/aerospike.conf
+      - ./test/support/fixtures/tls:/opt/aerospike/tls:ro
+    command: ["--config-file", "/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

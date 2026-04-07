@@ -4,10 +4,11 @@ Examples for the Aerospike Elixir client. Each example is a module under `Demo.E
 
 ## Prerequisites
 
-An Aerospike server running on `localhost:3000`. From the repository root:
+From the `aerospike_driver` directory, start the minimum localhost stack needed
+for all demo checks (enterprise + TLS + mTLS):
 
 ```bash
-docker compose up -d
+make demo-stack-up
 ```
 
 ## Running All Examples
@@ -16,6 +17,22 @@ docker compose up -d
 cd aerospike_driver/examples/demo
 mix deps.get
 mix run run_all.exs
+```
+
+## TLS/PKI Setup
+
+`TlsSecureConnection` and `PkiAuth` are localhost-only by default:
+
+- It tries `localhost:4333` as TLS endpoint.
+- It tries `localhost:4334` as mTLS endpoint.
+- It uses `../../test/support/fixtures/tls/ca.crt` for peer verification when present.
+- It falls back to `verify_none` when no CA fixture exists.
+- `PkiAuth` requires `client.crt` and `client.key` from the same fixtures dir.
+
+From `aerospike_driver`, prepare the local stack:
+
+```bash
+make demo-stack-up
 ```
 
 ## Running a Single Example
@@ -75,9 +92,9 @@ iex> Demo.Examples.Batch.run()
 | `Truncate` | Truncate a set and verify record count drops to zero |
 | `TxnConcurrent` | Multi-record transactions: `transaction/2` wrapper, abort rollback, manual commit |
 
-### Stubs (Require Special Infrastructure)
+### Requires Local Infrastructure
 
 | Module | Reason |
 |--------|--------|
-| `TlsSecureConnection` | Requires TLS-configured server |
-| `PkiAuth` | Requires Enterprise + PKI auth |
+| `TlsSecureConnection` | Requires local TLS endpoint on `localhost:4333` |
+| `PkiAuth` | Requires local mTLS endpoint on `localhost:4334` |

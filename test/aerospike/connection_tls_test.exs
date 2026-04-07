@@ -5,14 +5,24 @@ defmodule Aerospike.ConnectionTlsTest do
   alias Aerospike.Protocol.Info
   alias Aerospike.Test.MockTcpServer
   alias Aerospike.Test.MockTlsServer
+  alias Aerospike.Test.TlsFixtures
 
   setup_all do
-    server_conf = MockTlsServer.generate_test_certs()
-    %{server_conf: server_conf}
+    case TlsFixtures.load() do
+      {:ok, %{server_ssl_opts: server_conf, client_ssl_opts: client_tls_opts}} ->
+        %{server_conf: server_conf, client_tls_opts: client_tls_opts}
+
+      {:error, :fixtures_missing} ->
+        server_conf = MockTlsServer.generate_test_certs()
+        %{server_conf: server_conf, client_tls_opts: [verify: :verify_none]}
+    end
   end
 
   describe "TLS connect" do
-    test "with IP host returns :ssl transport", %{server_conf: server_conf} do
+    test "with IP host returns :ssl transport", %{
+      server_conf: server_conf,
+      client_tls_opts: client_tls_opts
+    } do
       {:ok, lsock, port} = MockTlsServer.start()
 
       server =
@@ -26,7 +36,7 @@ defmodule Aerospike.ConnectionTlsTest do
                  port: port,
                  timeout: 5_000,
                  tls: true,
-                 tls_opts: [verify: :verify_none]
+                 tls_opts: client_tls_opts
                )
 
       assert {:ssl, _} = conn.transport
@@ -34,7 +44,10 @@ defmodule Aerospike.ConnectionTlsTest do
       Task.await(server)
     end
 
-    test "with hostname triggers SNI code path", %{server_conf: server_conf} do
+    test "with hostname triggers SNI code path", %{
+      server_conf: server_conf,
+      client_tls_opts: client_tls_opts
+    } do
       {:ok, lsock, port} = MockTlsServer.start()
 
       server =
@@ -48,7 +61,7 @@ defmodule Aerospike.ConnectionTlsTest do
                  port: port,
                  timeout: 5_000,
                  tls: true,
-                 tls_opts: [verify: :verify_none]
+                 tls_opts: client_tls_opts
                )
 
       assert {:ssl, _} = conn.transport
@@ -57,7 +70,10 @@ defmodule Aerospike.ConnectionTlsTest do
       Task.await(server)
     end
 
-    test "preserves existing server_name_indication in tls_opts", %{server_conf: server_conf} do
+    test "preserves existing server_name_indication in tls_opts", %{
+      server_conf: server_conf,
+      client_tls_opts: client_tls_opts
+    } do
       {:ok, lsock, port} = MockTlsServer.start()
 
       server =
@@ -65,13 +81,18 @@ defmodule Aerospike.ConnectionTlsTest do
           MockTlsServer.accept_once_tls(lsock, server_conf, fn _ssl -> :ok end)
         end)
 
+      tls_opts =
+        client_tls_opts
+        |> Keyword.put(:verify, :verify_none)
+        |> Keyword.put(:server_name_indication, ~c"custom.example")
+
       assert {:ok, conn} =
                Connection.connect(
                  host: "localhost",
                  port: port,
                  timeout: 5_000,
                  tls: true,
-                 tls_opts: [verify: :verify_none, server_name_indication: ~c"custom.example"]
+                 tls_opts: tls_opts
                )
 
       assert {:ssl, _} = conn.transport
@@ -104,7 +125,10 @@ defmodule Aerospike.ConnectionTlsTest do
   end
 
   describe "TLS close/1" do
-    test "returns :ok for a TLS connection", %{server_conf: server_conf} do
+    test "returns :ok for a TLS connection", %{
+      server_conf: server_conf,
+      client_tls_opts: client_tls_opts
+    } do
       {:ok, lsock, port} = MockTlsServer.start()
 
       server =
@@ -120,7 +144,7 @@ defmodule Aerospike.ConnectionTlsTest do
           port: port,
           timeout: 5_000,
           tls: true,
-          tls_opts: [verify: :verify_none]
+          tls_opts: client_tls_opts
         )
 
       assert :ok = Connection.close(conn)
@@ -129,7 +153,10 @@ defmodule Aerospike.ConnectionTlsTest do
   end
 
   describe "TLS transport_peername/1" do
-    test "returns {:ok, {ip, port}} for TLS connection", %{server_conf: server_conf} do
+    test "returns {:ok, {ip, port}} for TLS connection", %{
+      server_conf: server_conf,
+      client_tls_opts: client_tls_opts
+    } do
       {:ok, lsock, port} = MockTlsServer.start()
 
       server =
@@ -145,7 +172,7 @@ defmodule Aerospike.ConnectionTlsTest do
           port: port,
           timeout: 5_000,
           tls: true,
-          tls_opts: [verify: :verify_none]
+          tls_opts: client_tls_opts
         )
 
       assert {:ok, {_ip, _port}} = Connection.transport_peername(conn)
@@ -155,7 +182,10 @@ defmodule Aerospike.ConnectionTlsTest do
   end
 
   describe "TLS request/recv_message" do
-    test "request_info round-trip through TLS", %{server_conf: server_conf} do
+    test "request_info round-trip through TLS", %{
+      server_conf: server_conf,
+      client_tls_opts: client_tls_opts
+    } do
       {:ok, lsock, port} = MockTlsServer.start()
 
       server =
@@ -172,7 +202,7 @@ defmodule Aerospike.ConnectionTlsTest do
           port: port,
           timeout: 5_000,
           tls: true,
-          tls_opts: [verify: :verify_none]
+          tls_opts: client_tls_opts
         )
 
       assert {:ok, _conn2, %{"status" => "ok"}} = Connection.request_info(conn, ["status"])
@@ -180,7 +210,10 @@ defmodule Aerospike.ConnectionTlsTest do
       Task.await(server)
     end
 
-    test "handles zero-length body over TLS", %{server_conf: server_conf} do
+    test "handles zero-length body over TLS", %{
+      server_conf: server_conf,
+      client_tls_opts: client_tls_opts
+    } do
       {:ok, lsock, port} = MockTlsServer.start()
 
       server =
@@ -197,7 +230,7 @@ defmodule Aerospike.ConnectionTlsTest do
           port: port,
           timeout: 5_000,
           tls: true,
-          tls_opts: [verify: :verify_none]
+          tls_opts: client_tls_opts
         )
 
       data = Info.encode_request(["status"])

@@ -46,7 +46,7 @@ defmodule Demo do
     Demo.Examples.BatchUdf,
     Demo.Examples.NestedCdt,
     Demo.Examples.TxnConcurrent,
-    # Stubs (require special infrastructure)
+    # Require special infrastructure/configuration
     Demo.Examples.TlsSecureConnection,
     Demo.Examples.PkiAuth
   ]

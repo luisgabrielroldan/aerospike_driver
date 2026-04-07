@@ -318,6 +318,22 @@ mix test --include enterprise
 mix test.all
 ```
 
+### TLS Fixture Generation
+
+TLS unit tests can run with generated certificate fixtures (CA/server/client) instead
+of ephemeral in-memory certs:
+
+```bash
+# Generate fixture certs/keys under test/support/fixtures/tls
+make tls-fixtures
+
+# Run only TLS connection tests
+make test.tls
+```
+
+The TLS test suite automatically uses these fixtures when present and falls back to
+ephemeral certs when missing.
+
 ### Coverage
 
 Coverage runs integration tests via Mix aliases:
