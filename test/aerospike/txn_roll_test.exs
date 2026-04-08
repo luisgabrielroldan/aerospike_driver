@@ -301,6 +301,18 @@ defmodule Aerospike.TxnRollTest do
   # ---------------------------------------------------------------------------
 
   describe "transaction/3 — error handling paths" do
+    test "transaction/3 accepts an explicit txn handle and commits on success", %{conn: conn} do
+      txn = Txn.new(timeout: 7_000)
+
+      assert {:ok, :ok_value} =
+               TxnRoll.transaction(conn, txn, fn inner_txn ->
+                 assert inner_txn.id == txn.id
+                 :ok_value
+               end)
+
+      assert {:error, :not_found} = TxnOps.get_tracking(conn, txn)
+    end
+
     test "Aerospike.Error raised in callback aborts and returns {:error, e}", %{conn: conn} do
       error = Error.from_result_code(:key_not_found)
 
@@ -384,6 +396,31 @@ defmodule Aerospike.TxnRollTest do
       assert {:error, _} = result
 
       [{:txn, txn}] = :ets.lookup(captured_txn, :txn)
+      assert {:error, :not_found} = TxnOps.get_tracking(conn, txn)
+    end
+
+    test "commit verify failure rolls writes back and cleans tracking", %{
+      conn: conn,
+      txn: txn,
+      key: key
+    } do
+      TxnOps.init_tracking(conn, txn)
+      :ok = TxnOps.set_namespace(conn, txn, key.namespace)
+      TxnOps.track_read(conn, txn, key, 123)
+
+      assert {:error, %Error{}} = TxnRoll.commit(conn, txn)
+      assert {:error, :not_found} = TxnOps.get_tracking(conn, txn)
+    end
+
+    test "abort with tracked writes runs rollback path and cleans tracking", %{
+      conn: conn,
+      txn: txn,
+      key: key
+    } do
+      TxnOps.init_tracking(conn, txn)
+      TxnOps.track_write(conn, txn, key, nil, :ok)
+
+      assert {:ok, :aborted} = TxnRoll.abort(conn, txn)
       assert {:error, :not_found} = TxnOps.get_tracking(conn, txn)
     end
   end

@@ -5,7 +5,10 @@ defmodule Aerospike.FacadeUnitTest do
 
   alias Aerospike.Batch
   alias Aerospike.Key
+  alias Aerospike.Scan
+  alias Aerospike.TableOwner
   alias Aerospike.Tables
+  alias Aerospike.Txn
 
   setup do
     key = Key.new("test", "users", "facade-unit-key")
@@ -129,6 +132,29 @@ defmodule Aerospike.FacadeUnitTest do
       assert {:error, %{code: :parameter_error}} =
                Aerospike.batch_operate(:nonexistent, [Batch.read(key)], bad_opt: true)
     end
+
+    test "single-record APIs return parameter_error on invalid key shape" do
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.delete(:nonexistent, {:invalid})
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.exists(:nonexistent, {:invalid})
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.touch(:nonexistent, {:invalid})
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.operate(:nonexistent, {:invalid}, [get("n")])
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.add(:nonexistent, {:invalid}, %{"n" => 1})
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.append(:nonexistent, {:invalid}, %{"s" => "x"})
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.prepend(:nonexistent, {:invalid}, %{"s" => "x"})
+    end
   end
 
   describe "bang variants raise on validation error" do
@@ -234,6 +260,108 @@ defmodule Aerospike.FacadeUnitTest do
 
       assert spec.type == :supervisor
       assert match?({Aerospike.Supervisor, :start_link, [_]}, spec.start)
+    end
+  end
+
+  describe "scan/admin/txn wrapper coverage branches" do
+    setup do
+      scan = Scan.new("test", "users")
+      {:ok, scan: scan}
+    end
+
+    test "scan APIs map option validation errors and bang wrappers raise", %{scan: scan} do
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.stream!(:nonexistent, scan, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.all(:nonexistent, scan, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.all!(:nonexistent, scan, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.count(:nonexistent, scan, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.count!(:nonexistent, scan, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.page(:nonexistent, scan, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.page!(:nonexistent, scan, bad_opt: true)
+      end
+    end
+
+    test "admin wrappers map validation errors", %{} do
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.info(:nonexistent, "namespaces", bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.info_node(:nonexistent, "node", "statistics", bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.truncate(:nonexistent, "test", bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.truncate(:nonexistent, "test", "users", bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.create_index(:nonexistent, "test", "users", bad_opt: true)
+    end
+
+    test "udf wrappers cover opts variants and key coercion error", %{key: key} do
+      conn = :"facade_udf_#{System.unique_integer([:positive, :monotonic])}"
+      meta = Tables.meta(conn)
+      nodes = Tables.nodes(conn)
+      parts = Tables.partitions(conn)
+
+      :ets.new(meta, [:set, :public, :named_table])
+      :ets.new(nodes, [:set, :public, :named_table, read_concurrency: true])
+      :ets.new(parts, [:set, :public, :named_table, read_concurrency: true])
+
+      on_exit(fn ->
+        for t <- [meta, nodes, parts] do
+          try do
+            :ets.delete(t)
+          catch
+            :error, :badarg -> :ok
+          end
+        end
+      end)
+
+      assert {:error, %Aerospike.Error{}} =
+               Aerospike.register_udf(conn, "function x() return 1 end", "x.lua", [])
+
+      assert {:error, %Aerospike.Error{}} =
+               Aerospike.remove_udf(conn, "x.lua", [])
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.apply_udf(:nonexistent, {:invalid}, "pkg", "f", [], timeout: 1_000)
+
+      assert {:error, %Aerospike.Error{}} =
+               Aerospike.apply_udf(conn, key, "pkg", "f", [], timeout: 1_000)
+    end
+
+    test "transaction wrappers delegate to TxnRoll variants" do
+      conn = :"facade_txn_#{System.unique_integer([:positive, :monotonic])}"
+      {:ok, pid} = TableOwner.start_link(name: conn)
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+      end)
+
+      txn = Txn.new()
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} = Aerospike.commit(conn, txn)
+      assert {:error, %Aerospike.Error{code: :parameter_error}} = Aerospike.abort(conn, txn)
+      assert {:error, %Aerospike.Error{code: :parameter_error}} = Aerospike.txn_status(conn, txn)
+
+      assert {:ok, :v1} = Aerospike.transaction(conn, fn _txn -> :v1 end)
+      assert {:ok, :v2} = Aerospike.transaction(conn, [timeout: 5_000], fn _txn -> :v2 end)
     end
   end
 end

@@ -127,6 +127,23 @@ defmodule Aerospike.Integration.ScanQueryTest do
     assert n >= 15
   end
 
+  test "all!/count!/page! return successful values", %{conn: conn} do
+    scan = Scan.new(@namespace, @set) |> Scan.max_records(5)
+
+    records = Aerospike.all!(conn, scan)
+    assert is_list(records)
+    assert length(records) <= 5
+
+    n = Aerospike.count!(conn, Scan.new(@namespace, @set))
+    assert is_integer(n)
+    assert n >= 15
+
+    page = Aerospike.page!(conn, scan)
+    assert %Page{records: page_records, done?: done?} = page
+    assert is_list(page_records)
+    assert is_boolean(done?)
+  end
+
   test "stream!/2 yields records", %{conn: conn} do
     scan = Scan.new(@namespace, @set) |> Scan.max_records(20)
 

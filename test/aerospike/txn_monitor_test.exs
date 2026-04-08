@@ -9,8 +9,10 @@ defmodule Aerospike.TxnMonitorTest do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Message
+  alias Aerospike.TableOwner
   alias Aerospike.Txn
   alias Aerospike.TxnMonitor
+  alias Aerospike.TxnOps
 
   describe "monitor_key/2" do
     test "returns a Key with set '<ERO~MRT' and integer user_key" do
@@ -286,6 +288,84 @@ defmodule Aerospike.TxnMonitorTest do
         TxnMonitor.check_result_code(%AsmMsg{result_code: 99_999})
 
       assert msg =~ "99999"
+    end
+  end
+
+  describe "transaction preflight and monitor commands" do
+    setup do
+      conn = :"txn_monitor_test_#{System.unique_integer([:positive, :monotonic])}"
+      {:ok, pid} = TableOwner.start_link(name: conn)
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+      end)
+
+      txn = Txn.new()
+      key = Key.new("test", "users", "txn-monitor-key")
+
+      {:ok, conn: conn, txn: txn, key: key}
+    end
+
+    test "register_key/4 returns parameter_error when txn was not initialized", %{
+      conn: conn,
+      txn: txn,
+      key: key
+    } do
+      assert {:error, %Error{code: :parameter_error}} = TxnMonitor.register_key(conn, txn, key)
+    end
+
+    test "register_key/4 is a no-op when key was already tracked as a write", %{
+      conn: conn,
+      txn: txn,
+      key: key
+    } do
+      TxnOps.init_tracking(conn, txn)
+      :ok = TxnOps.set_namespace(conn, txn, key.namespace)
+      TxnOps.track_write(conn, txn, key, nil, :ok)
+
+      assert :ok = TxnMonitor.register_key(conn, txn, key)
+    end
+
+    test "register_key/4 builds and sends monitor create/write wire when monitor does not exist",
+         %{
+           conn: conn,
+           txn: txn,
+           key: key
+         } do
+      TxnOps.init_tracking(conn, txn)
+      :ok = TxnOps.set_namespace(conn, txn, key.namespace)
+
+      assert {:error, %Error{}} = TxnMonitor.register_key(conn, txn, key)
+    end
+
+    test "register_key/4 uses append-only path when monitor already exists", %{
+      conn: conn,
+      txn: txn,
+      key: key
+    } do
+      TxnOps.init_tracking(conn, txn)
+      :ok = TxnOps.set_namespace(conn, txn, key.namespace)
+      TxnOps.set_deadline(conn, txn, 1)
+
+      assert {:error, %Error{}} = TxnMonitor.register_key(conn, txn, key)
+    end
+
+    test "mark_roll_forward/3 returns parameter_error when namespace is not set", %{
+      conn: conn,
+      txn: txn
+    } do
+      TxnOps.init_tracking(conn, txn)
+
+      assert {:error, %Error{code: :parameter_error}} = TxnMonitor.mark_roll_forward(conn, txn)
+    end
+
+    test "mark_roll_forward/3 and close/3 return parameter_error for unknown txn", %{conn: conn} do
+      unknown_txn = Txn.new()
+
+      assert {:error, %Error{code: :parameter_error}} =
+               TxnMonitor.mark_roll_forward(conn, unknown_txn)
+
+      assert {:error, %Error{code: :parameter_error}} = TxnMonitor.close(conn, unknown_txn)
     end
   end
 

@@ -180,6 +180,64 @@ defmodule Aerospike.CRUDTest do
       assert [%Field{data: <<500::32-little-signed>>}] = write_deadlines
       assert read_deadlines == []
     end
+
+    test "txn preflight read/write errors are surfaced before routing", %{key: key} do
+      conn = unique_conn_name()
+      txn = Txn.new()
+      create_meta_table(conn)
+      create_txn_tracking_table(conn)
+
+      on_exit(fn ->
+        maybe_delete_meta_table(conn)
+        maybe_delete_txn_tracking_table(conn)
+      end)
+
+      assert {:error, %Error{code: :parameter_error}} = CRUD.get(conn, key, txn: txn)
+      assert {:error, %Error{code: :parameter_error}} = CRUD.exists(conn, key, txn: txn)
+      assert {:error, %Error{code: :parameter_error}} = CRUD.put(conn, key, %{"n" => 1}, txn: txn)
+      assert {:error, %Error{code: :parameter_error}} = CRUD.delete(conn, key, txn: txn)
+      assert {:error, %Error{code: :parameter_error}} = CRUD.touch(conn, key, txn: txn)
+
+      assert {:error, %Error{code: :parameter_error}} =
+               CRUD.operate(conn, key, [Aerospike.Op.get("n")], txn: txn)
+    end
+
+    test "apply_udf packs all supported argument shapes before network dispatch", %{key: key} do
+      conn = unique_conn_name()
+      create_meta_table(conn)
+      on_exit(fn -> maybe_delete_meta_table(conn) end)
+
+      args = [
+        "txt",
+        {:bytes, <<1, 2, 3>>},
+        nil,
+        true,
+        false,
+        123,
+        1.5,
+        [1, "a", {:bytes, <<9>>}],
+        %{"x" => 1, "nested" => %{"y" => 2}}
+      ]
+
+      assert {:error, %Error{}} = CRUD.apply_udf(conn, key, "pkg", "fun", args, [])
+    end
+
+    test "direct write command entrypoints execute and fail cleanly when cluster is not ready", %{
+      key: key
+    } do
+      conn = unique_conn_name()
+      create_meta_table(conn)
+      on_exit(fn -> maybe_delete_meta_table(conn) end)
+
+      assert {:error, %Error{code: :cluster_not_ready}} = CRUD.put(conn, key, %{"n" => 1})
+      assert {:error, %Error{code: :cluster_not_ready}} = CRUD.add(conn, key, %{"n" => 1})
+      assert {:error, %Error{code: :cluster_not_ready}} = CRUD.append(conn, key, %{"s" => "x"})
+      assert {:error, %Error{code: :cluster_not_ready}} = CRUD.prepend(conn, key, %{"s" => "x"})
+      assert {:error, %Error{code: :cluster_not_ready}} = CRUD.exists(conn, key)
+
+      assert {:error, %Error{code: :cluster_not_ready}} =
+               CRUD.operate(conn, key, [Aerospike.Op.get("n")])
+    end
   end
 
   defp unique_conn_name do
@@ -190,9 +248,19 @@ defmodule Aerospike.CRUDTest do
     :ets.new(Tables.txn_tracking(conn), [:named_table, :set, :public])
   end
 
+  defp create_meta_table(conn) do
+    :ets.new(Tables.meta(conn), [:named_table, :set, :public])
+  end
+
   defp maybe_delete_txn_tracking_table(conn) do
     if :ets.whereis(Tables.txn_tracking(conn)) != :undefined do
       :ets.delete(Tables.txn_tracking(conn))
+    end
+  end
+
+  defp maybe_delete_meta_table(conn) do
+    if :ets.whereis(Tables.meta(conn)) != :undefined do
+      :ets.delete(Tables.meta(conn))
     end
   end
 end
