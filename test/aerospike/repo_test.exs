@@ -161,8 +161,7 @@ defmodule Aerospike.RepoTest do
 
       actual =
         NamedRepo.__info__(:functions)
-        |> Enum.reject(&(&1 in @meta_functions))
-        |> Enum.reject(&(&1 in @repo_only_functions))
+        |> Enum.reject(&(&1 in @meta_functions or &1 in @repo_only_functions))
         |> Enum.sort()
 
       missing = expected -- actual
