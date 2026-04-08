@@ -357,6 +357,81 @@ mix credo --strict
 mix dialyzer
 ```
 
+## Benchmarks
+
+The repository includes a Benchee-based benchmark suite under `bench/` with one baseline
+case per benchmark layer:
+
+- `bench/tests/micro/key_construction_bench.exs` (L1)
+- `bench/tests/e2e/crud_baseline_bench.exs` (L2)
+- `bench/tests/workload/ru_80_20_bench.exs` (L3)
+- `bench/tests/fanout/batch_get_bench.exs` (L4)
+
+### Prerequisites
+
+- Local Aerospike server reachable at `127.0.0.1:3000` by default.
+- Default benchmark namespace/set assumptions:
+  - namespace: `test`
+  - sets: `bench_e2e`, `bench_workload`, `bench_fanout`
+- Optional overrides:
+  - `AEROSPIKE_HOST`, `AEROSPIKE_PORT`
+  - `BENCH_NAMESPACE`, `BENCH_SET`
+
+### Run Modes
+
+All commands below are run from `aerospike_driver/`:
+
+```bash
+# Quick smoke run (short duration, low concurrency)
+mix bench --quick
+
+# Default baseline run
+mix bench
+
+# Extended run (longer duration, wider concurrency)
+mix bench --full
+```
+
+If you are new to the suite, start with a single L2 run:
+
+```bash
+mix bench --quick bench/tests/e2e/crud_baseline_bench.exs
+```
+
+Run a single benchmark file when iterating on one layer:
+
+```bash
+mix bench bench/tests/micro/key_construction_bench.exs
+mix bench bench/tests/e2e/crud_baseline_bench.exs
+mix bench bench/tests/workload/ru_80_20_bench.exs
+mix bench bench/tests/fanout/batch_get_bench.exs
+```
+
+Clean benchmark result directories:
+
+```bash
+mix bench.clean
+mix bench.clean --all
+```
+
+### Artifacts and Comparison
+
+Each benchmark run writes machine-readable JSON artifacts under `bench/results/<run-id>/`.
+You can set `BENCH_RUN_ID` to group before/after runs explicitly.
+
+```bash
+BENCH_RUN_ID=baseline mix bench
+BENCH_RUN_ID=candidate mix bench
+```
+
+Compare result directories by scenario IDs and key statistics (`average`, `ips`, `std_dev_ratio`)
+inside the JSON reports. For reliable comparisons, run the same profile multiple times and
+treat small deltas as noise unless the trend is consistent. Compare like-for-like scenarios only
+(same benchmark title and `scenario_id`), not cross-scenario pairs such as `put` vs `get`.
+
+For full benchmark setup and environment controls, see `bench/README.md`.
+`BENCH_PROFILE` remains supported for CI/scripts, but local usage can prefer `--quick`, `--default`, or `--full`.
+
 ## Disclaimer
 
 This is an independent, community-developed project. It is **not** affiliated with,
