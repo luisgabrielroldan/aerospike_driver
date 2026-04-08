@@ -19,6 +19,10 @@ defmodule Aerospike.Tables do
   @doc false
   def meta(name) when is_atom(name), do: :"#{name}_meta"
 
+  # Per-node circuit breaker error counters.
+  @doc false
+  def breaker(name) when is_atom(name), do: :"#{name}_breaker"
+
   # ETS key that the Router checks to confirm the cluster has completed initial tend.
   @doc false
   def ready_key, do: :cluster_ready

@@ -294,11 +294,7 @@ defmodule Aerospike.TxnMonitorTest do
   describe "transaction preflight and monitor commands" do
     setup do
       conn = :"txn_monitor_test_#{System.unique_integer([:positive, :monotonic])}"
-      {:ok, pid} = TableOwner.start_link(name: conn)
-
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
-      end)
+      _pid = start_supervised!({TableOwner, name: conn})
 
       txn = Txn.new()
       key = Key.new("test", "users", "txn-monitor-key")

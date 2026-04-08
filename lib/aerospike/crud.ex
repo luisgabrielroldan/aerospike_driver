@@ -12,6 +12,7 @@ defmodule Aerospike.CRUD do
   # 4. Route to the correct node via the partition map and send the wire bytes.
   # 5. Decode the response, track transaction state, and emit telemetry.
 
+  alias Aerospike.CircuitBreaker
   alias Aerospike.Error
   alias Aerospike.Exp
   alias Aerospike.Key
@@ -397,6 +398,7 @@ defmodule Aerospike.CRUD do
         case AsmMsg.decode(body) do
           {:ok, msg} ->
             result = on_msg.(msg, node)
+            maybe_record_device_overload(conn, node, result)
             track_txn_response(txn_track, msg, result)
             result
 
@@ -412,6 +414,16 @@ defmodule Aerospike.CRUD do
         {{:error, e}, nil}
     end
   end
+
+  defp maybe_record_device_overload(conn, node, {{:error, %Error{code: :device_overload}}, _}) do
+    CircuitBreaker.record_error(conn, node, :device_overload)
+  end
+
+  defp maybe_record_device_overload(conn, node, {:error, %Error{code: :device_overload}}) do
+    CircuitBreaker.record_error(conn, node, :device_overload)
+  end
+
+  defp maybe_record_device_overload(_conn, _node, _result), do: :ok
 
   # Wraps the command in a `:telemetry.span` so callers can observe latency,
   # success/failure, and which node handled the request.
