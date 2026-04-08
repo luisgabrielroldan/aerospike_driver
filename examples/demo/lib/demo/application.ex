@@ -6,7 +6,10 @@ defmodule Demo.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      {Aerospike, name: :aero, hosts: ["localhost:3000"]}
+      Demo.PrimaryClusterRepo,
+      Demo.EnterpriseRepo,
+      Demo.TlsClusterRepo,
+      Demo.MtlsClusterRepo
     ]
 
     opts = [strategy: :one_for_one, name: Demo.Supervisor]

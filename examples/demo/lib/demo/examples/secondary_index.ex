@@ -12,7 +12,7 @@ defmodule Demo.Examples.SecondaryIndex do
   alias Aerospike.Filter
   alias Aerospike.Query
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_sindex"
   @string_idx "demo_sindex_city"
@@ -37,7 +37,7 @@ defmodule Demo.Examples.SecondaryIndex do
       key = Aerospike.key(@namespace, @set, "idx_#{i}")
       city = Enum.at(@cities, i - 1)
       bins = %{"name" => "user_#{i}", "city" => city, "score" => i * 10}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -45,7 +45,7 @@ defmodule Demo.Examples.SecondaryIndex do
     Logger.info("  Creating string index on 'city'...")
 
     {:ok, task} =
-      Aerospike.create_index(@conn, @namespace, @set,
+      @repo.create_index(@namespace, @set,
         bin: "city",
         name: @string_idx,
         type: :string
@@ -60,7 +60,7 @@ defmodule Demo.Examples.SecondaryIndex do
     Logger.info("  Creating numeric index on 'score'...")
 
     {:ok, task2} =
-      Aerospike.create_index(@conn, @namespace, @set,
+      @repo.create_index(@namespace, @set,
         bin: "score",
         name: @numeric_idx,
         type: :numeric
@@ -78,7 +78,7 @@ defmodule Demo.Examples.SecondaryIndex do
       |> Query.where(Filter.equal("city", "portland"))
       |> Query.max_records(20)
 
-    {:ok, records} = Aerospike.all(@conn, query)
+    {:ok, records} = @repo.all(query)
 
     names = Enum.map(records, fn r -> r.bins["name"] end)
     Logger.info("    Found #{length(records)} portland records: #{Enum.join(names, ", ")}")
@@ -102,7 +102,7 @@ defmodule Demo.Examples.SecondaryIndex do
       |> Query.where(Filter.range("score", 50, 80))
       |> Query.max_records(50)
 
-    {:ok, records} = Aerospike.all(@conn, query)
+    {:ok, records} = @repo.all(query)
 
     for r <- records do
       score = r.bins["score"]
@@ -117,15 +117,15 @@ defmodule Demo.Examples.SecondaryIndex do
 
   defp drop_indexes do
     Logger.info("  Dropping indexes...")
-    Aerospike.drop_index(@conn, @namespace, @string_idx)
+    @repo.drop_index(@namespace, @string_idx)
     Logger.info("  Dropped '#{@string_idx}'.")
-    Aerospike.drop_index(@conn, @namespace, @numeric_idx)
+    @repo.drop_index(@namespace, @numeric_idx)
     Logger.info("  Dropped '#{@numeric_idx}'.")
   end
 
   defp cleanup do
     for i <- 1..@size do
-      Aerospike.delete(@conn, Aerospike.key(@namespace, @set, "idx_#{i}"))
+      @repo.delete(Aerospike.key(@namespace, @set, "idx_#{i}"))
     end
   end
 end

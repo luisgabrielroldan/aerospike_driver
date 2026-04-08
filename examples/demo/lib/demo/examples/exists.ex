@@ -6,7 +6,7 @@ defmodule Demo.Examples.Exists do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_exists"
 
@@ -18,13 +18,13 @@ defmodule Demo.Examples.Exists do
 
   defp exists_basic do
     key = key("present")
-    :ok = Aerospike.put!(@conn, key, %{"v" => 1})
+    :ok = @repo.put!(key, %{"v" => 1})
 
-    {:ok, true} = Aerospike.exists(@conn, key)
+    {:ok, true} = @repo.exists(key)
     Logger.info("  Exists for present key: true")
 
     absent_key = key("absent")
-    {:ok, false} = Aerospike.exists(@conn, absent_key)
+    {:ok, false} = @repo.exists(absent_key)
     Logger.info("  Exists for absent key: false")
   end
 
@@ -32,14 +32,14 @@ defmodule Demo.Examples.Exists do
     keys =
       for i <- 1..5 do
         k = key("batch_#{i}")
-        :ok = Aerospike.put!(@conn, k, %{"idx" => i})
+        :ok = @repo.put!(k, %{"idx" => i})
         k
       end
 
     missing = key("batch_missing")
     all_keys = keys ++ [missing]
 
-    {:ok, results} = Aerospike.batch_exists(@conn, all_keys)
+    {:ok, results} = @repo.batch_exists(all_keys)
 
     present = Enum.count(results, & &1)
     absent = Enum.count(results, &(!&1))
@@ -57,7 +57,7 @@ defmodule Demo.Examples.Exists do
     ids = ["present", "absent"] ++ Enum.map(1..5, &"batch_#{&1}") ++ ["batch_missing"]
 
     for id <- ids do
-      Aerospike.delete(@conn, key(id))
+      @repo.delete(key(id))
     end
   end
 

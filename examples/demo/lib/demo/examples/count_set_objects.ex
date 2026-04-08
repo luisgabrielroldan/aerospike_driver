@@ -11,7 +11,7 @@ defmodule Demo.Examples.CountSetObjects do
 
   alias Aerospike.Scan
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_count"
   @size 10
@@ -28,7 +28,7 @@ defmodule Demo.Examples.CountSetObjects do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "cnt_#{i}")
       bins = %{"data" => "value_#{i}"}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -36,7 +36,7 @@ defmodule Demo.Examples.CountSetObjects do
     Logger.info("  Counting records in set '#{@set}'...")
 
     scan = Scan.new(@namespace, @set)
-    {:ok, count} = Aerospike.count(@conn, scan)
+    {:ok, count} = @repo.count(scan)
 
     Logger.info("  Count: #{count} records in #{@namespace}/#{@set}")
 
@@ -50,7 +50,7 @@ defmodule Demo.Examples.CountSetObjects do
   defp cleanup do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "cnt_#{i}")
-      Aerospike.delete(@conn, key)
+      @repo.delete(key)
     end
   end
 end

@@ -12,7 +12,7 @@ defmodule Demo.Examples.NestedCdt do
   alias Aerospike.Op.List, as: ListOp
   alias Aerospike.Op.Map, as: MapOp
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_ncdt"
 
@@ -29,16 +29,16 @@ defmodule Demo.Examples.NestedCdt do
     key = key("nmap")
 
     :ok =
-      Aerospike.put!(@conn, key, %{
+      @repo.put!(key, %{
         "profile" => %{"name" => "alice", "settings" => %{"theme" => "light", "font" => 14}}
       })
 
     {:ok, _} =
-      Aerospike.operate(@conn, key, [
+      @repo.operate(key, [
         MapOp.put("profile", "theme", "dark", ctx: [Ctx.map_key("settings")])
       ])
 
-    {:ok, rec} = Aerospike.get(@conn, key)
+    {:ok, rec} = @repo.get(key)
     settings = rec.bins["profile"]["settings"]
     Logger.info("    settings after ctx update: #{inspect(settings)}")
 
@@ -57,12 +57,12 @@ defmodule Demo.Examples.NestedCdt do
     key = key("nlist")
 
     :ok =
-      Aerospike.put!(@conn, key, %{
+      @repo.put!(key, %{
         "data" => ["header", ["a", "b"]]
       })
 
     {:ok, rec} =
-      Aerospike.operate(@conn, key, [
+      @repo.operate(key, [
         ListOp.append("data", "c", ctx: [Ctx.list_index(1)]),
         ListOp.size("data", ctx: [Ctx.list_index(1)])
       ])
@@ -74,7 +74,7 @@ defmodule Demo.Examples.NestedCdt do
       raise "Expected inner list size 3, got #{size}"
     end
 
-    {:ok, full} = Aerospike.get(@conn, key)
+    {:ok, full} = @repo.get(key)
     inner = Enum.at(full.bins["data"], 1)
     Logger.info("    Inner list contents: #{inspect(inner)}")
 
@@ -89,12 +89,12 @@ defmodule Demo.Examples.NestedCdt do
     key = key("combo")
 
     :ok =
-      Aerospike.put!(@conn, key, %{
+      @repo.put!(key, %{
         "config" => %{"tags" => ["elixir", "aerospike"], "version" => 1}
       })
 
     {:ok, rec} =
-      Aerospike.operate(@conn, key, [
+      @repo.operate(key, [
         ListOp.append("config", "otp", ctx: [Ctx.map_key("tags")]),
         ListOp.size("config", ctx: [Ctx.map_key("tags")])
       ])
@@ -106,14 +106,14 @@ defmodule Demo.Examples.NestedCdt do
       raise "Expected tags size 3, got #{size}"
     end
 
-    {:ok, full} = Aerospike.get(@conn, key)
+    {:ok, full} = @repo.get(key)
     tags = full.bins["config"]["tags"]
     Logger.info("    Tags: #{inspect(tags)}")
   end
 
   defp cleanup do
     for id <- ["nmap", "nlist", "combo"] do
-      Aerospike.delete(@conn, key(id))
+      @repo.delete(key(id))
     end
   end
 

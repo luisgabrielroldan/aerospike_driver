@@ -12,7 +12,7 @@ defmodule Demo.Examples.PartitionFilter do
   alias Aerospike.PartitionFilter, as: PF
   alias Aerospike.Scan
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_pf"
   @size 50
@@ -30,7 +30,7 @@ defmodule Demo.Examples.PartitionFilter do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "pf_#{i}")
       bins = %{"idx" => i}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -44,7 +44,7 @@ defmodule Demo.Examples.PartitionFilter do
       |> Scan.partition_filter(PF.by_id(partition_id))
       |> Scan.max_records(100)
 
-    {:ok, records} = Aerospike.all(@conn, scan)
+    {:ok, records} = @repo.all(scan)
     Logger.info("    Found #{length(records)} records in partition #{partition_id}")
 
     if records == [] do
@@ -65,18 +65,18 @@ defmodule Demo.Examples.PartitionFilter do
       |> Scan.partition_filter(PF.by_range(begin_part, count))
       |> Scan.max_records(200)
 
-    {:ok, records} = Aerospike.all(@conn, scan)
+    {:ok, records} = @repo.all(scan)
     Logger.info("    Found #{length(records)} records in partition range")
 
     full_scan = Scan.new(@namespace, @set) |> Scan.max_records(200)
-    {:ok, all_records} = Aerospike.all(@conn, full_scan)
+    {:ok, all_records} = @repo.all(full_scan)
 
     Logger.info("    Partition subset: #{length(records)} / #{length(all_records)} total records")
   end
 
   defp cleanup do
     for i <- 1..@size do
-      Aerospike.delete(@conn, Aerospike.key(@namespace, @set, "pf_#{i}"))
+      @repo.delete(Aerospike.key(@namespace, @set, "pf_#{i}"))
     end
   end
 end

@@ -8,7 +8,7 @@ defmodule Demo.Examples.BitOps do
 
   alias Aerospike.Op
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_bitops"
 
@@ -22,11 +22,11 @@ defmodule Demo.Examples.BitOps do
 
   defp set_and_get do
     key = key("sg")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"bits" => {:bytes, <<0::32>>}})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"bits" => {:bytes, <<0::32>>}})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.Bit.set("bits", 0, 8, <<0xFF>>),
         Op.Bit.get("bits", 0, 32)
       ])
@@ -40,11 +40,11 @@ defmodule Demo.Examples.BitOps do
 
   defp count_bits do
     key = key("cnt")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"flags" => {:bytes, <<0b10101010, 0b11110000>>}})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"flags" => {:bytes, <<0b10101010, 0b11110000>>}})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.Bit.count("flags", 0, 16)
       ])
 
@@ -55,11 +55,11 @@ defmodule Demo.Examples.BitOps do
 
   defp integer_operations do
     key = key("int")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"data" => {:bytes, <<0::64>>}})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"data" => {:bytes, <<0::64>>}})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.Bit.set_int("data", 0, 32, 42),
         Op.Bit.get_int("data", 0, 32)
       ])
@@ -71,11 +71,11 @@ defmodule Demo.Examples.BitOps do
 
   defp bitwise_or do
     key = key("bor")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"mask" => {:bytes, <<0b10100000>>}})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"mask" => {:bytes, <<0b10100000>>}})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.Bit.bw_or("mask", 0, 8, <<0b01010000>>),
         Op.Bit.get("mask", 0, 8)
       ])
@@ -88,7 +88,7 @@ defmodule Demo.Examples.BitOps do
 
   defp cleanup do
     for id <- ["sg", "cnt", "int", "bor"] do
-      Aerospike.delete(@conn, key(id))
+      @repo.delete(key(id))
     end
   end
 

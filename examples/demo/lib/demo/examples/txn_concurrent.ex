@@ -11,7 +11,7 @@ defmodule Demo.Examples.TxnConcurrent do
   Transactions require Aerospike Enterprise Edition with strong-consistency
   namespaces. On Community Edition this example will report an error.
 
-  Starts its own connection to the EE instance (default `localhost:3100`).
+  Uses the app-started `Demo.EnterpriseRepo` (default `localhost:3100`).
   Override with `AEROSPIKE_EE_HOST` and `AEROSPIKE_EE_PORT` env vars.
   Requires `make demo-stack-up` (or `docker compose --profile enterprise up -d`).
   """
@@ -20,7 +20,7 @@ defmodule Demo.Examples.TxnConcurrent do
 
   alias Aerospike.Txn
 
-  @conn :aero_ee
+  @repo Demo.EnterpriseRepo
   @namespace "test"
   @set "demo_txn"
 
@@ -28,35 +28,10 @@ defmodule Demo.Examples.TxnConcurrent do
     {host, port} = ee_host_port()
 
     if ee_reachable?(host, port) do
-      run_with_ee(host, port)
+      run_examples()
     else
       Logger.warning("  TxnConcurrent: skipped — EE not reachable on #{host}:#{port}")
       :skipped
-    end
-  end
-
-  defp run_with_ee(host, port) do
-    opts = [
-      name: @conn,
-      hosts: ["#{host}:#{port}"],
-      pool_size: 2,
-      connect_timeout: 5_000,
-      tend_interval: 60_000
-    ]
-
-    case Aerospike.start_link(opts) do
-      {:ok, _pid} ->
-        Process.sleep(1_500)
-        result = run_examples()
-        Aerospike.close(@conn)
-        result
-
-      {:error, reason} ->
-        Logger.warning(
-          "  TxnConcurrent: skipped — could not start EE connection: #{inspect(reason)}"
-        )
-
-        :skipped
     end
   end
 
@@ -78,16 +53,16 @@ defmodule Demo.Examples.TxnConcurrent do
     Logger.info("  transaction/2 wrapper: atomic multi-key write...")
 
     result =
-      Aerospike.transaction(@conn, fn txn ->
-        :ok = Aerospike.put!(@conn, key("txn_a"), %{"val" => 100}, txn: txn)
-        :ok = Aerospike.put!(@conn, key("txn_b"), %{"val" => 200}, txn: txn)
+      @repo.transaction(fn txn ->
+        :ok = @repo.put!(key("txn_a"), %{"val" => 100}, txn: txn)
+        :ok = @repo.put!(key("txn_b"), %{"val" => 200}, txn: txn)
         :committed
       end)
 
     case result do
       {:ok, :committed} ->
-        {:ok, rec_a} = Aerospike.get(@conn, key("txn_a"))
-        {:ok, rec_b} = Aerospike.get(@conn, key("txn_b"))
+        {:ok, rec_a} = @repo.get(key("txn_a"))
+        {:ok, rec_b} = @repo.get(key("txn_b"))
 
         unless rec_a.bins["val"] == 100 and rec_b.bins["val"] == 200 do
           raise "Transaction records mismatch: a=#{rec_a.bins["val"]}, b=#{rec_b.bins["val"]}"
@@ -104,11 +79,11 @@ defmodule Demo.Examples.TxnConcurrent do
   defp abort_rollback do
     Logger.info("  Abort rollback: verify writes are undone...")
 
-    :ok = Aerospike.put!(@conn, key("txn_c"), %{"val" => 1})
+    :ok = @repo.put!(key("txn_c"), %{"val" => 1})
 
     result =
-      Aerospike.transaction(@conn, fn txn ->
-        :ok = Aerospike.put!(@conn, key("txn_c"), %{"val" => 999}, txn: txn)
+      @repo.transaction(fn txn ->
+        :ok = @repo.put!(key("txn_c"), %{"val" => 999}, txn: txn)
         raise Aerospike.Error.from_result_code(:parameter_error, message: "deliberate abort")
       end)
 
@@ -117,7 +92,7 @@ defmodule Demo.Examples.TxnConcurrent do
         Logger.info("    Transaction aborted as expected.")
     end
 
-    {:ok, rec} = Aerospike.get(@conn, key("txn_c"))
+    {:ok, rec} = @repo.get(key("txn_c"))
 
     unless rec.bins["val"] == 1 do
       raise "Expected txn_c=1 after abort, got #{rec.bins["val"]}"
@@ -132,13 +107,13 @@ defmodule Demo.Examples.TxnConcurrent do
     txn = Txn.new(timeout: 5_000)
 
     {:ok, _} =
-      Aerospike.transaction(@conn, txn, fn txn ->
-        :ok = Aerospike.put!(@conn, key("txn_d"), %{"val" => 50}, txn: txn)
-        :ok = Aerospike.put!(@conn, key("txn_e"), %{"val" => 75}, txn: txn)
+      @repo.transaction(txn, fn txn ->
+        :ok = @repo.put!(key("txn_d"), %{"val" => 50}, txn: txn)
+        :ok = @repo.put!(key("txn_e"), %{"val" => 75}, txn: txn)
       end)
 
-    {:ok, rec_d} = Aerospike.get(@conn, key("txn_d"))
-    {:ok, rec_e} = Aerospike.get(@conn, key("txn_e"))
+    {:ok, rec_d} = @repo.get(key("txn_d"))
+    {:ok, rec_e} = @repo.get(key("txn_e"))
 
     unless rec_d.bins["val"] == 50 and rec_e.bins["val"] == 75 do
       raise "Transaction/3 mismatch: d=#{rec_d.bins["val"]}, e=#{rec_e.bins["val"]}"
@@ -149,7 +124,7 @@ defmodule Demo.Examples.TxnConcurrent do
 
   defp cleanup do
     for suffix <- ["txn_a", "txn_b", "txn_c", "txn_d", "txn_e"] do
-      Aerospike.delete(@conn, key(suffix))
+      @repo.delete(key(suffix))
     end
   end
 

@@ -13,9 +13,23 @@ make demo-stack-up
 
 ## Configuration
 
-Connection settings for the shared `:aero` connection live in `config/config.exs`
-(defaults to `localhost:3000`, pool size 4). Examples that require special
-infrastructure (TLS, mTLS) manage their own connections.
+Connection settings for demo repos live in `config/config.exs`:
+
+- `Demo.PrimaryClusterRepo` (`name: :aero`) -> `localhost:3000`
+- `Demo.EnterpriseRepo` (`name: :aero_ee`) -> `localhost:3100`
+- `Demo.TlsClusterRepo` (`name: :aero_tls`) -> `localhost:4333`
+- `Demo.MtlsClusterRepo` (`name: :aero_mtls`) -> `localhost:4334`
+
+`Demo.Application` starts all four repos at boot:
+
+- `Demo.PrimaryClusterRepo`
+- `Demo.EnterpriseRepo`
+- `Demo.TlsClusterRepo`
+- `Demo.MtlsClusterRepo`
+
+This means `mix run run_all.exs` expects the full demo stack endpoints to be
+available. If enterprise/TLS/mTLS endpoints are down, the application fails
+fast during startup.
 
 ## Running All Examples
 
@@ -23,6 +37,13 @@ infrastructure (TLS, mTLS) manage their own connections.
 cd aerospike_driver/examples/demo
 mix deps.get
 mix run run_all.exs
+```
+
+Ensure the full demo stack is running first:
+
+```bash
+cd aerospike_driver
+make demo-stack-up
 ```
 
 ## TLS/PKI Setup

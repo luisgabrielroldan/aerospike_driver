@@ -13,7 +13,7 @@ defmodule Demo.Examples.QueryPaginate do
   alias Aerospike.Page
   alias Aerospike.Query
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_qpage"
   @index_name "demo_qpage_qval_idx"
@@ -31,10 +31,10 @@ defmodule Demo.Examples.QueryPaginate do
   end
 
   defp cleanup_stale do
-    Aerospike.drop_index(@conn, @namespace, @index_name)
+    @repo.drop_index(@namespace, @index_name)
 
     for i <- 1..@size do
-      Aerospike.delete(@conn, Aerospike.key(@namespace, @set, "qp_#{i}"))
+      @repo.delete(Aerospike.key(@namespace, @set, "qp_#{i}"))
     end
   end
 
@@ -44,7 +44,7 @@ defmodule Demo.Examples.QueryPaginate do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "qp_#{i}")
       bins = %{"name" => "item_#{i}", @bin => i * 5}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -52,7 +52,7 @@ defmodule Demo.Examples.QueryPaginate do
     Logger.info("  Creating numeric index on '#{@bin}'...")
 
     {:ok, task} =
-      Aerospike.create_index(@conn, @namespace, @set,
+      @repo.create_index(@namespace, @set,
         bin: @bin,
         name: @index_name,
         type: :numeric
@@ -82,7 +82,7 @@ defmodule Demo.Examples.QueryPaginate do
     opts = if cursor, do: [cursor: cursor], else: []
 
     {:ok, %Page{records: records, cursor: next_cursor, done?: done?}} =
-      Aerospike.page(@conn, query, opts)
+      @repo.page(query, opts)
 
     count = length(records)
     new_total = total + count
@@ -120,7 +120,7 @@ defmodule Demo.Examples.QueryPaginate do
 
     try do
       results =
-        Aerospike.stream!(@conn, query)
+        @repo.stream!(query)
         |> Stream.map(fn r -> {r.bins["name"], r.bins[@bin]} end)
         |> Enum.to_list()
 
@@ -138,10 +138,10 @@ defmodule Demo.Examples.QueryPaginate do
   end
 
   defp cleanup do
-    Aerospike.drop_index(@conn, @namespace, @index_name)
+    @repo.drop_index(@namespace, @index_name)
 
     for i <- 1..@size do
-      Aerospike.delete(@conn, Aerospike.key(@namespace, @set, "qp_#{i}"))
+      @repo.delete(Aerospike.key(@namespace, @set, "qp_#{i}"))
     end
   end
 end

@@ -6,7 +6,7 @@ defmodule Demo.Examples.Prepend do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -15,17 +15,17 @@ defmodule Demo.Examples.Prepend do
     bin_name = "prependbin"
 
     # Delete record if it already exists
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
 
     # Initial prepend creates the record
     Logger.info("  Initial prepend will create record. Initial value is 'World'.")
-    :ok = Aerospike.prepend!(@conn, key, %{bin_name => "World"})
+    :ok = @repo.prepend!(key, %{bin_name => "World"})
 
     # Prepend "Hello " to existing record
     Logger.info("  Prepend 'Hello ' to existing record.")
-    :ok = Aerospike.prepend!(@conn, key, %{bin_name => "Hello "})
+    :ok = @repo.prepend!(key, %{bin_name => "Hello "})
 
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Failed to get: ns=#{@namespace} set=#{@set} key=prependkey"
@@ -41,6 +41,6 @@ defmodule Demo.Examples.Prepend do
     end
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 end

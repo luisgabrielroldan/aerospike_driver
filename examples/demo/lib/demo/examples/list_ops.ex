@@ -8,7 +8,7 @@ defmodule Demo.Examples.ListOps do
 
   alias Aerospike.Op
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_listops"
 
@@ -23,11 +23,11 @@ defmodule Demo.Examples.ListOps do
 
   defp append_and_insert do
     key = key("a_i")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"scores" => [10]})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"scores" => [10]})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.List.append("scores", 30),
         Op.List.append("scores", 20),
         Op.List.size("scores")
@@ -38,7 +38,7 @@ defmodule Demo.Examples.ListOps do
     unless size == 3, do: raise("Expected size=3, got #{size}")
 
     rec2 =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.List.insert("scores", 1, 15),
         Op.List.size("scores")
       ])
@@ -48,11 +48,11 @@ defmodule Demo.Examples.ListOps do
 
   defp pop_and_remove do
     key = key("p_r")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"q" => ["a", "b", "c", "d", "e"]})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"q" => ["a", "b", "c", "d", "e"]})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.List.pop("q", 0)
       ])
 
@@ -61,7 +61,7 @@ defmodule Demo.Examples.ListOps do
     unless popped == "a", do: raise("Expected 'a', got #{inspect(popped)}")
 
     rec2 =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.List.remove("q", -1),
         Op.List.size("q")
       ])
@@ -73,15 +73,15 @@ defmodule Demo.Examples.ListOps do
 
   defp sort_and_trim do
     key = key("s_t")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"nums" => [50, 10, 40, 20, 30]})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"nums" => [50, 10, 40, 20, 30]})
 
-    Aerospike.operate!(@conn, key, [
+    @repo.operate!(key, [
       Op.List.sort("nums", 0),
       Op.List.trim("nums", -3, 3)
     ])
 
-    {:ok, r} = Aerospike.get(@conn, key)
+    {:ok, r} = @repo.get(key)
     Logger.info("  Sort then trim (keep last 3): #{inspect(r.bins["nums"])}")
 
     unless length(r.bins["nums"]) == 3 do
@@ -91,11 +91,11 @@ defmodule Demo.Examples.ListOps do
 
   defp rank_queries do
     key = key("rank")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"vals" => [80, 20, 60, 40, 100]})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"vals" => [80, 20, 60, 40, 100]})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.List.get_by_rank_range("vals", -3, 3, return_type: Op.List.return_value())
       ])
 
@@ -106,11 +106,11 @@ defmodule Demo.Examples.ListOps do
 
   defp increment_element do
     key = key("incr")
-    Aerospike.delete(@conn, key)
-    :ok = Aerospike.put!(@conn, key, %{"counters" => [10, 20, 30]})
+    @repo.delete(key)
+    :ok = @repo.put!(key, %{"counters" => [10, 20, 30]})
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.List.increment("counters", 1, 5)
       ])
 
@@ -121,7 +121,7 @@ defmodule Demo.Examples.ListOps do
 
   defp cleanup do
     for id <- ["a_i", "p_r", "s_t", "rank", "incr"] do
-      Aerospike.delete(@conn, key(id))
+      @repo.delete(key(id))
     end
   end
 

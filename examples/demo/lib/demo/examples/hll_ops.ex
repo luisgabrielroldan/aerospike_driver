@@ -10,7 +10,7 @@ defmodule Demo.Examples.HllOps do
 
   alias Aerospike.Op
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_hll"
 
@@ -23,10 +23,10 @@ defmodule Demo.Examples.HllOps do
 
   defp init_and_add do
     key = key("basic")
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.HLL.add("visitors", ["user_1", "user_2", "user_3", "user_4", "user_5"], 10)
       ])
 
@@ -34,7 +34,7 @@ defmodule Demo.Examples.HllOps do
     Logger.info("  HLL add 5 unique elements: #{updates} register updates")
 
     rec2 =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.HLL.add("visitors", ["user_3", "user_4", "user_6"], 10)
       ])
 
@@ -42,7 +42,7 @@ defmodule Demo.Examples.HllOps do
     Logger.info("  HLL add 3 elements (2 duplicates): #{updates2} new register updates")
 
     rec3 =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.HLL.get_count("visitors")
       ])
 
@@ -58,7 +58,7 @@ defmodule Demo.Examples.HllOps do
     key = key("basic")
 
     rec =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.HLL.describe("visitors")
       ])
 
@@ -69,23 +69,23 @@ defmodule Demo.Examples.HllOps do
   defp union_count do
     key_a = key("set_a")
     key_b = key("set_b")
-    Aerospike.delete(@conn, key_a)
-    Aerospike.delete(@conn, key_b)
+    @repo.delete(key_a)
+    @repo.delete(key_b)
 
-    Aerospike.operate!(@conn, key_a, [
+    @repo.operate!(key_a, [
       Op.HLL.add("hll", ["apple", "banana", "cherry"], 8)
     ])
 
-    Aerospike.operate!(@conn, key_b, [
+    @repo.operate!(key_b, [
       Op.HLL.add("hll", ["cherry", "date", "elderberry"], 8)
     ])
 
     # HLL bins come back as {:raw, 18, binary} — extract the binary and wrap as {:bytes, ...}
-    {:ok, rec_b} = Aerospike.get(@conn, key_b)
+    {:ok, rec_b} = @repo.get(key_b)
     {:raw, _particle_type, hll_b_bytes} = rec_b.bins["hll"]
 
     rec =
-      Aerospike.operate!(@conn, key_a, [
+      @repo.operate!(key_a, [
         Op.HLL.get_union_count("hll", [{:bytes, hll_b_bytes}])
       ])
 
@@ -93,7 +93,7 @@ defmodule Demo.Examples.HllOps do
     Logger.info("  Union cardinality: #{union_est} (actual: 5, sets share 'cherry')")
 
     rec2 =
-      Aerospike.operate!(@conn, key_a, [
+      @repo.operate!(key_a, [
         Op.HLL.get_intersect_count("hll", [{:bytes, hll_b_bytes}])
       ])
 
@@ -103,7 +103,7 @@ defmodule Demo.Examples.HllOps do
 
   defp cleanup do
     for id <- ["basic", "set_a", "set_b"] do
-      Aerospike.delete(@conn, key(id))
+      @repo.delete(key(id))
     end
   end
 

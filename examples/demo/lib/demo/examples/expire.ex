@@ -10,7 +10,7 @@ defmodule Demo.Examples.Expire do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -25,11 +25,11 @@ defmodule Demo.Examples.Expire do
 
     # Write record with 2-second expiration
     Logger.info("  Put: key=expirekey bin=#{bin_name} value=#{bin_value} ttl=2")
-    :ok = Aerospike.put!(@conn, key, %{bin_name => bin_value}, ttl: 2)
+    :ok = @repo.put!(key, %{bin_name => bin_value}, ttl: 2)
 
     # Read the record before it expires
     Logger.info("  Get: key=expirekey (before expiry)")
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Failed to get record before expiry"
@@ -48,7 +48,7 @@ defmodule Demo.Examples.Expire do
     Process.sleep(3_000)
 
     # Read the record after it expires — should be gone
-    case Aerospike.get(@conn, key) do
+    case @repo.get(key) do
       {:error, %Aerospike.Error{code: :key_not_found}} ->
         Logger.info("  Expiry successful: record not found.")
 

@@ -8,7 +8,7 @@ defmodule Demo.Examples.Add do
 
   import Aerospike.Op, only: [add: 2, get: 1]
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -17,17 +17,17 @@ defmodule Demo.Examples.Add do
     bin_name = "addbin"
 
     # Delete record if it already exists
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
 
     # Initial add creates the record with value 10
     Logger.info("  Initial add will create record. Initial value is 10.")
-    :ok = Aerospike.add!(@conn, key, %{bin_name => 10})
+    :ok = @repo.add!(key, %{bin_name => 10})
 
     # Add 5 to existing record
     Logger.info("  Add 5 to existing record.")
-    :ok = Aerospike.add!(@conn, key, %{bin_name => 5})
+    :ok = @repo.add!(key, %{bin_name => 5})
 
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Failed to get: ns=#{@namespace} set=#{@set} key=addkey"
@@ -46,7 +46,7 @@ defmodule Demo.Examples.Add do
     Logger.info("  Add 30 to existing record via operate.")
 
     {:ok, record2} =
-      Aerospike.operate(@conn, key, [
+      @repo.operate(key, [
         add(bin_name, 30),
         get(bin_name)
       ])
@@ -61,6 +61,6 @@ defmodule Demo.Examples.Add do
     end
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 end

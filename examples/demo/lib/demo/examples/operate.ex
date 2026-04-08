@@ -8,7 +8,7 @@ defmodule Demo.Examples.Operate do
 
   import Aerospike.Op, only: [add: 2, put: 2, get: 1]
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -22,13 +22,13 @@ defmodule Demo.Examples.Operate do
       "  Put: ns=#{@namespace} set=#{@set} key=opkey bin1=optintbin value1=7 bin2=optstringbin value2='string value'"
     )
 
-    :ok = Aerospike.put!(@conn, key, bins)
+    :ok = @repo.put!(key, bins)
 
     # Add integer, write new string, and read record — all in one round-trip
     Logger.info("  Operate: add(optintbin, 4) + put(optstringbin, 'new string') + get()")
 
     {:ok, record} =
-      Aerospike.operate(@conn, key, [
+      @repo.operate(key, [
         add("optintbin", 4),
         put("optstringbin", "new string"),
         get("optintbin"),
@@ -58,6 +58,6 @@ defmodule Demo.Examples.Operate do
     Logger.info("  Validated: optstringbin='#{str_val}'")
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 end

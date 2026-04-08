@@ -13,7 +13,7 @@ defmodule Demo.Examples.ScanPaginate do
   alias Aerospike.Page
   alias Aerospike.Scan
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_scan_page"
   @size 12
@@ -32,7 +32,7 @@ defmodule Demo.Examples.ScanPaginate do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "page_#{i}")
       bins = %{"name" => "item_#{i}", "idx" => i}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -47,7 +47,7 @@ defmodule Demo.Examples.ScanPaginate do
     opts = if cursor, do: [cursor: cursor], else: []
 
     {:ok, %Page{records: records, cursor: next_cursor, done?: done?}} =
-      Aerospike.page(@conn, scan, opts)
+      @repo.page(scan, opts)
 
     count = length(records)
     new_total = total + count
@@ -75,7 +75,7 @@ defmodule Demo.Examples.ScanPaginate do
     Logger.info("  Demonstrating cursor serialization...")
 
     scan = Scan.new(@namespace, @set) |> Scan.max_records(3)
-    {:ok, %Page{cursor: cursor, done?: done?}} = Aerospike.page(@conn, scan)
+    {:ok, %Page{cursor: cursor, done?: done?}} = @repo.page(scan)
 
     if done? do
       Logger.info("  All records fit in one page — no cursor to serialize.")
@@ -87,7 +87,7 @@ defmodule Demo.Examples.ScanPaginate do
       )
 
       {:ok, decoded} = Cursor.decode(encoded)
-      {:ok, %Page{records: records}} = Aerospike.page(@conn, scan, cursor: decoded)
+      {:ok, %Page{records: records}} = @repo.page(scan, cursor: decoded)
 
       Logger.info("  Resumed from decoded cursor: got #{length(records)} more records.")
     end
@@ -96,7 +96,7 @@ defmodule Demo.Examples.ScanPaginate do
   defp cleanup do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "page_#{i}")
-      Aerospike.delete(@conn, key)
+      @repo.delete(key)
     end
   end
 end

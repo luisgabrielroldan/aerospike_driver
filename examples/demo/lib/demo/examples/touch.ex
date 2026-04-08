@@ -6,7 +6,7 @@ defmodule Demo.Examples.Touch do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -16,14 +16,14 @@ defmodule Demo.Examples.Touch do
 
     # Create record with 2-second expiration
     Logger.info("  Create record with 2 second expiration.")
-    :ok = Aerospike.put!(@conn, key, %{bin_name => "touchvalue"}, ttl: 2)
+    :ok = @repo.put!(key, %{bin_name => "touchvalue"}, ttl: 2)
 
     # Touch same record with 5-second expiration
     Logger.info("  Touch same record with 5 second expiration.")
-    :ok = Aerospike.touch!(@conn, key, ttl: 5)
+    :ok = @repo.touch!(key, ttl: 5)
 
     # Verify the record has a non-zero TTL
-    {:ok, record} = Aerospike.get(@conn, key, header_only: true)
+    {:ok, record} = @repo.get(key, header_only: true)
 
     unless record do
       raise "Failed to get record after touch"
@@ -35,7 +35,7 @@ defmodule Demo.Examples.Touch do
     Logger.info("  Sleep 3 seconds.")
     Process.sleep(3_000)
 
-    {:ok, record2} = Aerospike.get(@conn, key)
+    {:ok, record2} = @repo.get(key)
 
     unless record2 do
       raise "Record should still exist after 3 seconds (was touched to 5s TTL)"
@@ -47,7 +47,7 @@ defmodule Demo.Examples.Touch do
     Logger.info("  Sleep 4 seconds.")
     Process.sleep(4_000)
 
-    case Aerospike.get(@conn, key) do
+    case @repo.get(key) do
       {:error, %Aerospike.Error{code: :key_not_found}} ->
         Logger.info("  Success: record expired as expected.")
 

@@ -20,7 +20,7 @@ defmodule Demo.Examples.Expressions do
   alias Aerospike.Op
   alias Aerospike.Scan
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_expr"
 
@@ -45,7 +45,7 @@ defmodule Demo.Examples.Expressions do
 
     for {name, bins} <- records do
       key = Aerospike.key(@namespace, @set, name)
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -55,7 +55,7 @@ defmodule Demo.Examples.Expressions do
     expr = Exp.gt(Exp.int_bin("age"), Exp.val(20))
 
     alice_key = Aerospike.key(@namespace, @set, "alice")
-    {:ok, record} = Aerospike.get(@conn, alice_key, filter: expr)
+    {:ok, record} = @repo.get(alice_key, filter: expr)
 
     unless record.bins["age"] == 25 do
       raise "Expected alice age=25, got #{record.bins["age"]}"
@@ -64,7 +64,7 @@ defmodule Demo.Examples.Expressions do
     Logger.info("    alice (age=25) matched — returned normally")
 
     carol_key = Aerospike.key(@namespace, @set, "carol")
-    {:error, error} = Aerospike.get(@conn, carol_key, filter: expr)
+    {:error, error} = @repo.get(carol_key, filter: expr)
 
     unless error.code == :filtered_out do
       raise "Expected :filtered_out for carol, got #{error.code}"
@@ -81,7 +81,7 @@ defmodule Demo.Examples.Expressions do
       |> Scan.filter(Exp.gte(Exp.int_bin("age"), Exp.val(35)))
       |> Scan.max_records(20)
 
-    {:ok, records} = Aerospike.all(@conn, scan)
+    {:ok, records} = @repo.all(scan)
 
     for r <- records do
       age = r.bins["age"]
@@ -99,7 +99,7 @@ defmodule Demo.Examples.Expressions do
     key = Aerospike.key(@namespace, @set, "bob")
 
     record =
-      Aerospike.operate!(@conn, key, [
+      @repo.operate!(key, [
         Op.Exp.read("is_senior", Exp.gte(Exp.int_bin("age"), Exp.val(40)))
       ])
 
@@ -118,11 +118,11 @@ defmodule Demo.Examples.Expressions do
     key = Aerospike.key(@namespace, @set, "alice")
 
     # Write a constant expression result to a new bin
-    Aerospike.operate!(@conn, key, [
+    @repo.operate!(key, [
       Op.Exp.write("computed", Exp.val(42))
     ])
 
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record.bins["computed"] == 42 do
       raise "Expected computed=42, got #{inspect(record.bins["computed"])}"
@@ -134,7 +134,7 @@ defmodule Demo.Examples.Expressions do
   defp cleanup do
     for name <- ["alice", "bob", "carol", "dave"] do
       key = Aerospike.key(@namespace, @set, name)
-      Aerospike.delete(@conn, key)
+      @repo.delete(key)
     end
   end
 end

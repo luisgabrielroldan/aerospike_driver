@@ -6,7 +6,7 @@ defmodule Demo.Examples.Append do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -15,17 +15,17 @@ defmodule Demo.Examples.Append do
     bin_name = "appendbin"
 
     # Delete record if it already exists
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
 
     # Initial append creates the record
     Logger.info("  Initial append will create record. Initial value is 'Hello'.")
-    :ok = Aerospike.append!(@conn, key, %{bin_name => "Hello"})
+    :ok = @repo.append!(key, %{bin_name => "Hello"})
 
     # Append " World" to existing record
     Logger.info("  Append ' World' to existing record.")
-    :ok = Aerospike.append!(@conn, key, %{bin_name => " World"})
+    :ok = @repo.append!(key, %{bin_name => " World"})
 
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Failed to get: ns=#{@namespace} set=#{@set} key=appendkey"
@@ -41,6 +41,6 @@ defmodule Demo.Examples.Append do
     end
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 end

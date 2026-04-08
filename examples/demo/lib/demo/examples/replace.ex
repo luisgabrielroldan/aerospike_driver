@@ -6,7 +6,7 @@ defmodule Demo.Examples.Replace do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -23,14 +23,14 @@ defmodule Demo.Examples.Replace do
 
     Logger.info("  Put: ns=#{@namespace} set=#{@set} key=replacekey bin1=value1 bin2=value2")
 
-    :ok = Aerospike.put!(@conn, key, bins1)
+    :ok = @repo.put!(key, bins1)
 
     # Replace with only bin3 — bin1 and bin2 should be deleted.
     # Matches Aerospike REPLACE / INFO3_CREATE_OR_REPLACE (not :replace_only).
     Logger.info("  Replace with: bin3=value3")
-    :ok = Aerospike.put!(@conn, key, %{"bin3" => "value3"}, exists: :create_or_replace)
+    :ok = @repo.put!(key, %{"bin3" => "value3"}, exists: :create_or_replace)
 
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Failed to get: ns=#{@namespace} set=#{@set} key=replacekey"
@@ -55,18 +55,18 @@ defmodule Demo.Examples.Replace do
     Logger.info("  bin3=value3 validated.")
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 
   defp run_replace_only_example do
     key = Aerospike.key(@namespace, @set, "replaceonlykey")
 
     # Delete record if it already exists
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
 
     Logger.info("  Replace record requiring that it exists (should fail)...")
 
-    case Aerospike.put(@conn, key, %{"bin" => "value"}, exists: :replace_only) do
+    case @repo.put(key, %{"bin" => "value"}, exists: :replace_only) do
       {:error, %Aerospike.Error{code: :key_not_found}} ->
         Logger.info("  Success: 'Not found' error returned as expected.")
 

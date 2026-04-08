@@ -6,7 +6,7 @@ defmodule Demo.Examples.Get do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -15,11 +15,11 @@ defmodule Demo.Examples.Get do
     skey = "getkey_string"
     key = Aerospike.key(@namespace, @set, skey)
     bins = %{"name" => "test_record", "value" => 999}
-    :ok = Aerospike.put!(@conn, key, bins)
+    :ok = @repo.put!(key, bins)
 
     # Get by string key
     Logger.info("  Get: ns=#{@namespace} set=#{@set} key=#{skey}")
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Record not found: ns=#{@namespace} set=#{@set} key=#{skey}"
@@ -38,10 +38,10 @@ defmodule Demo.Examples.Get do
     # Get by integer key
     ikey = 67_890
     int_key = Aerospike.key(@namespace, @set, ikey)
-    :ok = Aerospike.put!(@conn, int_key, %{"data" => "int_key_data"})
+    :ok = @repo.put!(int_key, %{"data" => "int_key_data"})
 
     Logger.info("  Get: ns=#{@namespace} set=#{@set} key=#{ikey}")
-    {:ok, int_record} = Aerospike.get(@conn, int_key)
+    {:ok, int_record} = @repo.get(int_key)
 
     unless int_record do
       raise "Record not found: ns=#{@namespace} set=#{@set} key=#{ikey}"
@@ -50,7 +50,7 @@ defmodule Demo.Examples.Get do
     Logger.info("  Got: #{inspect(int_record.bins)}")
 
     # Cleanup
-    Aerospike.delete(@conn, key)
-    Aerospike.delete(@conn, int_key)
+    @repo.delete(key)
+    @repo.delete(int_key)
   end
 end

@@ -6,7 +6,7 @@ defmodule Demo.Examples.Delete do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_del"
 
@@ -19,28 +19,28 @@ defmodule Demo.Examples.Delete do
 
   defp delete_existing do
     key = key("existing")
-    :ok = Aerospike.put!(@conn, key, %{"status" => "active"})
+    :ok = @repo.put!(key, %{"status" => "active"})
 
-    {:ok, true} = Aerospike.delete(@conn, key)
+    {:ok, true} = @repo.delete(key)
     Logger.info("  Delete existing record: returned true")
 
-    {:ok, false} = Aerospike.exists(@conn, key)
+    {:ok, false} = @repo.exists(key)
     Logger.info("  Verified: record no longer exists")
   end
 
   defp delete_nonexistent do
     key = key("never_created")
 
-    {:ok, false} = Aerospike.delete(@conn, key)
+    {:ok, false} = @repo.delete(key)
     Logger.info("  Delete non-existent record: returned false (idempotent)")
   end
 
   defp delete_with_filter do
     key = key("filtered")
-    :ok = Aerospike.put!(@conn, key, %{"age" => 25})
+    :ok = @repo.put!(key, %{"age" => 25})
 
     expr = Aerospike.Exp.gt(Aerospike.Exp.int_bin("age"), Aerospike.Exp.val(30))
-    {:error, err} = Aerospike.delete(@conn, key, filter: expr)
+    {:error, err} = @repo.delete(key, filter: expr)
 
     unless err.code == :filtered_out do
       raise "Expected :filtered_out, got #{err.code}"
@@ -49,13 +49,13 @@ defmodule Demo.Examples.Delete do
     Logger.info("  Delete with non-matching filter: rejected (filtered_out)")
 
     expr2 = Aerospike.Exp.gt(Aerospike.Exp.int_bin("age"), Aerospike.Exp.val(20))
-    {:ok, true} = Aerospike.delete(@conn, key, filter: expr2)
+    {:ok, true} = @repo.delete(key, filter: expr2)
     Logger.info("  Delete with matching filter (age > 20): success")
   end
 
   defp cleanup do
     for id <- ["existing", "never_created", "filtered"] do
-      Aerospike.delete(@conn, key(id))
+      @repo.delete(key(id))
     end
   end
 

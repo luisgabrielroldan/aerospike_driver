@@ -10,7 +10,7 @@ defmodule Demo.Examples.BatchOperate do
 
   import Aerospike.Op, only: [add: 2, get: 1]
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_bop"
 
@@ -24,16 +24,16 @@ defmodule Demo.Examples.BatchOperate do
   defp setup_records do
     Logger.info("  Setting up records for batch_operate...")
 
-    :ok = Aerospike.put!(@conn, key("read_me"), %{"greeting" => "hello", "count" => 1})
-    :ok = Aerospike.put!(@conn, key("delete_me"), %{"temp" => true})
-    :ok = Aerospike.put!(@conn, key("operate_me"), %{"counter" => 100})
+    :ok = @repo.put!(key("read_me"), %{"greeting" => "hello", "count" => 1})
+    :ok = @repo.put!(key("delete_me"), %{"temp" => true})
+    :ok = @repo.put!(key("operate_me"), %{"counter" => 100})
   end
 
   defp batch_mixed_operations do
     Logger.info("  batch_operate with mixed ops: read + write + delete...")
 
     {:ok, results} =
-      Aerospike.batch_operate(@conn, [
+      @repo.batch_operate([
         Batch.read(key("read_me"), bins: ["greeting"]),
         Batch.put(key("new_record"), %{"created_by" => "batch"}),
         Batch.delete(key("delete_me"))
@@ -59,7 +59,7 @@ defmodule Demo.Examples.BatchOperate do
 
     Logger.info("    Delete: delete_me removed")
 
-    {:ok, record} = Aerospike.get(@conn, key("new_record"))
+    {:ok, record} = @repo.get(key("new_record"))
 
     unless record.bins["created_by"] == "batch" do
       raise "Expected new_record with created_by=batch"
@@ -67,7 +67,7 @@ defmodule Demo.Examples.BatchOperate do
 
     Logger.info("  Verified: new_record exists with created_by=batch")
 
-    case Aerospike.exists(@conn, key("delete_me")) do
+    case @repo.exists(key("delete_me")) do
       {:ok, false} ->
         Logger.info("  Verified: delete_me no longer exists")
 
@@ -80,7 +80,7 @@ defmodule Demo.Examples.BatchOperate do
     Logger.info("  batch_operate with atomic add+get on a single record...")
 
     {:ok, [result]} =
-      Aerospike.batch_operate(@conn, [
+      @repo.batch_operate([
         Batch.operate(key("operate_me"), [add("counter", 50), get("counter")])
       ])
 
@@ -99,7 +99,7 @@ defmodule Demo.Examples.BatchOperate do
 
   defp cleanup do
     for suffix <- ["read_me", "delete_me", "new_record", "operate_me"] do
-      Aerospike.delete(@conn, key(suffix))
+      @repo.delete(key(suffix))
     end
   end
 

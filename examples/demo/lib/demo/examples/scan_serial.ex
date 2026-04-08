@@ -10,7 +10,7 @@ defmodule Demo.Examples.ScanSerial do
 
   alias Aerospike.Scan
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_scan"
   @size 10
@@ -29,7 +29,7 @@ defmodule Demo.Examples.ScanSerial do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "scan_#{i}")
       bins = %{"name" => "user_#{i}", "age" => 20 + i, "city" => "Portland"}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -37,7 +37,7 @@ defmodule Demo.Examples.ScanSerial do
     Logger.info("  Scan all records in set (max_records: #{@size + 5})...")
 
     scan = Scan.new(@namespace, @set) |> Scan.max_records(@size + 5)
-    {:ok, records} = Aerospike.all(@conn, scan)
+    {:ok, records} = @repo.all(scan)
 
     Logger.info("  Retrieved #{length(records)} records:")
 
@@ -60,7 +60,7 @@ defmodule Demo.Examples.ScanSerial do
       |> Scan.select(["name"])
       |> Scan.max_records(@size + 5)
 
-    {:ok, records} = Aerospike.all(@conn, scan)
+    {:ok, records} = @repo.all(scan)
 
     for r <- Enum.take(records, 3) do
       unless Map.has_key?(r.bins, "name") do
@@ -81,7 +81,7 @@ defmodule Demo.Examples.ScanSerial do
     Logger.info("  Scan namespace-wide (max_records: 5)...")
 
     scan = Scan.new(@namespace) |> Scan.max_records(5)
-    {:ok, records} = Aerospike.all(@conn, scan)
+    {:ok, records} = @repo.all(scan)
 
     Logger.info("  Namespace scan returned #{length(records)} records (capped at 5).")
   end
@@ -89,7 +89,7 @@ defmodule Demo.Examples.ScanSerial do
   defp cleanup do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "scan_#{i}")
-      Aerospike.delete(@conn, key)
+      @repo.delete(key)
     end
   end
 end

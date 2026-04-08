@@ -6,7 +6,7 @@ defmodule Demo.Examples.Put do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -17,7 +17,7 @@ defmodule Demo.Examples.Put do
     bins = %{"bin1" => "value1", "bin2" => 42}
 
     Logger.info("  Put: ns=#{@namespace} set=#{@set} key=#{skey} bins=#{inspect(bins)}")
-    :ok = Aerospike.put!(@conn, key, bins)
+    :ok = @repo.put!(key, bins)
     Logger.info("  Record written: ns=#{@namespace} set=#{@set} key=#{skey}")
 
     # Put with integer key
@@ -26,11 +26,11 @@ defmodule Demo.Examples.Put do
     int_bins = %{"name" => "integer_key_record", "count" => 100}
 
     Logger.info("  Put: ns=#{@namespace} set=#{@set} key=#{ikey} bins=#{inspect(int_bins)}")
-    :ok = Aerospike.put!(@conn, int_key, int_bins)
+    :ok = @repo.put!(int_key, int_bins)
     Logger.info("  Record written: ns=#{@namespace} set=#{@set} key=#{ikey}")
 
     # Cleanup
-    Aerospike.delete(@conn, key)
-    Aerospike.delete(@conn, int_key)
+    @repo.delete(key)
+    @repo.delete(int_key)
   end
 end

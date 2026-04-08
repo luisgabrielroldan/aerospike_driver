@@ -8,7 +8,7 @@ defmodule Demo.Examples.Udf do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_udf"
   @package "demo_udf_mod"
@@ -41,7 +41,7 @@ defmodule Demo.Examples.Udf do
   defp register_udf do
     Logger.info("  Registering UDF package '#{@package}.lua'...")
 
-    {:ok, task} = Aerospike.register_udf(@conn, @lua_source, "#{@package}.lua")
+    {:ok, task} = @repo.register_udf(@lua_source, "#{@package}.lua")
     :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000)
 
     Logger.info("  UDF package registered.")
@@ -50,13 +50,13 @@ defmodule Demo.Examples.Udf do
   defp write_record do
     Logger.info("  Writing record: x=10, y=25")
     key = key("udf_test")
-    :ok = Aerospike.put!(@conn, key, %{"x" => 10, "y" => 25})
+    :ok = @repo.put!(key, %{"x" => 10, "y" => 25})
   end
 
   defp execute_double do
     Logger.info("  apply_udf: double_bin(x) — expect 20...")
 
-    {:ok, result} = Aerospike.apply_udf(@conn, key("udf_test"), @package, "double_bin", ["x"])
+    {:ok, result} = @repo.apply_udf(key("udf_test"), @package, "double_bin", ["x"])
 
     unless result == 20 do
       raise "Expected double_bin(x)=20, got #{inspect(result)}"
@@ -69,7 +69,7 @@ defmodule Demo.Examples.Udf do
     Logger.info("  apply_udf: add_bins(x, y) — expect 35...")
 
     {:ok, result} =
-      Aerospike.apply_udf(@conn, key("udf_test"), @package, "add_bins", ["x", "y"])
+      @repo.apply_udf(key("udf_test"), @package, "add_bins", ["x", "y"])
 
     unless result == 35 do
       raise "Expected add_bins(x, y)=35, got #{inspect(result)}"
@@ -82,9 +82,9 @@ defmodule Demo.Examples.Udf do
     Logger.info("  apply_udf: put_value(z, 99) — write a bin via UDF...")
 
     {:ok, _} =
-      Aerospike.apply_udf(@conn, key("udf_test"), @package, "put_value", ["z", 99])
+      @repo.apply_udf(key("udf_test"), @package, "put_value", ["z", 99])
 
-    {:ok, record} = Aerospike.get(@conn, key("udf_test"))
+    {:ok, record} = @repo.get(key("udf_test"))
 
     unless record.bins["z"] == 99 do
       raise "Expected z=99 after put_value UDF, got #{inspect(record.bins["z"])}"
@@ -95,12 +95,12 @@ defmodule Demo.Examples.Udf do
 
   defp remove_udf do
     Logger.info("  Removing UDF package '#{@package}.lua'...")
-    :ok = Aerospike.remove_udf(@conn, "#{@package}.lua")
+    :ok = @repo.remove_udf("#{@package}.lua")
     Logger.info("  UDF package removed.")
   end
 
   defp cleanup do
-    Aerospike.delete(@conn, key("udf_test"))
+    @repo.delete(key("udf_test"))
   end
 
   defp key(id), do: Aerospike.key(@namespace, @set, id)

@@ -17,7 +17,7 @@ defmodule Demo.Examples.QueryAggregate do
   alias Aerospike.Filter
   alias Aerospike.Query
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_qagg"
   @index_name "demo_qagg_age_idx"
@@ -61,7 +61,7 @@ defmodule Demo.Examples.QueryAggregate do
     for {name, age, dept} <- @people do
       key = Aerospike.key(@namespace, @set, name)
       bins = %{"name" => name, "age" => age, "dept" => dept, "salary" => age * 1_000}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -69,7 +69,7 @@ defmodule Demo.Examples.QueryAggregate do
     Logger.info("  Creating numeric index on 'age'...")
 
     {:ok, task} =
-      Aerospike.create_index(@conn, @namespace, @set,
+      @repo.create_index(@namespace, @set,
         bin: "age",
         name: @index_name,
         type: :numeric
@@ -87,7 +87,7 @@ defmodule Demo.Examples.QueryAggregate do
       |> Query.where(Filter.range("age", 25, 40))
       |> Query.max_records(50)
 
-    {:ok, records} = Aerospike.all(@conn, query)
+    {:ok, records} = @repo.all(query)
 
     ages = Enum.map(records, fn r -> r.bins["age"] end)
     count = length(ages)
@@ -124,7 +124,7 @@ defmodule Demo.Examples.QueryAggregate do
       |> Query.filter(expr)
       |> Query.max_records(50)
 
-    case Aerospike.all(@conn, query) do
+    case @repo.all(query) do
       {:ok, records} ->
         for r <- records do
           unless r.bins["dept"] == "engineering" do
@@ -155,7 +155,7 @@ defmodule Demo.Examples.QueryAggregate do
 
     try do
       total =
-        Aerospike.stream!(@conn, query)
+        @repo.stream!(query)
         |> Stream.map(fn r -> r.bins["salary"] end)
         |> Stream.reject(&is_nil/1)
         |> Enum.sum()
@@ -174,10 +174,10 @@ defmodule Demo.Examples.QueryAggregate do
   end
 
   defp cleanup do
-    Aerospike.drop_index(@conn, @namespace, @index_name)
+    @repo.drop_index(@namespace, @index_name)
 
     for {name, _, _} <- @people do
-      Aerospike.delete(@conn, Aerospike.key(@namespace, @set, name))
+      @repo.delete(Aerospike.key(@namespace, @set, name))
     end
   end
 end

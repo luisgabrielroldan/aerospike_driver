@@ -10,7 +10,7 @@ defmodule Demo.Examples.BatchUdf do
 
   alias Aerospike.Batch
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_budf"
   @package "demo_batch_udf"
@@ -48,7 +48,7 @@ defmodule Demo.Examples.BatchUdf do
 
   defp register_udf do
     Logger.info("  Registering UDF package '#{@package}.lua'...")
-    {:ok, task} = Aerospike.register_udf(@conn, @lua_source, "#{@package}.lua")
+    {:ok, task} = @repo.register_udf(@lua_source, "#{@package}.lua")
     :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000)
     Process.sleep(500)
     Logger.info("  UDF package registered.")
@@ -58,13 +58,13 @@ defmodule Demo.Examples.BatchUdf do
     Logger.info("  Writing 3 records with counters...")
 
     for {id, val} <- [{"a", 10}, {"b", 20}, {"c", 30}] do
-      :ok = Aerospike.put!(@conn, key(id), %{"counter" => val, "name" => id})
+      :ok = @repo.put!(key(id), %{"counter" => val, "name" => id})
     end
   end
 
   defp probe_batch_udf do
     {:ok, [result]} =
-      Aerospike.batch_operate(@conn, [
+      @repo.batch_operate([
         Batch.udf(key("a"), @package, "get_double", ["counter"])
       ])
 
@@ -75,7 +75,7 @@ defmodule Demo.Examples.BatchUdf do
     Logger.info("  Batch UDF: get_double on 3 records...")
 
     {:ok, results} =
-      Aerospike.batch_operate(@conn, [
+      @repo.batch_operate([
         Batch.udf(key("a"), @package, "get_double", ["counter"]),
         Batch.udf(key("b"), @package, "get_double", ["counter"]),
         Batch.udf(key("c"), @package, "get_double", ["counter"])
@@ -102,7 +102,7 @@ defmodule Demo.Examples.BatchUdf do
     Logger.info("  Batch UDF: increment counters by different amounts...")
 
     {:ok, results} =
-      Aerospike.batch_operate(@conn, [
+      @repo.batch_operate([
         Batch.udf(key("a"), @package, "increment", ["counter", 5]),
         Batch.udf(key("b"), @package, "increment", ["counter", 10]),
         Batch.udf(key("c"), @package, "increment", ["counter", 15])
@@ -127,7 +127,7 @@ defmodule Demo.Examples.BatchUdf do
     Logger.info("  Verifying persisted values...")
 
     for {id, expect} <- [{"a", 15}, {"b", 30}, {"c", 45}] do
-      {:ok, rec} = Aerospike.get(@conn, key(id))
+      {:ok, rec} = @repo.get(key(id))
 
       unless rec.bins["counter"] == expect do
         raise "Expected counter=#{expect} for #{id}, got #{rec.bins["counter"]}"
@@ -139,13 +139,13 @@ defmodule Demo.Examples.BatchUdf do
 
   defp remove_udf do
     Logger.info("  Removing UDF package '#{@package}.lua'...")
-    :ok = Aerospike.remove_udf(@conn, "#{@package}.lua")
+    :ok = @repo.remove_udf("#{@package}.lua")
     Logger.info("  UDF package removed.")
   end
 
   defp cleanup do
     for id <- ["a", "b", "c"] do
-      Aerospike.delete(@conn, key(id))
+      @repo.delete(key(id))
     end
   end
 

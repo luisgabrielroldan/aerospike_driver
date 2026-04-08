@@ -6,7 +6,7 @@ defmodule Demo.Examples.Generation do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -15,17 +15,17 @@ defmodule Demo.Examples.Generation do
     bin_name = "genbin"
 
     # Delete record if it already exists
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
 
     # Set some values for the same record (creates generation history)
     Logger.info("  Put: key=genkey bin=genbin value=genvalue1")
-    :ok = Aerospike.put!(@conn, key, %{bin_name => "genvalue1"})
+    :ok = @repo.put!(key, %{bin_name => "genvalue1"})
 
     Logger.info("  Put: key=genkey bin=genbin value=genvalue2")
-    :ok = Aerospike.put!(@conn, key, %{bin_name => "genvalue2"})
+    :ok = @repo.put!(key, %{bin_name => "genvalue2"})
 
     # Retrieve record and its generation count
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Failed to get: ns=#{@namespace} set=#{@set} key=genkey"
@@ -45,7 +45,7 @@ defmodule Demo.Examples.Generation do
     Logger.info("  Put with expected generation=#{record.generation}: bin=genbin value=genvalue3")
 
     :ok =
-      Aerospike.put!(@conn, key, %{bin_name => "genvalue3"},
+      @repo.put!(key, %{bin_name => "genvalue3"},
         generation: record.generation,
         gen_policy: :expect_gen_equal
       )
@@ -53,7 +53,7 @@ defmodule Demo.Examples.Generation do
     # Set record with INVALID generation — should fail
     Logger.info("  Put with invalid generation=9999 (should fail)...")
 
-    case Aerospike.put(@conn, key, %{bin_name => "genvalue4"},
+    case @repo.put(key, %{bin_name => "genvalue4"},
            generation: 9999,
            gen_policy: :expect_gen_equal
          ) do
@@ -68,7 +68,7 @@ defmodule Demo.Examples.Generation do
     end
 
     # Verify the record still has genvalue3 (the invalid generation write was rejected)
-    {:ok, verify} = Aerospike.get(@conn, key)
+    {:ok, verify} = @repo.get(key)
 
     unless verify do
       raise "Failed to get: ns=#{@namespace} set=#{@set} key=genkey"
@@ -85,6 +85,6 @@ defmodule Demo.Examples.Generation do
     end
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 end

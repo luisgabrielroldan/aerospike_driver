@@ -13,7 +13,7 @@ defmodule Demo.Examples.GeojsonQuery do
   alias Aerospike.Filter
   alias Aerospike.Query
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_geo"
   @point_index "demo_geo_loc_idx"
@@ -45,7 +45,7 @@ defmodule Demo.Examples.GeojsonQuery do
       region = {:geojson, bounding_box(lng, lat, 2.0)}
 
       bins = %{"name" => name, "loc" => point, "region" => region}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -53,14 +53,14 @@ defmodule Demo.Examples.GeojsonQuery do
     Logger.info("  Creating geo2dsphere indexes...")
 
     {:ok, task1} =
-      Aerospike.create_index(@conn, @namespace, @set,
+      @repo.create_index(@namespace, @set,
         bin: "loc",
         name: @point_index,
         type: :geo2dsphere
       )
 
     {:ok, task2} =
-      Aerospike.create_index(@conn, @namespace, @set,
+      @repo.create_index(@namespace, @set,
         bin: "region",
         name: @region_index,
         type: :geo2dsphere
@@ -94,7 +94,7 @@ defmodule Demo.Examples.GeojsonQuery do
       |> Query.where(Filter.geo_within("loc", pnw_region))
       |> Query.max_records(20)
 
-    {:ok, records} = Aerospike.all(@conn, query)
+    {:ok, records} = @repo.all(query)
 
     names = Enum.map(records, fn r -> r.bins["name"] end) |> Enum.sort()
     Logger.info("    Found #{length(records)} cities in PNW: #{Enum.join(names, ", ")}")
@@ -126,7 +126,7 @@ defmodule Demo.Examples.GeojsonQuery do
       |> Query.where(Filter.geo_contains("region", portland_point))
       |> Query.max_records(20)
 
-    {:ok, records} = Aerospike.all(@conn, query)
+    {:ok, records} = @repo.all(query)
 
     names = Enum.map(records, fn r -> r.bins["name"] end) |> Enum.sort()
     Logger.info("    #{length(records)} regions contain point: #{Enum.join(names, ", ")}")
@@ -137,11 +137,11 @@ defmodule Demo.Examples.GeojsonQuery do
   end
 
   defp cleanup do
-    Aerospike.drop_index(@conn, @namespace, @point_index)
-    Aerospike.drop_index(@conn, @namespace, @region_index)
+    @repo.drop_index(@namespace, @point_index)
+    @repo.drop_index(@namespace, @region_index)
 
     for {name, _, _} <- @locations do
-      Aerospike.delete(@conn, Aerospike.key(@namespace, @set, name))
+      @repo.delete(Aerospike.key(@namespace, @set, name))
     end
   end
 

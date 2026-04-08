@@ -6,7 +6,7 @@ defmodule Demo.Examples.Simple do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -21,15 +21,15 @@ defmodule Demo.Examples.Simple do
 
     # Write bins
     Logger.info("  Put: key=simple_example_key bins=#{inspect(bins)}")
-    :ok = Aerospike.put!(@conn, key, bins)
+    :ok = @repo.put!(key, bins)
 
     # Read it back
-    {:ok, rec} = Aerospike.get(@conn, key)
+    {:ok, rec} = @repo.get(key)
     Logger.info("  Get: #{inspect(rec.bins)}")
 
     # Add to bin1
-    :ok = Aerospike.add!(@conn, key, %{"bin1" => 1})
-    {:ok, rec2} = Aerospike.get(@conn, key)
+    :ok = @repo.add!(key, %{"bin1" => 1})
+    {:ok, rec2} = @repo.get(key)
     Logger.info("  After add(1): bin1=#{rec2.bins["bin1"]}")
 
     unless rec2.bins["bin1"] == 43 do
@@ -37,10 +37,10 @@ defmodule Demo.Examples.Simple do
     end
 
     # Prepend and append to bin2
-    :ok = Aerospike.prepend!(@conn, key, %{"bin2" => "Frankly:  "})
-    :ok = Aerospike.append!(@conn, key, %{"bin2" => "."})
+    :ok = @repo.prepend!(key, %{"bin2" => "Frankly:  "})
+    :ok = @repo.append!(key, %{"bin2" => "."})
 
-    {:ok, rec3} = Aerospike.get(@conn, key)
+    {:ok, rec3} = @repo.get(key)
     Logger.info("  After prepend+append: bin2=#{rec3.bins["bin2"]}")
 
     expected_bin2 = "Frankly:  An elephant is a mouse with an operating system."
@@ -50,8 +50,8 @@ defmodule Demo.Examples.Simple do
     end
 
     # Delete bin3 by setting to nil
-    :ok = Aerospike.put!(@conn, key, %{"bin3" => nil})
-    {:ok, rec4} = Aerospike.get(@conn, key)
+    :ok = @repo.put!(key, %{"bin3" => nil})
+    {:ok, rec4} = @repo.get(key)
     Logger.info("  After delete bin3: bins=#{inspect(rec4.bins)}")
 
     if Map.has_key?(rec4.bins, "bin3") && rec4.bins["bin3"] != nil do
@@ -59,14 +59,14 @@ defmodule Demo.Examples.Simple do
     end
 
     # Check if key exists
-    {:ok, true} = Aerospike.exists(@conn, key)
+    {:ok, true} = @repo.exists(key)
     Logger.info("  Key exists: true")
 
     # Delete the key
-    {:ok, true} = Aerospike.delete(@conn, key)
+    {:ok, true} = @repo.delete(key)
     Logger.info("  Deleted: true")
 
-    {:ok, false} = Aerospike.exists(@conn, key)
+    {:ok, false} = @repo.exists(key)
     Logger.info("  Key exists after delete: false")
   end
 end

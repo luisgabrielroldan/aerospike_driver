@@ -6,7 +6,7 @@ defmodule Demo.Examples.PutGet do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -24,10 +24,10 @@ defmodule Demo.Examples.PutGet do
       "  MultiBin Put: ns=#{@namespace} set=#{@set} key=putgetkey bins=#{inspect(bins)}"
     )
 
-    :ok = Aerospike.put!(@conn, key, bins)
+    :ok = @repo.put!(key, bins)
 
     Logger.info("  MultiBin Get: ns=#{@namespace} set=#{@set} key=putgetkey")
-    {:ok, record} = Aerospike.get(@conn, key)
+    {:ok, record} = @repo.get(key)
 
     unless record do
       raise "Failed to get: ns=#{@namespace} set=#{@set} key=putgetkey"
@@ -39,15 +39,15 @@ defmodule Demo.Examples.PutGet do
     Logger.info("  MultiBin: validated bin1=value1 bin2=value2")
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 
   defp run_get_header_example do
     key = Aerospike.key(@namespace, @set, "putgetkey_header")
-    :ok = Aerospike.put!(@conn, key, %{"data" => "header_test"})
+    :ok = @repo.put!(key, %{"data" => "header_test"})
 
     Logger.info("  GetHeader: ns=#{@namespace} set=#{@set} key=putgetkey_header")
-    {:ok, record} = Aerospike.get(@conn, key, header_only: true)
+    {:ok, record} = @repo.get(key, header_only: true)
 
     unless record do
       raise "Failed to get header: ns=#{@namespace} set=#{@set} key=putgetkey_header"
@@ -60,7 +60,7 @@ defmodule Demo.Examples.PutGet do
     Logger.info("  Header: generation=#{record.generation} ttl=#{record.ttl}")
 
     # Cleanup
-    Aerospike.delete(@conn, key)
+    @repo.delete(key)
   end
 
   defp validate_bin(name, expected, record) do

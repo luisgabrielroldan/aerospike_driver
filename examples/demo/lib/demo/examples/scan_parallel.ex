@@ -13,7 +13,7 @@ defmodule Demo.Examples.ScanParallel do
 
   alias Aerospike.Scan
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo_scan_par"
   @size 15
@@ -32,7 +32,7 @@ defmodule Demo.Examples.ScanParallel do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "spar_#{i}")
       bins = %{"name" => "user_#{i}", "score" => i * 10}
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -42,7 +42,7 @@ defmodule Demo.Examples.ScanParallel do
     scan = Scan.new(@namespace, @set) |> Scan.max_records(@size + 5)
 
     records =
-      Aerospike.stream!(@conn, scan)
+      @repo.stream!(scan)
       |> Enum.to_list()
 
     Logger.info("  Streamed #{length(records)} records.")
@@ -58,7 +58,7 @@ defmodule Demo.Examples.ScanParallel do
     scan = Scan.new(@namespace, @set) |> Scan.max_records(@size + 5)
 
     names =
-      Aerospike.stream!(@conn, scan)
+      @repo.stream!(scan)
       |> Stream.filter(fn r -> r.bins["score"] > 50 end)
       |> Stream.map(fn r -> r.bins["name"] end)
       |> Enum.to_list()
@@ -74,7 +74,7 @@ defmodule Demo.Examples.ScanParallel do
     scan = Scan.new(@namespace, @set)
 
     records =
-      Aerospike.stream!(@conn, scan)
+      @repo.stream!(scan)
       |> Enum.take(3)
 
     unless length(records) == 3 do
@@ -87,7 +87,7 @@ defmodule Demo.Examples.ScanParallel do
   defp cleanup do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "spar_#{i}")
-      Aerospike.delete(@conn, key)
+      @repo.delete(key)
     end
   end
 end

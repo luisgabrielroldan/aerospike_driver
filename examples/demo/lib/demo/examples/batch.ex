@@ -6,7 +6,7 @@ defmodule Demo.Examples.Batch do
 
   require Logger
 
-  @conn :aero
+  @repo Demo.PrimaryClusterRepo
   @namespace "test"
   @set "demo"
 
@@ -31,7 +31,7 @@ defmodule Demo.Examples.Batch do
       bins = %{@bin_name => "#{@value_prefix}#{i}"}
 
       Logger.info("    Put: key=#{@key_prefix}#{i} bin=#{@bin_name} value=#{@value_prefix}#{i}")
-      :ok = Aerospike.put!(@conn, key, bins)
+      :ok = @repo.put!(key, bins)
     end
   end
 
@@ -40,7 +40,7 @@ defmodule Demo.Examples.Batch do
 
     keys = for i <- 1..@size, do: Aerospike.key(@namespace, @set, "#{@key_prefix}#{i}")
 
-    {:ok, exists_array} = Aerospike.batch_exists(@conn, keys)
+    {:ok, exists_array} = @repo.batch_exists(keys)
 
     for i <- 0..(@size - 1) do
       exists = Enum.at(exists_array, i)
@@ -64,7 +64,7 @@ defmodule Demo.Examples.Batch do
 
     keys = for i <- 1..@size, do: Aerospike.key(@namespace, @set, "#{@key_prefix}#{i}")
 
-    {:ok, records} = Aerospike.batch_get(@conn, keys, bins: [@bin_name])
+    {:ok, records} = @repo.batch_get(keys, bins: [@bin_name])
 
     for i <- 0..(@size - 1) do
       record = Enum.at(records, i)
@@ -90,7 +90,7 @@ defmodule Demo.Examples.Batch do
 
     keys = for i <- 1..@size, do: Aerospike.key(@namespace, @set, "#{@key_prefix}#{i}")
 
-    {:ok, records} = Aerospike.batch_get(@conn, keys, header_only: true)
+    {:ok, records} = @repo.batch_get(keys, header_only: true)
 
     for i <- 0..(@size - 1) do
       record = Enum.at(records, i)
@@ -114,7 +114,7 @@ defmodule Demo.Examples.Batch do
   defp cleanup do
     for i <- 1..@size do
       key = Aerospike.key(@namespace, @set, "#{@key_prefix}#{i}")
-      Aerospike.delete(@conn, key)
+      @repo.delete(key)
     end
   end
 end
