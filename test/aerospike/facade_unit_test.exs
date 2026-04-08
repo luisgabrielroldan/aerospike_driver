@@ -348,11 +348,7 @@ defmodule Aerospike.FacadeUnitTest do
 
     test "transaction wrappers delegate to TxnRoll variants" do
       conn = :"facade_txn_#{System.unique_integer([:positive, :monotonic])}"
-      {:ok, pid} = TableOwner.start_link(name: conn)
-
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
-      end)
+      _pid = start_supervised!({TableOwner, name: conn})
 
       txn = Txn.new()
 

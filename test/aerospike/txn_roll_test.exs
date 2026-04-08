@@ -15,15 +15,7 @@ defmodule Aerospike.TxnRollTest do
 
   setup do
     name = :"txn_roll_test_#{:erlang.unique_integer([:positive])}"
-    {:ok, pid} = TableOwner.start_link(name: name)
-
-    on_exit(fn ->
-      try do
-        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
-      catch
-        :exit, _ -> :ok
-      end
-    end)
+    _pid = start_supervised!({TableOwner, name: name})
 
     txn = Txn.new()
     key = Key.new("test", "users", "roll-test-key")

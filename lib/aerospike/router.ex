@@ -7,6 +7,7 @@ defmodule Aerospike.Router do
 
   require Logger
 
+  alias Aerospike.CircuitBreaker
   alias Aerospike.Connection
   alias Aerospike.Error
   alias Aerospike.Key
@@ -29,7 +30,9 @@ defmodule Aerospike.Router do
 
     with :ok <- check_ready(conn_name),
          {:ok, pool_pid, node_name} <- resolve_pool(conn_name, key, replica_index),
-         {:ok, body} <- checkout_and_request(pool_pid, wire, checkout_timeout) do
+         :ok <- CircuitBreaker.allow_request?(conn_name, node_name),
+         {:ok, body} <-
+           checkout_and_request(pool_pid, wire, checkout_timeout, {conn_name, node_name}) do
       {:ok, body, node_name}
     else
       {:error, %Error{} = e} ->
@@ -270,21 +273,29 @@ defmodule Aerospike.Router do
   @doc """
   Checks out a connection from `pool_pid`, sends `commands` as an info request, and returns the response map.
   """
-  @spec checkout_and_info(pid(), [String.t()], non_neg_integer()) ::
+  @type breaker_ctx :: {atom(), String.t()} | nil
+
+  @spec checkout_and_info(pid(), [String.t()], non_neg_integer(), breaker_ctx()) ::
           {:ok, map()} | {:error, Error.t()}
-  def checkout_and_info(pool_pid, commands, checkout_timeout)
+  def checkout_and_info(pool_pid, commands, checkout_timeout, breaker_ctx \\ nil)
       when is_pid(pool_pid) and is_list(commands) and is_integer(checkout_timeout) and
              checkout_timeout >= 0 do
-    do_checkout(pool_pid, checkout_timeout, fn conn ->
-      case Connection.request_info(conn, commands) do
-        {:ok, conn2, map} ->
-          {{:ok, map}, conn2}
+    do_checkout(
+      pool_pid,
+      checkout_timeout,
+      fn conn ->
+        case Connection.request_info(conn, commands) do
+          {:ok, conn2, map} ->
+            {{:ok, map}, conn2}
 
-        {:error, reason} ->
-          e = Error.from_result_code(:network_error, message: inspect(reason))
-          {{:error, e}, :close}
-      end
-    end)
+          {:error, reason} ->
+            maybe_record_breaker(breaker_ctx, :network_error)
+            e = Error.from_result_code(:network_error, message: inspect(reason))
+            {{:error, e}, :close}
+        end
+      end,
+      breaker_ctx
+    )
   end
 
   @doc """
@@ -292,20 +303,26 @@ defmodule Aerospike.Router do
 
   For single-record commands (put, get, delete, exists, touch, operate).
   """
-  @spec checkout_and_request(pid(), iodata(), non_neg_integer()) ::
+  @spec checkout_and_request(pid(), iodata(), non_neg_integer(), breaker_ctx()) ::
           {:ok, binary()} | {:error, Error.t()}
-  def checkout_and_request(pool_pid, wire, checkout_timeout)
+  def checkout_and_request(pool_pid, wire, checkout_timeout, breaker_ctx \\ nil)
       when is_pid(pool_pid) and is_integer(checkout_timeout) and checkout_timeout >= 0 do
-    do_checkout(pool_pid, checkout_timeout, fn conn ->
-      case Connection.request(conn, wire) do
-        {:ok, conn2, _v, _t, body} ->
-          {{:ok, body}, conn2}
+    do_checkout(
+      pool_pid,
+      checkout_timeout,
+      fn conn ->
+        case Connection.request(conn, wire) do
+          {:ok, conn2, _v, _t, body} ->
+            {{:ok, body}, conn2}
 
-        {:error, reason} ->
-          e = Error.from_result_code(:network_error, message: inspect(reason))
-          {{:error, e}, :close}
-      end
-    end)
+          {:error, reason} ->
+            maybe_record_breaker(breaker_ctx, :network_error)
+            e = Error.from_result_code(:network_error, message: inspect(reason))
+            {{:error, e}, :close}
+        end
+      end,
+      breaker_ctx
+    )
   end
 
   @doc """
@@ -314,23 +331,29 @@ defmodule Aerospike.Router do
   Batch, scan, and query commands return multiple proto frames per request.
   All frames are read until the INFO3_LAST sentinel and concatenated.
   """
-  @spec checkout_and_request_stream(pid(), iodata(), non_neg_integer()) ::
+  @spec checkout_and_request_stream(pid(), iodata(), non_neg_integer(), breaker_ctx()) ::
           {:ok, binary()} | {:error, Error.t()}
-  def checkout_and_request_stream(pool_pid, wire, checkout_timeout)
+  def checkout_and_request_stream(pool_pid, wire, checkout_timeout, breaker_ctx \\ nil)
       when is_pid(pool_pid) and is_integer(checkout_timeout) and checkout_timeout >= 0 do
-    do_checkout(pool_pid, checkout_timeout, fn conn ->
-      case Connection.request_stream(conn, wire) do
-        {:ok, conn2, body} ->
-          {{:ok, body}, conn2}
+    do_checkout(
+      pool_pid,
+      checkout_timeout,
+      fn conn ->
+        case Connection.request_stream(conn, wire) do
+          {:ok, conn2, body} ->
+            {{:ok, body}, conn2}
 
-        {:error, reason} ->
-          e = Error.from_result_code(:network_error, message: inspect(reason))
-          {{:error, e}, :close}
-      end
-    end)
+          {:error, reason} ->
+            maybe_record_breaker(breaker_ctx, :network_error)
+            e = Error.from_result_code(:network_error, message: inspect(reason))
+            {{:error, e}, :close}
+        end
+      end,
+      breaker_ctx
+    )
   end
 
-  defp do_checkout(pool_pid, checkout_timeout, fun) do
+  defp do_checkout(pool_pid, checkout_timeout, fun, breaker_ctx) do
     NimblePool.checkout!(
       pool_pid,
       :checkout,
@@ -339,13 +362,21 @@ defmodule Aerospike.Router do
     )
   catch
     :exit, {:timeout, {NimblePool, :checkout, _}} ->
+      maybe_record_breaker(breaker_ctx, :pool_timeout)
       {:error, Error.from_result_code(:pool_timeout)}
 
     :exit, {:noproc, {NimblePool, :checkout, _}} ->
       {:error, Error.from_result_code(:invalid_node)}
 
     :exit, reason ->
+      maybe_record_breaker(breaker_ctx, :network_error)
       {:error, Error.from_result_code(:network_error, message: inspect(reason))}
+  end
+
+  defp maybe_record_breaker(nil, _reason), do: :ok
+
+  defp maybe_record_breaker({conn_name, node_name}, reason) do
+    CircuitBreaker.record_error(conn_name, node_name, reason)
   end
 
   defp routing_opts(opts) when is_list(opts) do

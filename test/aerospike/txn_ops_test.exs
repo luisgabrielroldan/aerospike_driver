@@ -8,11 +8,7 @@ defmodule Aerospike.TxnOpsTest do
 
   setup do
     name = :"txn_ops_test_#{:erlang.unique_integer([:positive])}"
-    {:ok, pid} = TableOwner.start_link(name: name)
-
-    on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
-    end)
+    _pid = start_supervised!({TableOwner, name: name})
 
     txn = Txn.new()
     key1 = Key.new("test", "set1", "k1")

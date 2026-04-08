@@ -6,13 +6,7 @@ defmodule Aerospike.TableOwnerTest do
 
   setup do
     name = :"to_test_#{:erlang.unique_integer([:positive])}"
-    {:ok, pid} = TableOwner.start_link(name: name)
-
-    on_exit(fn ->
-      if Process.alive?(pid) do
-        GenServer.stop(pid, :normal, 5_000)
-      end
-    end)
+    _pid = start_supervised!({TableOwner, name: name})
 
     {:ok, name: name}
   end
