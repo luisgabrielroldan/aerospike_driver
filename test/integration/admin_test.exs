@@ -97,32 +97,63 @@ defmodule Aerospike.Integration.AdminTest do
 
       assert :ok = Aerospike.put(conn, trunc_key, %{"v" => 1})
       assert :ok = Aerospike.put(conn, keep_key, %{"v" => 2})
+      assert {:ok, _} = Aerospike.get(conn, trunc_key)
+      assert {:ok, _} = Aerospike.get(conn, keep_key)
 
       assert :ok = Aerospike.truncate(conn, "test", set)
 
       assert_eventually(
         fn ->
-          match?({:error, %Aerospike.Error{code: :key_not_found}}, Aerospike.get(conn, trunc_key))
-        end,
-        50,
-        200
-      )
+          trunc_state = Aerospike.get(conn, trunc_key)
+          keep_state = Aerospike.get(conn, keep_key)
 
-      assert {:ok, _} = Aerospike.get(conn, keep_key)
+          condition? =
+            match?({:error, %Aerospike.Error{code: :key_not_found}}, trunc_state) and
+              match?({:ok, _}, keep_state)
+
+          {condition?,
+           "truncate key still present or keep key missing: trunc=#{inspect(trunc_state)} keep=#{inspect(keep_state)}"}
+        end,
+        timeout: truncate_wait_timeout_ms(),
+        interval: 200
+      )
     end
   end
 
-  defp assert_eventually(fun, retries, interval) do
-    if fun.() do
-      :ok
-    else
-      if retries == 0 do
-        flunk("condition did not become true within timeout")
-      else
-        Process.sleep(interval)
-        assert_eventually(fun, retries - 1, interval)
-      end
+  defp assert_eventually(fun, opts) when is_function(fun, 0) and is_list(opts) do
+    timeout = Keyword.fetch!(opts, :timeout)
+    interval = Keyword.get(opts, :interval, 200)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    assert_eventually_loop(fun, deadline, interval, nil)
+  end
+
+  defp assert_eventually_loop(fun, deadline, interval, last_message) do
+    case fun.() do
+      true ->
+        :ok
+
+      {true, _message} ->
+        :ok
+
+      false ->
+        await_or_flunk(fun, deadline, interval, last_message || "condition returned false")
+
+      {false, message} when is_binary(message) ->
+        await_or_flunk(fun, deadline, interval, message)
     end
+  end
+
+  defp await_or_flunk(fun, deadline, interval, message) do
+    if System.monotonic_time(:millisecond) > deadline do
+      flunk("condition did not become true within timeout: #{message}")
+    else
+      Process.sleep(interval)
+      assert_eventually_loop(fun, deadline, interval, message)
+    end
+  end
+
+  defp truncate_wait_timeout_ms do
+    if System.get_env("CI") == "true", do: 30_000, else: 10_000
   end
 
   defp await_cluster_ready(name, timeout \\ 5_000) do
