@@ -1,0 +1,41 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/release-please-action@v4
+        id: release
+        with:
+          release-type: elixir
+          package-name: aerospike_driver
+
+      - uses: actions/checkout@v6
+        if: ${{ steps.release.outputs.release_created }}
+
+      - uses: erlef/setup-beam@v1
+        if: ${{ steps.release.outputs.release_created }}
+        with:
+          otp-version: 26.0.2
+          elixir-version: 1.15.4
+
+      - run: mix do deps.get, deps.compile
+        if: ${{ steps.release.outputs.release_created }}
+
+      - run: mix hex.build
+        if: ${{ steps.release.outputs.release_created }}
+
+      - run: mix hex.publish --yes --replace
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_TOKEN }}
