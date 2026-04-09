@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.0](https://github.com/luisgabrielroldan/aerospike_driver/compare/v0.1.1...v0.2.0) (2026-04-09)
+
+
+### Features
+
+* **bench:** add multi-node stream concurrency benchmark suite ([d1e7367](https://github.com/luisgabrielroldan/aerospike_driver/commit/d1e736775fbea8ffca9740a7d2a76473b50e49c4))
+* **bench:** simplify benchmark workflow and developer docs ([cb79e66](https://github.com/luisgabrielroldan/aerospike_driver/commit/cb79e660ad85afe672c89c4063d84f0fe0c1f909))
+* **circuit-breaker:** add policy-driven failure gating across operations ([53a1288](https://github.com/luisgabrielroldan/aerospike_driver/commit/53a1288edfe0b1e1c9d2528d083a656687d71b6d))
+* **geo:** add typed geospatial API and docs updates ([87bf2fb](https://github.com/luisgabrielroldan/aerospike_driver/commit/87bf2fb5d4bf5381fff9306ef32c1a405a1ed2ab))
+* **stream:** enable concurrent multi-node stream fan-out ([20d1ca9](https://github.com/luisgabrielroldan/aerospike_driver/commit/20d1ca9f32a08cfc85bc5dd6e82d80944b186fc8))
+
+
+### Bug Fixes
+
+* **crud:** remove unreachable overload error match ([caf7232](https://github.com/luisgabrielroldan/aerospike_driver/commit/caf72327138ec7844e1fbab23b7cde086c18af5f))
+* **protocol:** reduce batch response parse allocations with size-based skipping ([8408997](https://github.com/luisgabrielroldan/aerospike_driver/commit/8408997fcd69b99f35e0eef51fc614639c82849d))
+* **protocol:** switch asm message encode pipeline to iodata ([258d8e6](https://github.com/luisgabrielroldan/aerospike_driver/commit/258d8e62471826146041529bbd8f748397679788))
+* **repo:** remove constant conn warning and stabilize concurrent stream test ([418843d](https://github.com/luisgabrielroldan/aerospike_driver/commit/418843ddf5404aa2410b20c9e8a0b29bc07c64fe))
+
+
+### Performance Improvements
+
+* **batch-encoder:** use iodata accumulation instead of binary concat ([74d6c1d](https://github.com/luisgabrielroldan/aerospike_driver/commit/74d6c1d3ec0ff2abd597a99c9065b463a64c660c))
+
 ## 0.1.1 (2026-04-08)
 
 
