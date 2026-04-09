@@ -6,6 +6,7 @@ defmodule Aerospike.Filter do
   a predicate, then pass it to `Aerospike.Query.where/2`.
   """
 
+  alias Aerospike.Geo
   alias Aerospike.Key
 
   @enforce_keys [:bin_name, :index_type, :particle_type, :begin, :end]
@@ -40,6 +41,8 @@ defmodule Aerospike.Filter do
           index_name: String.t() | nil,
           ctx: term() | nil
         }
+
+  @type geo_geometry :: String.t() | Geo.Point.t() | Geo.Polygon.t() | Geo.Circle.t()
 
   @doc """
   Numeric range on a bin (signed 64-bit endpoints, inclusive).
@@ -135,7 +138,19 @@ defmodule Aerospike.Filter do
   @doc """
   Geo region query: bins whose geo index falls within `region` (GeoJSON string).
   """
-  @spec geo_within(String.t(), String.t()) :: t()
+  @spec geo_within(String.t(), geo_geometry()) :: t()
+  def geo_within(bin_name, %Geo.Point{} = region) when is_binary(bin_name) do
+    geo_within(bin_name, Geo.to_json(region))
+  end
+
+  def geo_within(bin_name, %Geo.Polygon{} = region) when is_binary(bin_name) do
+    geo_within(bin_name, Geo.to_json(region))
+  end
+
+  def geo_within(bin_name, %Geo.Circle{} = region) when is_binary(bin_name) do
+    geo_within(bin_name, Geo.to_json(region))
+  end
+
   def geo_within(bin_name, region) when is_binary(bin_name) and is_binary(region) do
     validate_bin_name!(bin_name)
 
@@ -155,7 +170,19 @@ defmodule Aerospike.Filter do
   @doc """
   Geo point lookup: bins whose region contains `point` (GeoJSON string).
   """
-  @spec geo_contains(String.t(), String.t()) :: t()
+  @spec geo_contains(String.t(), geo_geometry()) :: t()
+  def geo_contains(bin_name, %Geo.Point{} = point) when is_binary(bin_name) do
+    geo_contains(bin_name, Geo.to_json(point))
+  end
+
+  def geo_contains(bin_name, %Geo.Polygon{} = point) when is_binary(bin_name) do
+    geo_contains(bin_name, Geo.to_json(point))
+  end
+
+  def geo_contains(bin_name, %Geo.Circle{} = point) when is_binary(bin_name) do
+    geo_contains(bin_name, Geo.to_json(point))
+  end
+
   def geo_contains(bin_name, point) when is_binary(bin_name) and is_binary(point) do
     validate_bin_name!(bin_name)
 
@@ -170,6 +197,24 @@ defmodule Aerospike.Filter do
       begin: point,
       end: point
     }
+  end
+
+  @doc """
+  Convenience helper for a `geo_within/2` circle query.
+  """
+  @spec geo_within_radius(String.t(), number(), number(), number()) :: t()
+  def geo_within_radius(bin_name, lng, lat, radius)
+      when is_binary(bin_name) and is_number(lng) and is_number(lat) and is_number(radius) do
+    geo_within(bin_name, Geo.circle(lng, lat, radius))
+  end
+
+  @doc """
+  Convenience helper for a `geo_contains/2` point query.
+  """
+  @spec geo_contains_point(String.t(), number(), number()) :: t()
+  def geo_contains_point(bin_name, lng, lat)
+      when is_binary(bin_name) and is_number(lng) and is_number(lat) do
+    geo_contains(bin_name, Geo.point(lng, lat))
   end
 
   defp validate_bin_name!(name) do

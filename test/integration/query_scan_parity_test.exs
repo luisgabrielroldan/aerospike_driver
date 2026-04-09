@@ -2,6 +2,7 @@ defmodule Aerospike.Integration.QueryScanParityTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Filter
+  alias Aerospike.Geo
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
   alias Aerospike.Query
@@ -198,8 +199,8 @@ defmodule Aerospike.Integration.QueryScanParityTest do
     keys =
       for {name, lng, lat} <- locations do
         key = Aerospike.key(@namespace, @geo_set, name)
-        point = {:geojson, Jason.encode!(%{"type" => "Point", "coordinates" => [lng, lat]})}
-        region = {:geojson, geo_box(lng, lat, 2.0)}
+        point = Geo.point(lng, lat)
+        region = geo_box(lng, lat, 2.0)
         :ok = Aerospike.put!(conn, key, %{"name" => name, "loc" => point, "region" => region})
         key
       end
@@ -229,18 +230,15 @@ defmodule Aerospike.Integration.QueryScanParityTest do
     Process.sleep(500)
 
     pnw_region =
-      Jason.encode!(%{
-        "type" => "Polygon",
-        "coordinates" => [
-          [
-            [-125.0, 44.0],
-            [-120.0, 44.0],
-            [-120.0, 49.0],
-            [-125.0, 49.0],
-            [-125.0, 44.0]
-          ]
+      Geo.polygon([
+        [
+          {-125.0, 44.0},
+          {-120.0, 44.0},
+          {-120.0, 49.0},
+          {-125.0, 49.0},
+          {-125.0, 44.0}
         ]
-      })
+      ])
 
     within_query =
       Query.new(@namespace, @geo_set)
@@ -249,17 +247,15 @@ defmodule Aerospike.Integration.QueryScanParityTest do
 
     assert {:ok, within_records} = Aerospike.all(conn, within_query)
     within_names = within_records |> Enum.map(& &1.bins["name"]) |> Enum.sort()
+    assert Enum.all?(within_records, &match?(%Geo.Point{}, &1.bins["loc"]))
+    assert Enum.all?(within_records, &match?(%Geo.Polygon{}, &1.bins["region"]))
 
     assert "portland" in within_names
     assert "seattle" in within_names
     refute "los_angeles" in within_names
     refute "denver" in within_names
 
-    portland_point =
-      Jason.encode!(%{
-        "type" => "Point",
-        "coordinates" => [-122.68, 45.52]
-      })
+    portland_point = Geo.point(-122.68, 45.52)
 
     contains_query =
       Query.new(@namespace, @geo_set)
@@ -268,6 +264,8 @@ defmodule Aerospike.Integration.QueryScanParityTest do
 
     assert {:ok, contains_records} = Aerospike.all(conn, contains_query)
     contains_names = contains_records |> Enum.map(& &1.bins["name"]) |> Enum.sort()
+    assert Enum.all?(contains_records, &match?(%Geo.Point{}, &1.bins["loc"]))
+    assert Enum.all?(contains_records, &match?(%Geo.Polygon{}, &1.bins["region"]))
 
     assert "portland" in contains_names
   end
@@ -296,18 +294,15 @@ defmodule Aerospike.Integration.QueryScanParityTest do
   end
 
   defp geo_box(center_lng, center_lat, half_deg) do
-    Jason.encode!(%{
-      "type" => "Polygon",
-      "coordinates" => [
-        [
-          [center_lng - half_deg, center_lat - half_deg],
-          [center_lng + half_deg, center_lat - half_deg],
-          [center_lng + half_deg, center_lat + half_deg],
-          [center_lng - half_deg, center_lat + half_deg],
-          [center_lng - half_deg, center_lat - half_deg]
-        ]
+    Geo.polygon([
+      [
+        {center_lng - half_deg, center_lat - half_deg},
+        {center_lng + half_deg, center_lat - half_deg},
+        {center_lng + half_deg, center_lat + half_deg},
+        {center_lng - half_deg, center_lat + half_deg},
+        {center_lng - half_deg, center_lat - half_deg}
       ]
-    })
+    ])
   end
 
   defp await_cluster_ready(name, timeout \\ 5_000) do

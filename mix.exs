@@ -74,6 +74,7 @@ defmodule Aerospike.MixProject do
 
   defp deps do
     [
+      {:jason, "~> 1.4"},
       {:nimble_options, "~> 1.0"},
       {:nimble_pool, "~> 1.0"},
       {:telemetry, "~> 1.0"},
@@ -271,7 +272,15 @@ defmodule Aerospike.MixProject do
         Tutorials: ~r/guides\/.*/
       ],
       groups_for_modules: [
+        "Client API": [
+          Aerospike,
+          Aerospike.Repo
+        ],
         "Data Types": [
+          Aerospike.Geo,
+          Aerospike.Geo.Circle,
+          Aerospike.Geo.Point,
+          Aerospike.Geo.Polygon,
           Aerospike.Key,
           Aerospike.Record,
           Aerospike.Error,
@@ -286,6 +295,15 @@ defmodule Aerospike.MixProject do
         "Expressions & filters": [
           Aerospike.Exp,
           Aerospike.Filter
+        ],
+        "Operations & CDT": [
+          Aerospike.Ctx,
+          Aerospike.Op,
+          Aerospike.Op.Bit,
+          Aerospike.Op.Exp,
+          Aerospike.Op.HLL,
+          Aerospike.Op.List,
+          Aerospike.Op.Map
         ],
         Batch: [
           Aerospike.Batch,
