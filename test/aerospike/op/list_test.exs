@@ -14,16 +14,32 @@ defmodule Aerospike.Op.ListTest do
       assert ListOp.return_none() == 0
     end
 
-    test "return_value/0" do
-      assert ListOp.return_value() == 7
+    test "return_index/0" do
+      assert ListOp.return_index() == 1
+    end
+
+    test "return_reverse_index/0" do
+      assert ListOp.return_reverse_index() == 2
+    end
+
+    test "return_rank/0" do
+      assert ListOp.return_rank() == 3
+    end
+
+    test "return_reverse_rank/0" do
+      assert ListOp.return_reverse_rank() == 4
     end
 
     test "return_count/0" do
       assert ListOp.return_count() == 5
     end
 
-    test "return_index/0" do
-      assert ListOp.return_index() == 1
+    test "return_value/0" do
+      assert ListOp.return_value() == 7
+    end
+
+    test "return_exists/0" do
+      assert ListOp.return_exists() == 13
     end
   end
 

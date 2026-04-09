@@ -3,6 +3,8 @@ defmodule Aerospike.Protocol.ResponseTest do
 
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Test.Fixtures
@@ -71,5 +73,28 @@ defmodule Aerospike.Protocol.ResponseTest do
     assert {:ok, {2, 3, body}} = Message.decode(fixture)
     assert {:ok, msg} = AsmMsg.decode(body)
     assert {:ok, _} = Response.parse_record_response(msg, key)
+  end
+
+  test "parse_record_response aggregates repeated bin operations in order", %{key: key} do
+    {int_pt, one_data} = Value.encode_value(1)
+    {_int_pt, two_data} = Value.encode_value(2)
+    {_int_pt, three_data} = Value.encode_value(3)
+    {str_pt, status_data} = Value.encode_value("ok")
+
+    msg = %AsmMsg{
+      result_code: 0,
+      generation: 7,
+      expiration: 60,
+      operations: [
+        %Operation{bin_name: "counter", particle_type: int_pt, data: one_data},
+        %Operation{bin_name: "counter", particle_type: int_pt, data: two_data},
+        %Operation{bin_name: "status", particle_type: str_pt, data: status_data},
+        %Operation{bin_name: "counter", particle_type: int_pt, data: three_data}
+      ]
+    }
+
+    assert {:ok, record} = Response.parse_record_response(msg, key)
+    assert record.bins["counter"] == [1, 2, 3]
+    assert record.bins["status"] == "ok"
   end
 end

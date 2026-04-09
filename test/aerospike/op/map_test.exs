@@ -14,6 +14,26 @@ defmodule Aerospike.Op.MapTest do
       assert MapOp.return_none() == 0
     end
 
+    test "return_index/0" do
+      assert MapOp.return_index() == 1
+    end
+
+    test "return_reverse_index/0" do
+      assert MapOp.return_reverse_index() == 2
+    end
+
+    test "return_rank/0" do
+      assert MapOp.return_rank() == 3
+    end
+
+    test "return_reverse_rank/0" do
+      assert MapOp.return_reverse_rank() == 4
+    end
+
+    test "return_count/0" do
+      assert MapOp.return_count() == 5
+    end
+
     test "return_key/0" do
       assert MapOp.return_key() == 6
     end
@@ -24,6 +44,10 @@ defmodule Aerospike.Op.MapTest do
 
     test "return_key_value/0" do
       assert MapOp.return_key_value() == 8
+    end
+
+    test "return_exists/0" do
+      assert MapOp.return_exists() == 13
     end
   end
 

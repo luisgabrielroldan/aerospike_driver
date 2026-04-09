@@ -37,16 +37,44 @@ defmodule Aerospike.Protocol.Response do
   end
 
   defp record_bins_from_operations(operations) do
-    Enum.reduce_while(operations, {:ok, %{}}, fn
+    init = %{bins: %{}, counts: %{}}
+
+    Enum.reduce_while(operations, {:ok, init}, fn
       %Operation{bin_name: ""}, {:ok, acc} ->
         {:cont, {:ok, acc}}
 
       %Operation{bin_name: name} = op, {:ok, acc} ->
         case Value.decode_value(op.particle_type, op.data) do
-          {:ok, v} -> {:cont, {:ok, Map.put(acc, name, v)}}
-          {:error, _} = err -> {:halt, err}
+          {:ok, value} ->
+            {:cont, {:ok, put_operation_value(acc, name, value)}}
+
+          {:error, _} = err ->
+            {:halt, err}
         end
     end)
+    |> case do
+      {:ok, %{bins: bins}} -> {:ok, bins}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp put_operation_value(%{bins: bins, counts: counts} = acc, name, value) do
+    count = Map.get(counts, name, 0) + 1
+
+    bins =
+      case count do
+        1 ->
+          Map.put(bins, name, value)
+
+        2 ->
+          first_value = Map.fetch!(bins, name)
+          Map.put(bins, name, [first_value, value])
+
+        _ ->
+          Map.update!(bins, name, fn values -> values ++ [value] end)
+      end
+
+    %{acc | bins: bins, counts: Map.put(counts, name, count)}
   end
 
   @doc """
