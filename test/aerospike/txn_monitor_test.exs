@@ -69,7 +69,7 @@ defmodule Aerospike.TxnMonitorTest do
     end
 
     test "decodes as a valid AS_MSG", %{wire: wire} do
-      assert {:ok, {2, 3, body}} = Message.decode(wire)
+      assert {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
       assert {:ok, %AsmMsg{}} = AsmMsg.decode(body)
     end
 
@@ -294,11 +294,7 @@ defmodule Aerospike.TxnMonitorTest do
   describe "transaction preflight and monitor commands" do
     setup do
       conn = :"txn_monitor_test_#{System.unique_integer([:positive, :monotonic])}"
-      {:ok, pid} = TableOwner.start_link(name: conn)
-
-      on_exit(fn ->
-        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
-      end)
+      _pid = start_supervised!({TableOwner, name: conn})
 
       txn = Txn.new()
       key = Key.new("test", "users", "txn-monitor-key")
@@ -370,7 +366,7 @@ defmodule Aerospike.TxnMonitorTest do
   end
 
   defp decode_msg!(wire) do
-    {:ok, {2, 3, body}} = Message.decode(wire)
+    {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
     {:ok, msg} = AsmMsg.decode(body)
     msg
   end

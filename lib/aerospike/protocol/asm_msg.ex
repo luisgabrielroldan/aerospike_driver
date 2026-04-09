@@ -190,11 +190,11 @@ defmodule Aerospike.Protocol.AsmMsg do
 
       iex> msg = %Aerospike.Protocol.AsmMsg{info1: 1, info2: 0, info3: 0, info4: 0}
       iex> encoded = Aerospike.Protocol.AsmMsg.encode(msg)
-      iex> byte_size(encoded)
+      iex> IO.iodata_length(encoded)
       22
 
   """
-  @spec encode(t()) :: binary()
+  @spec encode(t()) :: iodata()
   def encode(%__MODULE__{} = msg) do
     field_count = length(msg.fields)
     op_count = length(msg.operations)
@@ -204,10 +204,10 @@ defmodule Aerospike.Protocol.AsmMsg do
         msg.result_code::8, msg.generation::32-big, msg.expiration::32-big,
         msg.timeout::32-big-signed, field_count::16-big, op_count::16-big>>
 
-    fields_binary = Enum.map_join(msg.fields, &Field.encode/1)
-    ops_binary = Enum.map_join(msg.operations, &Operation.encode/1)
-
-    header <> fields_binary <> ops_binary
+    [
+      header
+      | Enum.map(msg.fields, &Field.encode/1) ++ Enum.map(msg.operations, &Operation.encode/1)
+    ]
   end
 
   @doc """

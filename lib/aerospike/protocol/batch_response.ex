@@ -10,7 +10,6 @@ defmodule Aerospike.Protocol.BatchResponse do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
-  alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.ResultCode
@@ -146,20 +145,33 @@ defmodule Aerospike.Protocol.BatchResponse do
   defp skip_fields(data, 0), do: {:ok, data}
 
   defp skip_fields(data, n) when n > 0 do
-    case Field.decode(data) do
-      {:ok, _f, rest} -> skip_fields(rest, n - 1)
+    case skip_field_by_size(data) do
+      {:ok, rest} -> skip_fields(rest, n - 1)
       {:error, _} = err -> err
     end
   end
+
+  defp skip_field_by_size(<<size::32-big, _::binary-size(size), rest::binary>>) when size > 0,
+    do: {:ok, rest}
+
+  defp skip_field_by_size(<<_::32, _::binary>>), do: {:error, :incomplete_field}
+  defp skip_field_by_size(_), do: {:error, :incomplete_field_header}
 
   defp skip_operations(data, 0), do: {:ok, data}
 
   defp skip_operations(data, n) when n > 0 do
-    case Operation.decode(data) do
-      {:ok, _op, rest} -> skip_operations(rest, n - 1)
+    case skip_operation_by_size(data) do
+      {:ok, rest} -> skip_operations(rest, n - 1)
       {:error, _} = err -> err
     end
   end
+
+  defp skip_operation_by_size(<<size::32-big, _::binary-size(size), rest::binary>>)
+       when size >= 4,
+       do: {:ok, rest}
+
+  defp skip_operation_by_size(<<_::32, _::binary>>), do: {:error, :incomplete_operation}
+  defp skip_operation_by_size(_), do: {:error, :incomplete_operation_header}
 
   defp decode_operations_to_bins(data, op_count) do
     decode_ops(data, op_count, %{})

@@ -3,6 +3,7 @@ defmodule Aerospike.ScanOps do
 
   # Scan/query orchestration: partition routing, per-node wire build, fan-out, streaming.
 
+  alias Aerospike.CircuitBreaker
   alias Aerospike.Connection
   alias Aerospike.Cursor
   alias Aerospike.Error
@@ -25,7 +26,7 @@ defmodule Aerospike.ScanOps do
 
   @typep fanout_prepared :: %{
            groups: partition_groups(),
-           node_wires: [{pid(), iodata(), ScanQuery.node_partitions()}],
+           node_wires: [{String.t(), pid(), iodata(), ScanQuery.node_partitions()}],
            replica_index: non_neg_integer()
          }
 
@@ -200,7 +201,7 @@ defmodule Aerospike.ScanOps do
 
         producer =
           spawn_link(fn ->
-            run_stream_producer(prepared.node_wires, parent, ns, set, checkout_timeout)
+            run_stream_producer(conn_name, prepared.node_wires, parent, ns, set, checkout_timeout)
           end)
 
         monitor_ref = Process.monitor(producer)
@@ -320,11 +321,18 @@ defmodule Aerospike.ScanOps do
   defp cleanup_stream_producer(_), do: :ok
 
   # Nodes are processed sequentially; concurrent fan-out is a future optimization.
-  defp run_stream_producer([], parent, _ns, _set, _checkout_timeout) do
+  defp run_stream_producer(_conn_name, [], parent, _ns, _set, _checkout_timeout) do
     send(parent, {:scan_done, self()})
   end
 
-  defp run_stream_producer([{pool_pid, wire, _meta} | rest], parent, ns, set, checkout_timeout) do
+  defp run_stream_producer(
+         conn_name,
+         [{node_name, pool_pid, wire, _meta} | rest],
+         parent,
+         ns,
+         set,
+         checkout_timeout
+       ) do
     result =
       try do
         NimblePool.checkout!(
@@ -333,7 +341,7 @@ defmodule Aerospike.ScanOps do
           fn _from, conn ->
             case Connection.send_command(conn, wire) do
               {:ok, conn2} ->
-                read_stream_frames(conn2, parent, ns, set)
+                read_stream_frames(conn2, conn_name, node_name, parent, ns, set)
 
               {:error, reason} ->
                 send(parent, {:scan_error, self(), reason})
@@ -364,14 +372,23 @@ defmodule Aerospike.ScanOps do
     case result do
       :error_sent -> :ok
       {:error, _} -> :ok
-      _ -> run_stream_producer(rest, parent, ns, set, checkout_timeout)
+      _ -> run_stream_producer(conn_name, rest, parent, ns, set, checkout_timeout)
     end
   end
 
-  defp read_stream_frames(conn, parent, ns, set) do
+  defp read_stream_frames(conn, conn_name, node_name, parent, ns, set) do
     case Connection.recv_frame(conn) do
       {:ok, conn2, body, proto_last?} ->
-        dispatch_parsed_stream_frame(conn2, body, parent, ns, set, proto_last?)
+        dispatch_parsed_stream_frame(
+          conn2,
+          body,
+          conn_name,
+          node_name,
+          parent,
+          ns,
+          set,
+          proto_last?
+        )
 
       {:error, reason} ->
         send(parent, {:scan_error, self(), reason})
@@ -379,7 +396,16 @@ defmodule Aerospike.ScanOps do
     end
   end
 
-  defp dispatch_parsed_stream_frame(conn2, body, parent, ns, set, proto_last?) do
+  defp dispatch_parsed_stream_frame(
+         conn2,
+         body,
+         conn_name,
+         node_name,
+         parent,
+         ns,
+         set,
+         proto_last?
+       ) do
     case ScanResponse.parse_stream_chunk(body, ns, set) do
       {:ok, rs, _parts, stream_done?} ->
         if rs != [], do: send(parent, {:scan_records, self(), rs})
@@ -387,10 +413,11 @@ defmodule Aerospike.ScanOps do
         if stream_done? or proto_last? do
           {{:ok, :done}, conn2}
         else
-          read_stream_frames(conn2, parent, ns, set)
+          read_stream_frames(conn2, conn_name, node_name, parent, ns, set)
         end
 
       {:error, %Error{} = e} ->
+        maybe_record_device_overload(conn_name, node_name, {:error, e})
         send(parent, {:scan_error, self(), e})
         {{:error, e}, :close}
     end
@@ -431,7 +458,7 @@ defmodule Aerospike.ScanOps do
       node_wires =
         sorted
         |> Enum.zip(max_vals)
-        |> Enum.map(fn {{_node, group}, node_max} ->
+        |> Enum.map(fn {{node_name, group}, node_max} ->
           page_meta = %{
             parts_full: group.parts_full,
             parts_partial: group.parts_partial,
@@ -439,7 +466,7 @@ defmodule Aerospike.ScanOps do
           }
 
           wire = build_wire(scannable, page_meta, opts)
-          {group.pool_pid, wire, page_meta}
+          {node_name, group.pool_pid, wire, page_meta}
         end)
 
       {:ok, %{groups: groups2, node_wires: node_wires, replica_index: replica_index}}
@@ -538,9 +565,11 @@ defmodule Aerospike.ScanOps do
     collect_and_merge(
       conn_name,
       wires,
-      fn pool_pid, wire ->
+      fn node_name, pool_pid, wire ->
         with {:ok, body} <- Router.checkout_and_request_stream(pool_pid, wire, checkout_timeout) do
-          ScanResponse.count_records(body)
+          result = ScanResponse.count_records(body)
+          maybe_record_device_overload(conn_name, node_name, result)
+          result
         end
       end,
       fn counts -> {:ok, Enum.sum(counts)} end,
@@ -562,6 +591,10 @@ defmodule Aerospike.ScanOps do
              Router.checkout_and_request_stream(job.pool_pid, job.wire, checkout_timeout),
            {:ok, records, _parts} <- ScanResponse.parse(body, ns, set) do
         {:ok, records}
+      else
+        {:error, %Error{} = e} = err ->
+          maybe_record_device_overload(conn_name, job.node_name, err)
+          {:error, e}
       end
     end
 
@@ -578,8 +611,9 @@ defmodule Aerospike.ScanOps do
   end
 
   defp page_jobs_from_node_wires(node_wires) do
-    Enum.map(node_wires, fn {pool_pid, wire, page_meta} ->
+    Enum.map(node_wires, fn {node_name, pool_pid, wire, page_meta} ->
       page_meta
+      |> Map.put(:node_name, node_name)
       |> Map.put(:pool_pid, pool_pid)
       |> Map.put(:wire, wire)
     end)
@@ -663,9 +697,9 @@ defmodule Aerospike.ScanOps do
     task_sup = Tables.task_sup(conn_name)
 
     tasks =
-      Enum.map(wires, fn {pool_pid, wire, _page_meta} ->
+      Enum.map(wires, fn {node_name, pool_pid, wire, _page_meta} ->
         Task.Supervisor.async_nolink(task_sup, fn ->
-          node_fun.(pool_pid, wire)
+          node_fun.(node_name, pool_pid, wire)
         end)
       end)
 
@@ -759,10 +793,10 @@ defmodule Aerospike.ScanOps do
   defp namespace_set(%Scan{namespace: ns, set: set}), do: {ns, set}
   defp namespace_set(%Query{namespace: ns, set: set}), do: {ns, set}
 
-  @spec build_wire(Scan.t(), ScanQuery.node_partitions(), keyword()) :: binary()
+  @spec build_wire(Scan.t(), ScanQuery.node_partitions(), keyword()) :: iodata()
   defp build_wire(%Scan{} = s, np, opts), do: ScanQuery.build_scan(s, np, opts)
 
-  @spec build_wire(Query.t(), ScanQuery.node_partitions(), keyword()) :: binary()
+  @spec build_wire(Query.t(), ScanQuery.node_partitions(), keyword()) :: iodata()
   defp build_wire(%Query{} = q, np, opts), do: ScanQuery.build_query(q, np, opts)
 
   defp replica_index_from_opts(opts) do
@@ -826,4 +860,14 @@ defmodule Aerospike.ScanOps do
 
   defp telemetry_scan_result({:ok, _}), do: :ok
   defp telemetry_scan_result({:error, %Error{code: code}}), do: {:error, code}
+
+  defp maybe_record_device_overload(
+         conn_name,
+         node_name,
+         {:error, %Error{code: :device_overload}}
+       ) do
+    CircuitBreaker.record_error(conn_name, node_name, :device_overload)
+  end
+
+  defp maybe_record_device_overload(_conn_name, _node_name, _result), do: :ok
 end

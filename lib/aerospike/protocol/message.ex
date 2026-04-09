@@ -143,4 +143,16 @@ defmodule Aerospike.Protocol.Message do
   """
   @spec encode_as_msg(binary()) :: binary()
   def encode_as_msg(payload), do: encode(@proto_version, @type_as_msg, payload)
+
+  @doc """
+  Encodes an AS_MSG message (type 3) from an iodata payload, returning iodata.
+
+  Computes the payload length via `IO.iodata_length/1` and prepends the 8-byte
+  protocol header. The result is iodata (a list), not a flat binary.
+  """
+  @spec encode_as_msg_iodata(iodata()) :: iodata()
+  def encode_as_msg_iodata(payload) do
+    length = IO.iodata_length(payload)
+    [encode_header(@proto_version, @type_as_msg, length) | payload]
+  end
 end

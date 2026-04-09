@@ -16,6 +16,7 @@ defmodule Aerospike.Cluster do
 
   require Logger
 
+  alias Aerospike.CircuitBreaker
   alias Aerospike.Connection
   alias Aerospike.NodeSupervisor
   alias Aerospike.Protocol.PartitionMap
@@ -71,6 +72,13 @@ defmodule Aerospike.Cluster do
     # Persist per-command policy defaults so CRUD can merge them at call time.
     policy_defaults = Keyword.get(opts, :defaults, [])
     :ets.insert(Tables.meta(name), {:policy_defaults, policy_defaults})
+    max_error_rate = Keyword.get(opts, :max_error_rate, 100)
+    error_rate_window = Keyword.get(opts, :error_rate_window, 1)
+
+    :ets.insert(
+      Tables.meta(name),
+      {:breaker_config, %{max_error_rate: max_error_rate, error_rate_window: error_rate_window}}
+    )
 
     state = %{
       name: name,
@@ -91,7 +99,9 @@ defmodule Aerospike.Cluster do
       node_supervisor: nil,
       # Set to true after the first successful initial tend. While false, the
       # tend timer retries seed bootstrap instead of running periodic maintenance.
-      bootstrapped: false
+      bootstrapped: false,
+      tend_tick: 0,
+      error_rate_window: error_rate_window
     }
 
     {:ok, state, {:continue, :initial_tend}}
@@ -149,7 +159,9 @@ defmodule Aerospike.Cluster do
 
   # Periodic tend is best-effort: failures are swallowed so the cluster stays up.
   @impl true
-  def handle_info(:tend, state) do
+  def handle_info(:tend, %{bootstrapped: true} = state) do
+    state = %{state | tend_tick: state.tend_tick + 1}
+    CircuitBreaker.maybe_reset_window(state.name, state.tend_tick, state.error_rate_window)
     new_state = do_periodic_tend(state)
     _ = schedule_tend(new_state)
     {:noreply, new_state}

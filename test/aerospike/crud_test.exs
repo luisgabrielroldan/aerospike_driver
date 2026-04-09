@@ -93,7 +93,7 @@ defmodule Aerospike.CRUDTest do
 
       msg = CRUD.apply_filter_exp(base_msg, filter: exp)
 
-      wire = Message.encode_as_msg(AsmMsg.encode(msg))
+      wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       assert {:ok, {2, 3, body}} = Message.decode(wire)
       assert {:ok, decoded} = AsmMsg.decode(body)
 
@@ -116,7 +116,7 @@ defmodule Aerospike.CRUDTest do
 
       msg = CRUD.apply_filter_exp(base_msg, [])
 
-      wire = Message.encode_as_msg(AsmMsg.encode(msg))
+      wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       assert {:ok, {2, 3, body}} = Message.decode(wire)
       assert {:ok, decoded} = AsmMsg.decode(body)
 
