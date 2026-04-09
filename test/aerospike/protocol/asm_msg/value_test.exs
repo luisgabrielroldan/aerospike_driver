@@ -257,6 +257,47 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
       assert %{"x" => {:ext, 0xFF, _}} = decoded
     end
 
+    test "map particle strips ordered collection sentinel key/value pair" do
+      sentinel = {:ext, 8, <<>>}
+
+      map_data =
+        MessagePack.pack!(%{
+          sentinel => nil,
+          {:particle_string, "x"} => 1
+        })
+
+      assert {:ok, decoded} = Value.decode_value(Operation.particle_map(), map_data)
+      assert decoded == %{"x" => 1}
+    end
+
+    test "list particle strips leading ordered collection sentinel" do
+      sentinel = {:ext, 3, <<>>}
+      list_data = MessagePack.pack!([sentinel, {:particle_string, "a"}, 2])
+
+      assert {:ok, decoded} = Value.decode_value(Operation.particle_list(), list_data)
+      assert decoded == ["a", 2]
+    end
+
+    test "ordered collection filtering preserves non-sentinel ext terms" do
+      ext_key = {:ext, 9, <<>>}
+      ext_list_value = {:ext, 8, <<1>>}
+
+      map_data =
+        MessagePack.pack!(%{
+          ext_key => nil,
+          {:particle_string, "y"} => ext_list_value
+        })
+
+      list_data = MessagePack.pack!([{:ext, 8, <<1>>}, 10])
+
+      assert {:ok, decoded_map} = Value.decode_value(Operation.particle_map(), map_data)
+      assert Map.has_key?(decoded_map, ext_key)
+      assert decoded_map["y"] == ext_list_value
+
+      assert {:ok, decoded_list} = Value.decode_value(Operation.particle_list(), list_data)
+      assert decoded_list == [ext_list_value, 10]
+    end
+
     test "string without particle prefix passes through in map decode" do
       raw_str = MessagePack.pack!(%{"plain" => 1})
       assert {:ok, decoded} = Value.decode_value(Operation.particle_map(), raw_str)

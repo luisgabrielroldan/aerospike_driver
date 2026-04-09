@@ -49,9 +49,15 @@ defmodule Aerospike.Op.Map do
   Functions that accept `return_type:` control what the server returns. Helpers:
 
   - `return_none/0` — nothing (fastest for write-only operations)
+  - `return_index/0` — index(es) of affected entries
+  - `return_reverse_index/0` — reverse index(es) from map end
+  - `return_rank/0` — rank(s) of affected entries
+  - `return_reverse_rank/0` — reverse rank(s) from highest rank
+  - `return_count/0` — count of affected entries
   - `return_key/0` — key(s) of affected entries
   - `return_value/0` — value(s) of affected entries
   - `return_key_value/0` — key/value pairs
+  - `return_exists/0` — existence flag(s) for matched entries
 
   Each function documents its default when `return_type:` is omitted.
 
@@ -130,6 +136,26 @@ defmodule Aerospike.Op.Map do
   @spec return_none() :: 0
   def return_none, do: 0
 
+  @doc "MapReturnType: index."
+  @spec return_index() :: 1
+  def return_index, do: 1
+
+  @doc "MapReturnType: reverse index."
+  @spec return_reverse_index() :: 2
+  def return_reverse_index, do: 2
+
+  @doc "MapReturnType: rank."
+  @spec return_rank() :: 3
+  def return_rank, do: 3
+
+  @doc "MapReturnType: reverse rank."
+  @spec return_reverse_rank() :: 4
+  def return_reverse_rank, do: 4
+
+  @doc "MapReturnType: count."
+  @spec return_count() :: 5
+  def return_count, do: 5
+
   @doc "MapReturnType: key."
   @spec return_key() :: 6
   def return_key, do: 6
@@ -141,6 +167,10 @@ defmodule Aerospike.Op.Map do
   @doc "MapReturnType: key/value pairs."
   @spec return_key_value() :: 8
   def return_key_value, do: 8
+
+  @doc "MapReturnType: exists."
+  @spec return_exists() :: 13
+  def return_exists, do: 13
 
   defp ctx(opts), do: Keyword.get(opts, :ctx)
 
