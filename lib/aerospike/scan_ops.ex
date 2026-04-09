@@ -793,10 +793,10 @@ defmodule Aerospike.ScanOps do
   defp namespace_set(%Scan{namespace: ns, set: set}), do: {ns, set}
   defp namespace_set(%Query{namespace: ns, set: set}), do: {ns, set}
 
-  @spec build_wire(Scan.t(), ScanQuery.node_partitions(), keyword()) :: binary()
+  @spec build_wire(Scan.t(), ScanQuery.node_partitions(), keyword()) :: iodata()
   defp build_wire(%Scan{} = s, np, opts), do: ScanQuery.build_scan(s, np, opts)
 
-  @spec build_wire(Query.t(), ScanQuery.node_partitions(), keyword()) :: binary()
+  @spec build_wire(Query.t(), ScanQuery.node_partitions(), keyword()) :: iodata()
   defp build_wire(%Query{} = q, np, opts), do: ScanQuery.build_query(q, np, opts)
 
   defp replica_index_from_opts(opts) do

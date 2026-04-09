@@ -11,7 +11,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
   alias Aerospike.Scan
 
   defp decode_as_msg(wire) do
-    assert {:ok, {_v, 3, body}} = Message.decode(wire)
+    assert {:ok, {_v, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
     assert {:ok, msg} = AsmMsg.decode(body)
     msg
   end

@@ -31,7 +31,7 @@ defmodule Aerospike.Test.Helpers do
       {:ok, conn} ->
         {:ok, conn} = Connection.login(conn)
         msg = AsmMsg.delete_command(key.namespace, key.set, key.digest)
-        wire = Message.encode_as_msg(AsmMsg.encode(msg))
+        wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
         _ = Connection.request(conn, wire)
         Connection.close(conn)
 
@@ -86,7 +86,7 @@ defmodule Aerospike.Test.Helpers do
   def put(conn, key, bins) do
     ops = Value.encode_bin_operations(bins)
     msg = AsmMsg.write_command(key.namespace, key.set, key.digest, ops)
-    wire = Message.encode_as_msg(AsmMsg.encode(msg))
+    wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
 
     case send_command(conn, wire) do
       {:ok, conn2, msg} ->
@@ -108,7 +108,7 @@ defmodule Aerospike.Test.Helpers do
           {:ok, Connection.t(), Aerospike.Record.t()} | {:error, Error.t()}
   def get(conn, key) do
     msg = AsmMsg.read_command(key.namespace, key.set, key.digest)
-    wire = Message.encode_as_msg(AsmMsg.encode(msg))
+    wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
 
     case send_command(conn, wire) do
       {:ok, conn2, msg} ->
@@ -130,7 +130,7 @@ defmodule Aerospike.Test.Helpers do
           {:ok, Connection.t(), boolean()} | {:error, Error.t()}
   def delete(conn, key) do
     msg = AsmMsg.delete_command(key.namespace, key.set, key.digest)
-    wire = Message.encode_as_msg(AsmMsg.encode(msg))
+    wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
 
     case send_command(conn, wire) do
       {:ok, conn2, msg} ->
@@ -152,7 +152,7 @@ defmodule Aerospike.Test.Helpers do
           {:ok, Connection.t(), boolean()} | {:error, Error.t()}
   def exists(conn, key) do
     msg = AsmMsg.exists_command(key.namespace, key.set, key.digest)
-    wire = Message.encode_as_msg(AsmMsg.encode(msg))
+    wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
 
     case send_command(conn, wire) do
       {:ok, conn2, msg} ->
@@ -173,7 +173,7 @@ defmodule Aerospike.Test.Helpers do
   @spec touch(Connection.t(), Key.t()) :: {:ok, Connection.t()} | {:error, Error.t()}
   def touch(conn, key) do
     msg = AsmMsg.touch_command(key.namespace, key.set, key.digest)
-    wire = Message.encode_as_msg(AsmMsg.encode(msg))
+    wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
 
     case send_command(conn, wire) do
       {:ok, conn2, msg} ->
@@ -192,34 +192,34 @@ defmodule Aerospike.Test.Helpers do
   def put_wire(%Key{} = key, bins) when is_map(bins) do
     ops = Value.encode_bin_operations(bins)
     msg = AsmMsg.write_command(key.namespace, key.set, key.digest, ops)
-    Message.encode_as_msg(AsmMsg.encode(msg))
+    IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
   end
 
   @doc false
   @spec get_wire(Key.t()) :: binary()
   def get_wire(%Key{} = key) do
     msg = AsmMsg.read_command(key.namespace, key.set, key.digest)
-    Message.encode_as_msg(AsmMsg.encode(msg))
+    IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
   end
 
   @doc false
   @spec delete_wire(Key.t()) :: binary()
   def delete_wire(%Key{} = key) do
     msg = AsmMsg.delete_command(key.namespace, key.set, key.digest)
-    Message.encode_as_msg(AsmMsg.encode(msg))
+    IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
   end
 
   @doc false
   @spec exists_wire(Key.t()) :: binary()
   def exists_wire(%Key{} = key) do
     msg = AsmMsg.exists_command(key.namespace, key.set, key.digest)
-    Message.encode_as_msg(AsmMsg.encode(msg))
+    IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
   end
 
   @doc false
   @spec touch_wire(Key.t()) :: binary()
   def touch_wire(%Key{} = key) do
     msg = AsmMsg.touch_command(key.namespace, key.set, key.digest)
-    Message.encode_as_msg(AsmMsg.encode(msg))
+    IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
   end
 end

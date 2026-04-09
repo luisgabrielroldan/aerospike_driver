@@ -401,12 +401,14 @@ defmodule Aerospike.ConnectionUnitTest do
       {:ok, lsock, port} = MockTcpServer.start()
 
       terminal_body =
-        AsmMsg.encode(%AsmMsg{
-          info3: AsmMsg.info3_last(),
-          result_code: 0,
-          fields: [],
-          operations: []
-        })
+        IO.iodata_to_binary(
+          AsmMsg.encode(%AsmMsg{
+            info3: AsmMsg.info3_last(),
+            result_code: 0,
+            fields: [],
+            operations: []
+          })
+        )
 
       server =
         Task.async(fn ->
@@ -428,15 +430,19 @@ defmodule Aerospike.ConnectionUnitTest do
 
     test "request_stream handles multiple frames sent in one tcp write" do
       {:ok, lsock, port} = MockTcpServer.start()
-      body1 = AsmMsg.encode(%AsmMsg{result_code: 0, fields: [], operations: []})
+
+      body1 =
+        IO.iodata_to_binary(AsmMsg.encode(%AsmMsg{result_code: 0, fields: [], operations: []}))
 
       body2 =
-        AsmMsg.encode(%AsmMsg{
-          info3: AsmMsg.info3_last(),
-          result_code: 0,
-          fields: [],
-          operations: []
-        })
+        IO.iodata_to_binary(
+          AsmMsg.encode(%AsmMsg{
+            info3: AsmMsg.info3_last(),
+            result_code: 0,
+            fields: [],
+            operations: []
+          })
+        )
 
       frame1 = Message.encode(2, Message.type_as_msg(), body1)
       frame2 = Message.encode(2, Message.type_as_msg(), body2)

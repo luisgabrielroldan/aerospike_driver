@@ -326,7 +326,7 @@ defmodule Aerospike.CRUD do
     |> Policy.apply_write_policy(merged)
     |> apply_filter_exp(merged)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   # UDF args use Aerospike-aware MessagePack encoding: strings carry the particle
@@ -375,7 +375,7 @@ defmodule Aerospike.CRUD do
     |> Policy.apply_send_key(key, merged)
     |> maybe_add_mrt_fields(conn, key, merged, st.has_write?)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp operate_fields(%Key{} = key) do
@@ -452,7 +452,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, true)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp base_write_msg(%Key{} = key, ops) do
@@ -466,7 +466,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, false)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp encode_delete(conn, key, merged) do
@@ -476,7 +476,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, true)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp base_delete_msg(%Key{} = key) do
@@ -490,7 +490,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, false)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp base_exists_msg(%Key{} = key) do
@@ -504,7 +504,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, true)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   @doc false
