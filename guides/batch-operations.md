@@ -2,9 +2,9 @@
 
 Batch APIs pack many keys into one request per server node. The client groups keys by partition owner, encodes a single wire message per node, and merges results back into **the same order as your input list**.
 
-## Homogeneous reads: `batch_get` and `batch_exists`
+## Homogeneous reads: [`batch_get/3`](Aerospike.html#batch_get/3) and [`batch_exists/3`](Aerospike.html#batch_exists/3)
 
-Use `Aerospike.batch_get/3` when every operation is a read with the same options (namespace/set can differ per key; routing is per key digest).
+Use [`Aerospike.batch_get/3`](Aerospike.html#batch_get/3) when every operation is a read with the same options (namespace/set can differ per key; routing is per key digest).
 
 - Missing keys appear as `nil` in the result list.
 - Pass read options such as `:bins` or `:header_only` alongside batch options (`:timeout`, `:replica`, etc.). Batch options are validated separately from read options.
@@ -34,9 +34,9 @@ Enum.each(records, fn
 end)
 ```
 
-### `batch_exists`
+### [`batch_exists/3`](Aerospike.html#batch_exists/3)
 
-`Aerospike.batch_exists/3` returns a list of booleans aligned with `keys`:
+[`Aerospike.batch_exists/3`](Aerospike.html#batch_exists/3) returns a list of booleans aligned with `keys`:
 
 ```elixir
 keys = [key1, key2, key3]
@@ -50,9 +50,9 @@ existing_keys =
   |> Enum.map(fn {k, _} -> k end)
 ```
 
-## Heterogeneous ops: `batch_operate`
+## Heterogeneous ops: [`batch_operate/3`](Aerospike.html#batch_operate/3)
 
-Use `Aerospike.batch_operate/3` when each key can have a different operation (read, put, delete, `operate`, UDF). Build operations with `Aerospike.Batch`:
+Use [`Aerospike.batch_operate/3`](Aerospike.html#batch_operate/3) when each key can have a different operation (read, put, delete, [`operate/4`](Aerospike.html#operate/4), UDF). Build operations with [`Aerospike.Batch`](Aerospike.Batch.html):
 
 ```elixir
 alias Aerospike.Batch
@@ -66,16 +66,16 @@ alias Aerospike.Batch
   ])
 ```
 
-Each element of `results` is an `Aerospike.BatchResult`:
+Each element of `results` is an [`Aerospike.BatchResult`](Aerospike.BatchResult.html):
 
 - On success, `status` is `:ok`. For reads, `record` may hold bins; for puts/deletes, `record` is usually `nil`.
 - On failure, `status` is `:error` and `error` is set (`in_doubt` reflects uncertain writes).
 
-For a missing key, `Batch.read/2` still yields `status: :ok` with `record: nil` (similar to `batch_get`), so a mixed batch is not aborted when some keys are absent.
+For a missing key, [`Batch.read/2`](Aerospike.Batch.html#read/2) still yields `status: :ok` with `record: nil` (similar to [`batch_get/3`](Aerospike.html#batch_get/3)), so a mixed batch is not aborted when some keys are absent.
 
 ### Atomic operations in a batch
 
-`Batch.operate/3` takes the same operation list as `Aerospike.operate/4` — useful for
+[`Batch.operate/3`](Aerospike.Batch.html#operate/3) takes the same operation list as [`Aerospike.operate/4`](Aerospike.html#operate/4) — useful for
 atomic increments, list/map CDT ops, or mixed read+write on a single key within a batch:
 
 ```elixir
@@ -91,7 +91,7 @@ result.record.bins["hits"]  # updated count
 
 ### UDF invocations in a batch
 
-`Batch.udf/5` calls a server-side Lua function on one key. Combine it with other
+[`Batch.udf/5`](Aerospike.Batch.html#udf/5) calls a server-side Lua function on one key. Combine it with other
 operations in the same batch:
 
 ```elixir
@@ -105,12 +105,12 @@ operations in the same batch:
 
 > #### Note {: .info}
 >
-> Ensure the UDF module is registered on the server before calling `Batch.udf/5`.
+> Ensure the UDF module is registered on the server before calling [`Batch.udf/5`](Aerospike.Batch.html#udf/5).
 > UDF registration is covered in a later phase.
 
-## Pattern matching on `BatchResult`
+## Pattern matching on [`BatchResult`](Aerospike.BatchResult.html)
 
-`Aerospike.BatchResult` encodes both success and failure per key. Pattern match on
+[`Aerospike.BatchResult`](Aerospike.BatchResult.html) encodes both success and failure per key. Pattern match on
 `status` to branch your logic:
 
 ```elixir
@@ -140,23 +140,23 @@ end)
 IO.puts("#{length(ok)} succeeded, #{length(errors)} failed")
 ```
 
-## `batch_get` vs `batch_operate`
+## [`batch_get/3`](Aerospike.html#batch_get/3) vs [`batch_operate/3`](Aerospike.html#batch_operate/3)
 
 | Use case | API |
 |----------|-----|
-| Many reads, same policy | `batch_get/3` |
-| Existence checks | `batch_exists/3` |
-| Mix of reads, writes, deletes, CDT ops | `batch_operate/3` |
-| Per-key errors as `BatchResult` | `batch_operate/3` with `Batch.read/2` |
+| Many reads, same policy | [`batch_get/3`](Aerospike.html#batch_get/3) |
+| Existence checks | [`batch_exists/3`](Aerospike.html#batch_exists/3) |
+| Mix of reads, writes, deletes, CDT ops | [`batch_operate/3`](Aerospike.html#batch_operate/3) |
+| Per-key errors as [`BatchResult`](Aerospike.BatchResult.html) | [`batch_operate/3`](Aerospike.html#batch_operate/3) with [`Batch.read/2`](Aerospike.Batch.html#read/2) |
 
-**Rule of thumb**: if every operation is a plain read, prefer `batch_get/3` — it returns
-`[Record.t() | nil]` directly without the `BatchResult` wrapper. Use `batch_operate/3` when
+**Rule of thumb**: if every operation is a plain read, prefer [`batch_get/3`](Aerospike.html#batch_get/3) — it returns
+`[Record.t() | nil]` directly without the [`BatchResult`](Aerospike.BatchResult.html) wrapper. Use [`batch_operate/3`](Aerospike.html#batch_operate/3) when
 you need heterogeneous operations or per-key error information.
 
 ## Error handling
 
 Batch functions return `{:error, %Aerospike.Error{}}` for top-level failures (connection
-issues, invalid options). Per-key errors only appear in `batch_operate` results:
+issues, invalid options). Per-key errors only appear in [`batch_operate/3`](Aerospike.html#batch_operate/3) results:
 
 ```elixir
 case Aerospike.batch_get(:aero, keys) do
@@ -171,8 +171,8 @@ case Aerospike.batch_get(:aero, keys) do
 end
 ```
 
-Bang variants (`batch_get!/3`, `batch_exists!/3`, `batch_operate!/3`) raise
-`Aerospike.Error` on top-level failures:
+Bang variants ([`batch_get!/3`](Aerospike.html#batch_get!/3), [`batch_exists!/3`](Aerospike.html#batch_exists!/3), [`batch_operate!/3`](Aerospike.html#batch_operate!/3)) raise
+[`Aerospike.Error`](Aerospike.Error.html) on top-level failures:
 
 ```elixir
 records = Aerospike.batch_get!(:aero, keys, bins: ["name"])
@@ -209,7 +209,7 @@ end)
 
 ## Policies and defaults
 
-Batch options (`:timeout`, `:pool_checkout_timeout`, `:replica`, `:respond_all_keys`, `:filter`) can be set in `defaults: [batch: ...]` at `start_link/1`. **Per-call options win:** keywords passed to `batch_get/3` (and other batch functions) are merged on top of those defaults, so a call-level `:timeout` overrides the default.
+Batch options (`:timeout`, `:pool_checkout_timeout`, `:replica`, `:respond_all_keys`, `:filter`) can be set in `defaults: [batch: ...]` at [`Aerospike.start_link/1`](Aerospike.html#start_link/1). **Per-call options win:** keywords passed to [`batch_get/3`](Aerospike.html#batch_get/3) (and other batch functions) are merged on top of those defaults, so a call-level `:timeout` overrides the default.
 
 ```elixir
 Aerospike.start_link(
@@ -222,7 +222,7 @@ Aerospike.start_link(
 Aerospike.batch_get(:aero, keys, timeout: 500)
 ```
 
-`batch_get/3` also merges `defaults: [read: ...]` for read-specific options (`:bins`, `:header_only`, `:read_touch_ttl_percent`). **Replica** can be an atom (`:master`, `:sequence`, `:any`) or a non-negative integer replica index. **Filter** uses `Aerospike.Exp.from_wire/1` with pre-encoded expression bytes until the expression builder API ships.
+[`batch_get/3`](Aerospike.html#batch_get/3) also merges `defaults: [read: ...]` for read-specific options (`:bins`, `:header_only`, `:read_touch_ttl_percent`). **Replica** can be an atom (`:master`, `:sequence`, `:any`) or a non-negative integer replica index. **Filter** uses [`Aerospike.Exp.from_wire/1`](Aerospike.Exp.html#from_wire/1) with pre-encoded expression bytes until the expression builder API ships.
 
 ## Telemetry
 
@@ -239,5 +239,5 @@ end, nil)
 
 - [Getting Started](getting-started.md) — connecting, basic CRUD, policy options
 - [Working with Operations](operate-and-cdt.md) — atomic multi-op and CDT operations
-- `Aerospike.Batch` — constructor function reference
-- `Aerospike.BatchResult` — per-key result struct reference
+- [`Aerospike.Batch`](Aerospike.Batch.html) — constructor function reference
+- [`Aerospike.BatchResult`](Aerospike.BatchResult.html) — per-key result struct reference

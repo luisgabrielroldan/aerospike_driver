@@ -40,18 +40,18 @@ defmodule Aerospike.RegisterTaskTest do
       end
     end
 
-    test "empty response → in_progress" do
+    test "empty response -> in_progress" do
       assert {:ok, :in_progress} = StubUdfTask.status(%{response: "", package_name: "test.lua"})
     end
 
-    test "response with matching package → complete" do
+    test "response with matching package -> complete" do
       response = "filename=test.lua,hash=abc123,type=LUA;filename=other.lua,hash=def456,type=LUA;"
 
       assert {:ok, :complete} =
                StubUdfTask.status(%{response: response, package_name: "test.lua"})
     end
 
-    test "response without matching package → in_progress" do
+    test "response without matching package -> in_progress" do
       response = "filename=other.lua,hash=def456,type=LUA;"
 
       assert {:ok, :in_progress} =

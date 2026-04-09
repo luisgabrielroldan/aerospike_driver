@@ -42,26 +42,26 @@ defmodule Aerospike.IndexTaskTest do
       end
     end
 
-    test "empty response → complete" do
+    test "empty response -> complete" do
       assert {:ok, :complete} = StubTask.status(%{response: ""})
     end
 
-    test "load_pct=100 → complete" do
+    test "load_pct=100 -> complete" do
       response = "ns=test:indexname=age_idx:bin=age:load_pct=100:state=RW"
       assert {:ok, :complete} = StubTask.status(%{response: response})
     end
 
-    test "load_pct < 100 → in_progress" do
+    test "load_pct < 100 -> in_progress" do
       response = "ns=test:indexname=age_idx:bin=age:load_pct=47:state=RW"
       assert {:ok, :in_progress} = StubTask.status(%{response: response})
     end
 
-    test "load_pct=0 → in_progress" do
+    test "load_pct=0 -> in_progress" do
       response = "ns=test:indexname=age_idx:bin=age:load_pct=0:state=RW"
       assert {:ok, :in_progress} = StubTask.status(%{response: response})
     end
 
-    test "response without load_pct → complete (synced index)" do
+    test "response without load_pct -> complete (synced index)" do
       response = "ns=test:indexname=age_idx:bin=age:sync_state=synced:state=RW"
       assert {:ok, :complete} = StubTask.status(%{response: response})
     end

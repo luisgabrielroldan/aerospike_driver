@@ -30,7 +30,7 @@ end
 
 ## Registering a UDF
 
-`Aerospike.register_udf/3` uploads the package to the cluster. Pass either a filesystem
+[`Aerospike.register_udf/3`](Aerospike.html#register_udf/3) uploads the package to the cluster. Pass either a filesystem
 path ending in `.lua` or the raw Lua source as a string:
 
 ```elixir
@@ -48,14 +48,14 @@ end
 
 `server_name` (the third argument) is the package name as stored on the server. Use the
 filename convention (`"module.lua"`) for clarity — this is the value you pass to
-`apply_udf/5` as the `package` argument (without the `.lua` extension).
+[`apply_udf/5`](Aerospike.html#apply_udf/5) as the `package` argument (without the `.lua` extension).
 
 Registration is asynchronous. The server propagates the package across cluster nodes in the
 background.
 
 ## Waiting for Registration to Complete
 
-`register_udf/3` returns an `%Aerospike.RegisterTask{}`. Block until registration is
+[`register_udf/3`](Aerospike.html#register_udf/3) returns an [`Aerospike.RegisterTask`](Aerospike.RegisterTask.html). Block until registration is
 propagated to all nodes:
 
 ```elixir
@@ -72,7 +72,7 @@ case Aerospike.RegisterTask.status(task) do
 end
 ```
 
-`RegisterTask.wait/2` options:
+[`wait/2`](Aerospike.AsyncTask.html#c:wait/2) options (see [`Aerospike.AsyncTask`](Aerospike.AsyncTask.html)):
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -81,7 +81,7 @@ end
 
 ## Applying a UDF to a Record
 
-`Aerospike.apply_udf/5` executes a Lua function on a single record:
+[`Aerospike.apply_udf/5`](Aerospike.html#apply_udf/5) executes a Lua function on a single record:
 
 ```elixir
 key = Aerospike.key("test", "items", "item:1")
@@ -96,7 +96,7 @@ Arguments:
 | Argument | Description |
 |----------|-------------|
 | `conn` | Connection name atom |
-| `key` | `%Aerospike.Key{}` for the record to operate on |
+| `key` | [`Aerospike.Key`](Aerospike.Key.html) for the record to operate on |
 | `package` | Lua module name **without** the `.lua` extension |
 | `function` | Lua function name |
 | `args` | List of arguments passed to the function (after the record) |
@@ -124,7 +124,7 @@ encoding maps Lua types to Elixir terms:
   )
 ```
 
-Available options: `:timeout`, `:pool_checkout_timeout`, `:filter`, `:replica`.
+The above call uses [`apply_udf/6`](Aerospike.html#apply_udf/6) (extra keyword options). Available options: `:timeout`, `:pool_checkout_timeout`, `:filter`, `:replica`.
 
 ## Full Lifecycle Example
 
@@ -160,7 +160,7 @@ IO.puts("result: #{result}")   # => "result: 30"
 
 ## Removing a UDF
 
-`remove_udf/2` deletes the package from all cluster nodes. Returns `:ok` whether or not
+[`Aerospike.remove_udf/2`](Aerospike.html#remove_udf/2) deletes the package from all cluster nodes. Returns `:ok` whether or not
 the package was registered:
 
 ```elixir
@@ -171,7 +171,7 @@ the package was registered:
 
 ### UDF Runtime Errors
 
-When the Lua function raises an error, `apply_udf/5` returns `{:error, %Aerospike.Error{code: :udf_bad_response}}`. The `message` field contains the Lua error string:
+When the Lua function raises an error, [`apply_udf/5`](Aerospike.html#apply_udf/5) returns `{:error, %Aerospike.Error{code: :udf_bad_response}}`. The `message` field contains the Lua error string:
 
 ```elixir
 case Aerospike.apply_udf(:aero, key, "mymodule", "risky_fn", [arg]) do
@@ -216,9 +216,9 @@ end
 
 - **Packages are cluster-wide**: a registered package is available on all nodes and
   persists across server restarts.
-- **Package name**: the `server_name` in `register_udf/3` and the `package` argument to
-  `apply_udf/5` are both the filename **without** the `.lua` extension. That is, if you
-  register with `server_name: "my_module.lua"`, call `apply_udf/5` with `package: "my_module"`.
+- **Package name**: the `server_name` in [`register_udf/3`](Aerospike.html#register_udf/3) and the `package` argument to
+  [`apply_udf/5`](Aerospike.html#apply_udf/5) are both the filename **without** the `.lua` extension. That is, if you
+  register with `server_name: "my_module.lua"`, call [`apply_udf/5`](Aerospike.html#apply_udf/5) with `package: "my_module"`.
 - **Lua version**: Aerospike uses Lua 5.1.
 - **Thread safety**: the server runs UDFs in a single-threaded context per record —
   concurrent `apply_udf` calls on different keys are safe.
@@ -227,6 +227,6 @@ end
 
 ## Next Steps
 
-- `Aerospike.RegisterTask` — polling task reference
-- `Aerospike` — facade functions: `register_udf/3`, `apply_udf/5`, `remove_udf/2`
-- [Batch Operations](batch-operations.md) — `Batch.udf/5` for multi-key UDF invocations
+- [`Aerospike.RegisterTask`](Aerospike.RegisterTask.html) — polling task reference
+- [`Aerospike`](Aerospike.html) — facade functions: [`register_udf/3`](Aerospike.html#register_udf/3), [`apply_udf/5`](Aerospike.html#apply_udf/5), [`apply_udf/6`](Aerospike.html#apply_udf/6), [`remove_udf/2`](Aerospike.html#remove_udf/2)
+- [Batch Operations](batch-operations.md) — [`Aerospike.Batch.udf/5`](Aerospike.Batch.html#udf/5) for multi-key UDF invocations

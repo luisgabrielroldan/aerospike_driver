@@ -119,7 +119,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
     flags = batch_flags_byte(global_opts)
 
     # Do not carry `prev` across heterogeneous records. Reusing the batch "repeat"
-    # byte between e.g. read → write would inherit the wrong sub-message shape and
+    # byte between e.g. read -> write would inherit the wrong sub-message shape and
     # the server can mis-handle later ops (writes/deletes appearing to succeed locally
     # while the record is unchanged).
     entries_io =

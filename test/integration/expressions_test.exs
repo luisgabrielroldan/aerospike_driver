@@ -94,7 +94,7 @@ defmodule Aerospike.Integration.ExpressionsTest do
 
     on_exit(fn -> Enum.each(keys, &Helpers.cleanup_key(&1, host: host, port: port)) end)
 
-    # Only records with score > 30 should be returned (i = 4, 5, 6 → scores 40, 50, 60)
+    # Only records with score > 30 should be returned (i = 4, 5, 6 -> scores 40, 50, 60)
     filter = Exp.gt(Exp.int_bin("score"), Exp.int(30))
 
     scan =

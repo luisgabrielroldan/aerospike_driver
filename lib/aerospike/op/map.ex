@@ -10,18 +10,18 @@ defmodule Aerospike.Op.Map do
 
   ## Index examples
 
-      Index  0         → first item
-      Index  4         → fifth item
-      Index -1         → last item
-      Index -3         → third to last item
-      Index  1, Count 2 → second and third items
+      Index  0         -> first item
+      Index  4         -> fifth item
+      Index -1         -> last item
+      Index -3         -> third to last item
+      Index  1, Count 2 -> second and third items
 
   ## Rank examples
 
-      Rank  0  → lowest-valued item
-      Rank  4  → fifth lowest by value
-      Rank -1  → highest-valued item
-      Rank -3  → third highest by value
+      Rank  0  -> lowest-valued item
+      Rank  4  -> fifth lowest by value
+      Rank -1  -> highest-valued item
+      Rank -3  -> third highest by value
 
   ## Map ordering
 
