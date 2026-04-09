@@ -9,7 +9,7 @@ Multi-Record Transactions (MRT) let you group several reads and writes across mu
 
 ## Creating a Transaction
 
-A transaction starts as a plain struct — no I/O, no server contact yet:
+A transaction starts as a plain [`Aerospike.Txn`](Aerospike.Txn.html) struct — no I/O, no server contact yet:
 
 ```elixir
 alias Aerospike.Txn
@@ -18,7 +18,7 @@ txn = Txn.new()
 # %Aerospike.Txn{id: -3489123456789012345, timeout: 0}
 ```
 
-`Txn.new/0` generates a random signed 64-bit ID. Pass `timeout:` (in milliseconds) to set a
+[`Txn.new/0`](Aerospike.Txn.html#new/0) generates a random signed 64-bit ID. Pass `timeout:` (in milliseconds) to set a
 server-side MRT record expiry. If the client crashes before committing, the server releases
 write locks after this window:
 
@@ -26,9 +26,9 @@ write locks after this window:
 txn = Txn.new(timeout: 30_000)   # 30-second server-side timeout
 ```
 
-## Using `transaction/2` — the Recommended Approach
+## Using [`transaction/2`](Aerospike.html#transaction/2) — the Recommended Approach
 
-`Aerospike.transaction/2` is the highest-level API. It creates a transaction, runs your
+[`Aerospike.transaction/2`](Aerospike.html#transaction/2) is the highest-level API. It creates a transaction, runs your
 callback, and commits or aborts automatically:
 
 ```elixir
@@ -48,8 +48,9 @@ callback, and commits or aborts automatically:
   end)
 ```
 
-On any `Aerospike.Error` raised inside the callback, the transaction aborts and
-`transaction/2` returns `{:error, e}`. On any other exception, the transaction aborts and
+On any [`Aerospike.Error`](Aerospike.Error.html) raised inside the callback (for example via
+[`Aerospike.Error.from_result_code/2`](Aerospike.Error.html#from_result_code/2)), the transaction aborts and
+[`transaction/2`](Aerospike.html#transaction/2) returns `{:error, e}`. On any other exception, the transaction aborts and
 the exception is re-raised — server-side write locks are always released immediately.
 
 ### Setting a Timeout
@@ -75,7 +76,7 @@ The return value of the callback is wrapped in `{:ok, value}`:
 
 ## Using `txn:` on CRUD Operations
 
-Pass `txn: txn` to any CRUD operation to enlist it in the transaction. All operations in one
+Pass `txn: txn` to any CRUD operation on [`Aerospike`](Aerospike.html) to enlist it in the transaction. All operations in one
 transaction must touch the **same namespace**:
 
 ```elixir
@@ -94,7 +95,7 @@ Supported operations: `get`, `exists`, `put`, `delete`, `touch`, `append`, `prep
 
 ## Manual Commit and Abort
 
-When you need full control over the transaction lifecycle, call `commit/2` and `abort/2`
+When you need full control over the transaction lifecycle, call [`commit/2`](Aerospike.html#commit/2) and [`abort/2`](Aerospike.html#abort/2)
 directly. You must also initialize ETS tracking explicitly via `TxnOps.init_tracking/2`:
 
 ```elixir
@@ -128,7 +129,7 @@ end
 {:ok, :aborted} = Aerospike.abort(:aero, txn)
 ```
 
-`abort/2` rolls back all tracked writes and deletes the server-side monitor record.
+[`abort/2`](Aerospike.html#abort/2) rolls back all tracked writes and deletes the server-side monitor record.
 Roll-back is best-effort: if some writes fail (e.g., a network partition), the server
 releases locks automatically when the MRT timeout expires.
 
@@ -195,9 +196,9 @@ case Aerospike.commit(:aero, txn) do
 end
 ```
 
-> #### `transaction/2` Handles This For You {: .tip}
+> #### [`transaction/2`](Aerospike.html#transaction/2) Handles This For You {: .tip}
 >
-> `Aerospike.transaction/2` calls `best_effort_abort` on any commit failure, cleans up
+> [`Aerospike.transaction/2`](Aerospike.html#transaction/2) calls `best_effort_abort` on any commit failure, cleans up
 > server-side state, and returns `{:error, e}`. For most use cases you do not need to
 > handle these error cases manually.
 
@@ -205,16 +206,16 @@ end
 
 - **Same namespace**: all keys in one transaction must belong to the same namespace.
 - **No scans or queries**: `scan/3` and `query/3` do not accept a `txn:` option.
-- **Writes are durable deletes**: `delete/3` in a transaction uses durable delete semantics
+- **Writes are durable deletes**: [`delete/3`](Aerospike.html#delete/3) in a transaction uses durable delete semantics
   automatically.
-- **Concurrent use is undefined**: passing the same `%Txn{}` to operations from multiple
+- **Concurrent use is undefined**: passing the same [`%Txn{}`](Aerospike.Txn.html) to operations from multiple
   processes concurrently is not supported. The ETS tracking state is not protected by a lock.
-- **One transaction at a time per handle**: do not nest `transaction/2` calls with the same
+- **One transaction at a time per handle**: do not nest [`transaction/2`](Aerospike.html#transaction/2) calls with the same
   `%Txn{}` struct.
 
 ## Checking Transaction State
 
-Inside a `transaction/2` callback you can inspect the current state:
+Inside a [`transaction/2`](Aerospike.html#transaction/2) callback you can inspect the current state:
 
 ```elixir
 Aerospike.transaction(:aero, fn txn ->
@@ -223,12 +224,12 @@ Aerospike.transaction(:aero, fn txn ->
 end)
 ```
 
-After `commit/2` or `abort/2` returns, the ETS tracking entry is deleted, so
-`txn_status/2` returns `{:error, %Aerospike.Error{}}` rather than `{:ok, :committed}`.
+After [`commit/2`](Aerospike.html#commit/2) or [`abort/2`](Aerospike.html#abort/2) returns, the ETS tracking entry is deleted, so
+[`txn_status/2`](Aerospike.html#txn_status/2) returns `{:error, %Aerospike.Error{}}` rather than `{:ok, :committed}`.
 The state is only observable during the commit/abort execution window.
 
 ## Next Steps
 
-- `Aerospike.Txn` — transaction handle struct reference
-- `Aerospike` — facade functions: `commit/2`, `abort/2`, `transaction/2`, `transaction/3`
+- [`Aerospike.Txn`](Aerospike.Txn.html) — transaction handle struct reference
+- [`Aerospike`](Aerospike.html) — facade functions: [`commit/2`](Aerospike.html#commit/2), [`abort/2`](Aerospike.html#abort/2), [`transaction/2`](Aerospike.html#transaction/2), [`transaction/3`](Aerospike.html#transaction/3)
 - [Batch Operations](batch-operations.md) — combining batch with transactions

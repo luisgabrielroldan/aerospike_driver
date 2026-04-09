@@ -2,8 +2,8 @@ defmodule Aerospike.Router do
   @moduledoc false
   # Routes a wire-encoded request to the correct node based on the key's partition.
   #
-  # Flow: key → partition_id → ETS partition table → node_name → ETS nodes table
-  # → pool_pid → NimblePool.checkout! → send wire + receive response.
+  # Flow: key -> partition_id -> ETS partition table -> node_name -> ETS nodes table
+  # -> pool_pid -> NimblePool.checkout! -> send wire + receive response.
 
   require Logger
 

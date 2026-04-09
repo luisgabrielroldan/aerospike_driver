@@ -214,7 +214,7 @@ defmodule Aerospike.BatchOpsTest do
       # recv_stream treats the short body as terminal (lazy_stream_chunk_terminal? returns
       # true on parse error), so checkout_and_request_stream returns {:ok, <<1,2,3>>}.
       # parse_batch_get then returns {:error, :parse_error}, which propagates through
-      # normalize_task_result → reduce_merged_slots finds it and returns the error.
+      # normalize_task_result -> reduce_merged_slots finds it and returns the error.
       bad_response = <<1, 2, 3>>
       {lsock, port} = start_responding_server(bad_response)
       on_exit(fn -> :gen_tcp.close(lsock) end)
@@ -233,7 +233,7 @@ defmodule Aerospike.BatchOpsTest do
     test "batch_get returns nil for a key not found", %{conn: conn} do
       key = Key.new("test", "s", "missing-key")
 
-      # rc=2 (KEY_NOT_FOUND) at bidx=0 → nil in parse_batch_get; LAST sentinel terminates.
+      # rc=2 (KEY_NOT_FOUND) at bidx=0 -> nil in parse_batch_get; LAST sentinel terminates.
       response = batch_hdr(rc: 2, bidx: 0) <> last_batch_hdr()
       {lsock, port} = start_responding_server(response)
       on_exit(fn -> :gen_tcp.close(lsock) end)
@@ -247,7 +247,7 @@ defmodule Aerospike.BatchOpsTest do
     test "batch_exists returns false for a key not found", %{conn: conn} do
       key = Key.new("test", "s", "absent-key")
 
-      # rc=2 at bidx=0 → exists?=(rc==0)=false; map initialized to false defaults.
+      # rc=2 at bidx=0 -> exists?=(rc==0)=false; map initialized to false defaults.
       response = batch_hdr(rc: 2, bidx: 0) <> last_batch_hdr()
       {lsock, port} = start_responding_server(response)
       on_exit(fn -> :gen_tcp.close(lsock) end)

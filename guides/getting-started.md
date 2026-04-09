@@ -30,7 +30,7 @@ docker run -d --name aerospike -p 3000:3000 aerospike/aerospike-server
 
 ## Connecting
 
-Start a named client supervision tree with `Aerospike.start_link/1`. The `:name` atom
+Start a named client supervision tree with [`Aerospike.start_link/1`](Aerospike.html#start_link/1). The `:name` atom
 becomes your connection handle for all subsequent calls:
 
 ```elixir
@@ -62,6 +62,8 @@ Every record in Aerospike is identified by a **key** composed of three parts:
 - **Namespace** — the top-level data container (like a database)
 - **Set** — a grouping within the namespace (like a table)
 - **User key** — a string or integer that uniquely identifies the record
+
+Build a key with [`Aerospike.key/3`](Aerospike.html#key/3):
 
 ```elixir
 key = Aerospike.key("test", "users", "user:42")
@@ -118,8 +120,8 @@ Touch a record to reset its time-to-live without modifying bins:
 
 ## Error Handling
 
-All functions return `{:ok, result}` or `{:error, %Aerospike.Error{}}`.
-Bang variants (`put!/4`, `get!/3`, etc.) unwrap the success or raise:
+All functions return `{:ok, result}` or `{:error, %Aerospike.Error{}}` (see [`Aerospike.Error`](Aerospike.Error.html)).
+Bang variants ([`put!/4`](Aerospike.html#put!/4), [`get!/3`](Aerospike.html#get!/3), etc.) unwrap the success or raise:
 
 ```elixir
 # Pattern matching
@@ -174,5 +176,5 @@ Common options:
 
 - [Working with Operations](operate-and-cdt.md) — atomic multi-op and CDT operations
 - [Batch Operations](batch-operations.md) — multi-key reads, writes, and mixed ops in one round-trip
-- `Aerospike.Op.Map` — full map operation reference
-- `Aerospike.Op.List` — full list operation reference
+- [`Aerospike.Op.Map`](Aerospike.Op.Map.html) — full map operation reference
+- [`Aerospike.Op.List`](Aerospike.Op.List.html) — full list operation reference

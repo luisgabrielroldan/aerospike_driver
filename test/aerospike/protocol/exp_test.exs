@@ -6,7 +6,7 @@ defmodule Aerospike.Protocol.ExpTest do
   # Expected bytes are computed independently from the Go reference (expression.go)
   # and cross-checked against the msgpack spec. This avoids circular encode/decode tests.
   #
-  # msgpack fixint:  n (0x00..0x7F) → <<n>>
+  # msgpack fixint:  n (0x00..0x7F) -> <<n>>
   # msgpack fixarray(N): <<0x90 + N>>
   # msgpack fixstr(len):  <<0xA0 + len, bytes...>>
   # msgpack nil:    <<0xC0>>
@@ -16,7 +16,7 @@ defmodule Aerospike.Protocol.ExpTest do
 
   describe "literal values" do
     test "integer 42 encodes as msgpack fixint" do
-      # 42 = 0x2A; positive fixint range [0, 127] → single byte
+      # 42 = 0x2A; positive fixint range [0, 127] -> single byte
       assert Exp.encode(%{val: 42}) == <<0x2A>>
     end
 
@@ -25,7 +25,7 @@ defmodule Aerospike.Protocol.ExpTest do
     end
 
     test "negative integer -1 encodes as msgpack negative fixint" do
-      # negative fixint: range [-32, -1] → 0xE0..0xFF; -1 = 0xFF
+      # negative fixint: range [-32, -1] -> 0xE0..0xFF; -1 = 0xFF
       assert Exp.encode(%{val: -1}) == <<0xFF>>
     end
 
@@ -46,12 +46,12 @@ defmodule Aerospike.Protocol.ExpTest do
     end
 
     test "string literal encodes as plain msgpack str (no particle prefix)" do
-      # "hi" → fixstr(2) = <<0xA2, 0x68, 0x69>>
+      # "hi" -> fixstr(2) = <<0xA2, 0x68, 0x69>>
       assert Exp.encode(%{val: {:string, "hi"}}) == <<0xA2, 0x68, 0x69>>
     end
 
     test "blob literal encodes as msgpack bin (0xC4 format)" do
-      # <<1, 2, 3>> → bin8(3) = <<0xC4, 0x03, 0x01, 0x02, 0x03>>
+      # <<1, 2, 3>> -> bin8(3) = <<0xC4, 0x03, 0x01, 0x02, 0x03>>
       assert Exp.encode(%{val: {:blob, <<1, 2, 3>>}}) == <<0xC4, 0x03, 0x01, 0x02, 0x03>>
     end
   end
@@ -146,7 +146,7 @@ defmodule Aerospike.Protocol.ExpTest do
     # int_bin("age") wire = <<0x93, 0x51, 0x02, 0xA3, 0x61, 0x67, 0x65>>
     # int_val(21) wire    = <<21>> = <<0x15>>
     #
-    # eq([sub1, sub2]) → [1, sub1_bytes, sub2_bytes]
+    # eq([sub1, sub2]) -> [1, sub1_bytes, sub2_bytes]
     # fixarray(3)=0x93, expOpEQ=1=0x01
     # Full: 0x93 0x01 <int_bin_age> <int_val_21>
 
@@ -238,11 +238,11 @@ defmodule Aerospike.Protocol.ExpTest do
   describe "nested expression" do
     test "eq(int_bin(age), int_val(21)) full byte sequence" do
       # This is the primary cross-reference test against the Go reference.
-      # int_bin("age") → [81, 2, "age"] → <<0x93, 0x51, 0x02, 0xA3, 0x61, 0x67, 0x65>>
-      # int_val(21)    → <<21>> = <<0x15>>
-      # eq(left, right) → [1, left_bytes, right_bytes]
-      #   → fixarray(3)=0x93, expOpEQ=0x01, left, right
-      #   → <<0x93, 0x01, 0x93, 0x51, 0x02, 0xA3, 0x61, 0x67, 0x65, 0x15>>
+      # int_bin("age") -> [81, 2, "age"] -> <<0x93, 0x51, 0x02, 0xA3, 0x61, 0x67, 0x65>>
+      # int_val(21)    -> <<21>> = <<0x15>>
+      # eq(left, right) -> [1, left_bytes, right_bytes]
+      #   -> fixarray(3)=0x93, expOpEQ=0x01, left, right
+      #   -> <<0x93, 0x01, 0x93, 0x51, 0x02, 0xA3, 0x61, 0x67, 0x65, 0x15>>
 
       int_bin_age = Exp.encode(%{cmd: :bin, val: "age", type: :int})
       int_val_21 = Exp.encode(%{val: 21})

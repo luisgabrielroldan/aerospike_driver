@@ -2,15 +2,15 @@
 
 Aerospike expressions evaluate predicates and computations **on the server**, before results are sent to your client. They serve two distinct purposes:
 
-1. **Filter expressions** — attached to an operation's `filter:` option, they cause the server to silently discard non-matching records before the response is sent. Used on `get`, `exists`, `delete`, `put`, `batch_get`, scans, and queries.
+1. **Filter expressions** — attached to an operation's `filter:` option, they cause the server to silently discard non-matching records before the response is sent. Used on [`get/3`](Aerospike.html#get/3), [`exists/3`](Aerospike.html#exists/3), [`delete/3`](Aerospike.html#delete/3), [`put/4`](Aerospike.html#put/4), [`batch_get/3`](Aerospike.html#batch_get/3), scans, and queries.
 
-2. **Expression operations** — executed inside `operate/4` as computation steps. They read a computed value into a synthetic bin or write a computed result to a real bin, all in a single round-trip.
+2. **Expression operations** — executed inside [`operate/4`](Aerospike.html#operate/4) as computation steps. They read a computed value into a synthetic bin or write a computed result to a real bin, all in a single round-trip.
 
-Both share the same builder API: `Aerospike.Exp`.
+Both share the same builder API: [`Aerospike.Exp`](Aerospike.Exp.html).
 
 ## Building Expressions
 
-Expressions are composed from typed constructor functions. Each function returns an `%Aerospike.Exp{}` struct containing the pre-encoded wire representation. Expressions build up a tree by passing `%Exp{}` values as arguments to other builders.
+Expressions are composed from typed constructor functions. Each function returns an [`%Aerospike.Exp{}`](Aerospike.Exp.html) struct containing the pre-encoded wire representation. Expressions build up a tree by passing `%Exp{}` values as arguments to other builders.
 
 ```elixir
 alias Aerospike.Exp
@@ -42,19 +42,19 @@ All values on the right-hand side of a comparison must be wrapped in a typed exp
 | `Exp.blob(b)` | `binary()` | Raw binary literal (not UTF-8 string) |
 | `Exp.nil_()` | — | Nil literal |
 
-### `Exp.val/1` — type-inferring convenience
+### [`Exp.val/1`](Aerospike.Exp.html#val/1) — type-inferring convenience
 
-`Exp.val/1` infers the constructor from the Elixir term, following the same mapping as official Aerospike clients:
+[`Exp.val/1`](Aerospike.Exp.html#val/1) infers the constructor from the Elixir term, following the same mapping as official Aerospike clients:
 
 | Elixir term | Expression type |
 |-------------|----------------|
-| `integer()` | `Exp.int/1` |
-| `float()` | `Exp.float/1` |
-| `binary()` | `Exp.str/1` |
-| `boolean()` | `Exp.bool/1` |
-| `nil` | `Exp.nil_/0` |
+| `integer()` | [`Exp.int/1`](Aerospike.Exp.html#int/1) |
+| `float()` | [`Exp.float/1`](Aerospike.Exp.html#float/1) |
+| `binary()` | [`Exp.str/1`](Aerospike.Exp.html#str/1) |
+| `boolean()` | [`Exp.bool/1`](Aerospike.Exp.html#bool/1) |
+| `nil` | [`Exp.nil_/0`](Aerospike.Exp.html#nil_/0) |
 
-**All binaries are treated as strings.** If you need blob (raw binary) semantics, use `Exp.blob/1` explicitly; `Exp.val/1` maps every binary to `Exp.str/1`.
+**All binaries are treated as strings.** If you need blob (raw binary) semantics, use [`Exp.blob/1`](Aerospike.Exp.html#blob/1) explicitly; [`Exp.val/1`](Aerospike.Exp.html#val/1) maps every binary to [`Exp.str/1`](Aerospike.Exp.html#str/1).
 
 ```elixir
 # These are equivalent
@@ -99,7 +99,7 @@ Exp.gte(Exp.last_update(), Exp.int(cutoff_ts))
 
 ### Comparisons
 
-All comparison functions take two `%Exp{}` arguments:
+All comparison functions take two [`%Exp{}`](Aerospike.Exp.html) arguments:
 
 ```elixir
 Exp.eq(left, right)   # left == right
@@ -129,7 +129,7 @@ Exp.or_([
 Exp.not_(Exp.eq(Exp.str_bin("status"), Exp.val("banned")))
 ```
 
-> **Naming convention.** `Exp.and_/1`, `Exp.or_/1`, and `Exp.not_/1` use a trailing underscore because `and`, `or`, and `not` are Elixir reserved words and cannot be used as bare function names. The trailing underscore is the standard Elixir convention for avoiding keyword collisions.
+> **Naming convention.** [`Exp.and_/1`](Aerospike.Exp.html#and_/1), [`Exp.or_/1`](Aerospike.Exp.html#or_/1), and [`Exp.not_/1`](Aerospike.Exp.html#not_/1) use a trailing underscore because `and`, `or`, and `not` are Elixir reserved words and cannot be used as bare function names. The trailing underscore is the standard Elixir convention for avoiding keyword collisions.
 
 ## Filter Expressions
 
@@ -158,7 +158,7 @@ only_adults = Exp.gte(Exp.int_bin("age"), Exp.int(18))
 
 ### Scans
 
-`Scan.filter/2` attaches an expression to the scan. Multiple `filter/2` calls **AND** the expressions together — the server returns only records that satisfy all attached filters.
+[`Scan.filter/2`](Aerospike.Scan.html#filter/2) attaches an expression to the scan. Multiple [`filter/2`](Aerospike.Scan.html#filter/2) calls **AND** the expressions together — the server returns only records that satisfy all attached filters.
 
 ```elixir
 alias Aerospike.{Exp, Scan}
@@ -187,7 +187,7 @@ Scan.new("test", "users")
 
 ### Queries (secondary index)
 
-`Query.filter/2` works the same way as `Scan.filter/2`. It applies an additional expression filter on top of the secondary-index predicate from `Query.where/2`:
+[`Query.filter/2`](Aerospike.Query.html#filter/2) works the same way as [`Scan.filter/2`](Aerospike.Scan.html#filter/2). It applies an additional expression filter on top of the secondary-index predicate from [`Query.where/2`](Aerospike.Query.html#where/2):
 
 ```elixir
 alias Aerospike.{Exp, Filter, Query}
@@ -200,24 +200,24 @@ result =
   |> Enum.to_list()
 ```
 
-### `filter:` vs `Query.where/2`
+### `filter:` vs [`Query.where/2`](Aerospike.Query.html#where/2)
 
 These serve different purposes and are both valuable:
 
-| | `Query.where/2` | `filter:` / `Query.filter/2` |
+| | [`Query.where/2`](Aerospike.Query.html#where/2) | `filter:` / [`Query.filter/2`](Aerospike.Query.html#filter/2) |
 |---|---|---|
 | Mechanism | Secondary index lookup | Expression evaluated per record |
 | Requires index | Yes | No |
 | Can replace | Never (index narrows candidates) | Can add on top of SI predicate |
 | Result | Candidate set | Accepted records |
 
-Use `Query.where/2` to narrow candidates with an index, then `filter:` to refine the result with logic the index cannot express (multi-condition, metadata comparisons, or cross-bin logic).
+Use [`Query.where/2`](Aerospike.Query.html#where/2) to narrow candidates with an index, then `filter:` to refine the result with logic the index cannot express (multi-condition, metadata comparisons, or cross-bin logic).
 
 ## Expression Operations
 
-Expression operations execute inside `Aerospike.operate/4`. They compute a value **server-side** and either return the result in the response record's bins or write the result to a real bin — without an extra round-trip.
+Expression operations execute inside [`Aerospike.operate/4`](Aerospike.html#operate/4). They compute a value **server-side** and either return the result in the response record's bins or write the result to a real bin — without an extra round-trip.
 
-Use `Aerospike.Op.Exp`:
+Use [`Aerospike.Op.Exp`](Aerospike.Op.Exp.html):
 
 ```elixir
 alias Aerospike.{Exp, Op}
@@ -240,7 +240,7 @@ key = Aerospike.key("test", "stats", "user:42")
 record.bins["is_adult"]   #=> true
 ```
 
-### `Op.Exp.read/3`
+### [`Op.Exp.read/3`](Aerospike.Op.Exp.html#read/3)
 
 Returns the expression result as a synthetic bin in the response record. The bin appears in `record.bins` under the name you provide but is never persisted.
 
@@ -249,7 +249,7 @@ Op.Exp.read("ttl_seconds", Exp.ttl())
 Op.Exp.read("over_limit", Exp.gt(Exp.int_bin("count"), Exp.int(1_000)))
 ```
 
-### `Op.Exp.write/3`
+### [`Op.Exp.write/3`](Aerospike.Op.Exp.html#write/3)
 
 Evaluates the expression and **stores the result in a real bin**. Subsequent reads of that bin return the stored value.
 
@@ -257,7 +257,7 @@ Evaluates the expression and **stores the result in a real bin**. Subsequent rea
 Op.Exp.write("flagged", Exp.gt(Exp.int_bin("violations"), Exp.int(3)))
 ```
 
-Both `read/3` and `write/3` accept an optional `flags:` integer keyword (default `0`).
+Both [`read/3`](Aerospike.Op.Exp.html#read/3) and [`write/3`](Aerospike.Op.Exp.html#write/3) accept an optional `flags:` integer keyword (default `0`).
 
 ## Runtime Composition
 
@@ -303,16 +303,16 @@ Since each expression builder returns a plain struct, you can also store partial
 
 ## Best Practices
 
-- **Prefer typed constructors over `Exp.val/1`** when the type matters (especially for blobs — `Exp.val/1` maps all binaries to strings).
+- **Prefer typed constructors over [`Exp.val/1`](Aerospike.Exp.html#val/1)** when the type matters (especially for blobs — [`Exp.val/1`](Aerospike.Exp.html#val/1) maps all binaries to strings).
 - **Combine server-side and client-side filters intentionally.** Push as much as possible into expressions to reduce data transfer; use `Stream.filter/2` client-side only for logic the expression system cannot express.
-- **Use `Exp.and_/1` for clarity** when combining multiple conditions, rather than nesting repeated `filter/2` calls.
-- **On queries, combine `where/2` with `filter:`** — the SI predicate narrows candidates cheaply; the expression applies fine-grained logic that the index cannot express.
-- **Expression operations are not CDT operations.** `Op.Exp.write/3` writes the expression result as a scalar value. For list/map mutations, use `Op.List` and `Op.Map`.
+- **Use [`Exp.and_/1`](Aerospike.Exp.html#and_/1) for clarity** when combining multiple conditions, rather than nesting repeated [`filter/2`](Aerospike.Scan.html#filter/2) calls.
+- **On queries, combine [`where/2`](Aerospike.Query.html#where/2) with `filter:`** — the SI predicate narrows candidates cheaply; the expression applies fine-grained logic that the index cannot express.
+- **Expression operations are not CDT operations.** [`Op.Exp.write/3`](Aerospike.Op.Exp.html#write/3) writes the expression result as a scalar value. For list/map mutations, use [`Aerospike.Op.List`](Aerospike.Op.List.html) and [`Aerospike.Op.Map`](Aerospike.Op.Map.html).
 
 ## Next Steps
 
-- [Queries and Scanning](queries-and-scanning.md) — `Scan.filter/2`, `Query.filter/2`, execution patterns
-- [Batch Operations](batch-operations.md) — `filter:` option on `Batch.read/2` and `Batch.operate/3`
-- `Aerospike.Exp` — full expression builder API reference
-- `Aerospike.Op.Exp` — expression operation constructors
-- `Aerospike.Filter` — secondary-index predicates for `Query.where/2`
+- [Queries and Scanning](queries-and-scanning.md) — [`Scan.filter/2`](Aerospike.Scan.html#filter/2), [`Query.filter/2`](Aerospike.Query.html#filter/2), execution patterns
+- [Batch Operations](batch-operations.md) — `filter:` option on [`Batch.read/2`](Aerospike.Batch.html#read/2) and [`Batch.operate/3`](Aerospike.Batch.html#operate/3)
+- [`Aerospike.Exp`](Aerospike.Exp.html) — full expression builder API reference
+- [`Aerospike.Op.Exp`](Aerospike.Op.Exp.html) — expression operation constructors
+- [`Aerospike.Filter`](Aerospike.Filter.html) — secondary-index predicates for [`Query.where/2`](Aerospike.Query.html#where/2)

@@ -139,7 +139,7 @@ defmodule Aerospike.NodePoolTest do
       end)
 
       # Next checkout: handle_checkout calls transport_peername on the dead socket
-      # → {:error, _} → {:remove, :dead}. Pool inits a new worker with a fresh
+      # -> {:error, _} -> {:remove, :dead}. Pool inits a new worker with a fresh
       # connection to the mock server.
       result =
         NimblePool.checkout!(
@@ -165,7 +165,7 @@ defmodule Aerospike.NodePoolTest do
 
       pool = start_supervised!(pool_child_spec(mock.port))
 
-      # Return :close as the checkin value — handle_checkin(:close, ...) → {:remove, :closed}
+      # Return :close as the checkin value — handle_checkin(:close, ...) -> {:remove, :closed}
       NimblePool.checkout!(pool, :checkout, fn _meta, _conn ->
         {:ok, :close}
       end)
@@ -230,7 +230,7 @@ defmodule Aerospike.NodePoolTest do
 
       {:gen_tcp, raw_socket} = transport
 
-      # Stopping the pool triggers terminate_worker → Connection.close
+      # Stopping the pool triggers terminate_worker -> Connection.close
       GenServer.stop(pool, :normal, 1_000)
       Process.sleep(50)
 
