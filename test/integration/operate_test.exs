@@ -58,6 +58,20 @@ defmodule Aerospike.Integration.OperateTest do
     match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
   end
 
+  defp contains_ext_tuple?({:ext, _, _}), do: true
+
+  defp contains_ext_tuple?(list) when is_list(list) do
+    Enum.any?(list, &contains_ext_tuple?/1)
+  end
+
+  defp contains_ext_tuple?(map) when is_map(map) do
+    Enum.any?(map, fn {k, v} ->
+      contains_ext_tuple?(k) or contains_ext_tuple?(v)
+    end)
+  end
+
+  defp contains_ext_tuple?(_), do: false
+
   test "operate mixed read and write returns bins", %{conn: conn, host: host, port: port} do
     key = Helpers.unique_key("test", "operate_itest")
     on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
@@ -95,6 +109,33 @@ defmodule Aerospike.Integration.OperateTest do
 
     assert rec.bins["n"] == 5
     assert rec.bins["tag"] == "ok"
+  end
+
+  test "operate returns per-op values for repeated same-bin ops", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key = Helpers.unique_key("test", "operate_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    assert :ok = Aerospike.put(conn, key, %{"counter" => 1})
+
+    import Op
+
+    assert {:ok, rec} =
+             Aerospike.operate(
+               conn,
+               key,
+               [
+                 add("counter", 1),
+                 add("counter", 2),
+                 get("counter")
+               ],
+               respond_per_each_op: true
+             )
+
+    assert rec.bins["counter"] == [nil, nil, 4]
   end
 
   test "list append remove size", %{conn: conn, host: host, port: port} do
@@ -141,7 +182,7 @@ defmodule Aerospike.Integration.OperateTest do
                ListOp.pop("nums", 0)
              ])
 
-    assert rec1.bins["nums"] == 1
+    assert rec1.bins["nums"] == [1, 1]
 
     assert {:ok, rec2} = Aerospike.get(conn, key)
     assert rec2.bins["nums"] == [2, 3, 5]
@@ -282,5 +323,32 @@ defmodule Aerospike.Integration.OperateTest do
 
     assert rec.bins["list_bin"] == payload["list_bin"]
     assert rec.bins["map_bin"] == payload["map_bin"]
+  end
+
+  test "ordered map/list reads do not leak MessagePack sentinel entries", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    key = Helpers.unique_key("test", "operate_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    assert :ok = Aerospike.put(conn, key, %{"_seed" => 0})
+
+    assert {:ok, _} =
+             Aerospike.operate(conn, key, [
+               MapOp.put_items("ordered_map", %{"b" => 2, "a" => 1}, policy: %{attr: 3, flags: 0}),
+               ListOp.append_items("ordered_list", [3, 1, 2], policy: %{order: 1, flags: 0})
+             ])
+
+    assert {:ok, rec} = Aerospike.get(conn, key)
+
+    ordered_map = rec.bins["ordered_map"]
+    ordered_list = rec.bins["ordered_list"]
+
+    assert ordered_map == %{"a" => 1, "b" => 2}
+    assert ordered_list == [1, 2, 3]
+    refute contains_ext_tuple?(ordered_map)
+    refute contains_ext_tuple?(ordered_list)
   end
 end

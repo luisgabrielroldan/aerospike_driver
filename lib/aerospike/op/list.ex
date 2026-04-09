@@ -50,8 +50,12 @@ defmodule Aerospike.Op.List do
 
   - `return_none/0` — no returned value (fastest for write-only operations)
   - `return_index/0` — index offset order
+  - `return_reverse_index/0` — reverse index offset from list end
+  - `return_rank/0` — value rank order
+  - `return_reverse_rank/0` — reverse value rank from highest
   - `return_count/0` — count of items selected
   - `return_value/0` — value(s) for single reads and value lists for range reads
+  - `return_exists/0` — existence flag(s) for matched items
 
   ## Examples
 
@@ -151,6 +155,22 @@ defmodule Aerospike.Op.List do
   @doc "ListReturnType: return index."
   @spec return_index() :: 1
   def return_index, do: 1
+
+  @doc "ListReturnType: return reverse index."
+  @spec return_reverse_index() :: 2
+  def return_reverse_index, do: 2
+
+  @doc "ListReturnType: return rank."
+  @spec return_rank() :: 3
+  def return_rank, do: 3
+
+  @doc "ListReturnType: return reverse rank."
+  @spec return_reverse_rank() :: 4
+  def return_reverse_rank, do: 4
+
+  @doc "ListReturnType: return exists."
+  @spec return_exists() :: 13
+  def return_exists, do: 13
 
   defp ctx(opts), do: Keyword.get(opts, :ctx)
   defp rt(opts, default), do: Keyword.get(opts, :return_type, default)
