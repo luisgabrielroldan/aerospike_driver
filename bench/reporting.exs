@@ -16,6 +16,24 @@ defmodule Aerospike.Bench.Reporting do
     }
   end
 
+  def run_id do
+    persistent_run_id()
+  end
+
+  def write_json_sidecar(benchmark_title, suffix, payload) when is_map(payload) do
+    filename = "#{slugify(benchmark_title)}-#{slugify(suffix)}.json"
+    output_path = Path.join([@results_dir, run_id(), filename])
+
+    with :ok <- File.mkdir_p(Path.dirname(output_path)),
+         :ok <- File.write(output_path, encode_json(payload) <> "\n") do
+      IO.puts("Wrote benchmark sidecar artifact: #{output_path}")
+      {:ok, output_path}
+    else
+      {:error, reason} ->
+        {:error, "failed to write benchmark sidecar artifact #{output_path}: #{inspect(reason)}"}
+    end
+  end
+
   @impl Benchee.Formatter
   def format(suite, options) do
     metadata =
@@ -47,7 +65,7 @@ defmodule Aerospike.Bench.Reporting do
     end
   end
 
-  defp run_id do
+  defp persistent_run_id do
     key = {__MODULE__, :run_id}
 
     case :persistent_term.get(key, nil) do
@@ -202,9 +220,15 @@ defmodule Aerospike.Bench.Reporting do
 
   defp normalize_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp normalize_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
-  defp normalize_value(%{} = value), do: Enum.into(value, %{}, fn {k, v} -> {normalize_key(k), normalize_value(v)} end)
+
+  defp normalize_value(%{} = value),
+    do: Enum.into(value, %{}, fn {k, v} -> {normalize_key(k), normalize_value(v)} end)
+
   defp normalize_value(value) when is_list(value), do: Enum.map(value, &normalize_value/1)
-  defp normalize_value(value) when is_tuple(value), do: value |> Tuple.to_list() |> Enum.map(&normalize_value/1)
+
+  defp normalize_value(value) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.map(&normalize_value/1)
+
   defp normalize_value(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_value(value), do: value
 
@@ -228,7 +252,10 @@ defmodule Aerospike.Bench.Reporting do
 
   defp encode_json_value(value) when is_binary(value), do: encode_json_string(value)
   defp encode_json_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp encode_json_value(value) when is_float(value), do: :erlang.float_to_binary(value, [:compact, decimals: 16])
+
+  defp encode_json_value(value) when is_float(value),
+    do: :erlang.float_to_binary(value, [:compact, decimals: 16])
+
   defp encode_json_value(true), do: "true"
   defp encode_json_value(false), do: "false"
   defp encode_json_value(nil), do: "null"

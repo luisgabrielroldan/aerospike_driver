@@ -145,13 +145,23 @@ defmodule Aerospike.Policy do
       doc: "Socket timeout in milliseconds"
     ],
     pool_checkout_timeout: [type: :non_neg_integer, default: 5_000],
-    replica: [type: @replica_opt, default: :master]
+    replica: [type: @replica_opt, default: :master],
+    max_concurrent_nodes: [
+      type: :non_neg_integer,
+      default: 0,
+      doc: "Maximum concurrent node streams. 0 = all nodes."
+    ]
   ]
 
   @query_keys [
     timeout: [type: :non_neg_integer, default: 30_000],
     pool_checkout_timeout: [type: :non_neg_integer, default: 5_000],
-    replica: [type: @replica_opt, default: :master]
+    replica: [type: @replica_opt, default: :master],
+    max_concurrent_nodes: [
+      type: :non_neg_integer,
+      default: 0,
+      doc: "Maximum concurrent node streams. 0 = all nodes."
+    ]
   ]
 
   # Per-command defaults that can be set at `Aerospike.start_link/1` time.

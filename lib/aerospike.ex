@@ -733,10 +733,13 @@ defmodule Aerospike do
   The stream holds one pool connection per node for its entire lifetime.
   On early termination (e.g. `Enum.take/2`), the connection is closed
   rather than returned to the pool.
+  In multi-node clusters, both `stream!/3` and `all/3` fan out across
+  nodes concurrently by default.
 
   ## Options
 
-  Scan/query policy: `:timeout`, `:pool_checkout_timeout`, `:replica`.
+  Scan/query policy: `:timeout`, `:pool_checkout_timeout`, `:replica`,
+  `:max_concurrent_nodes` (0 = all nodes).
 
   ## Examples
 
@@ -745,11 +748,6 @@ defmodule Aerospike do
       Aerospike.stream!(:aero, Scan.new("test", "users"))
       |> Stream.filter(fn r -> r.bins["age"] > 21 end)
       |> Enum.take(100)
-
-  ## Limitations
-
-  In multi-node clusters, partitions are read sequentially (one node at a time).
-  For maximum throughput on large scans, prefer `all/3` which fans out concurrently.
 
   """
   @spec stream!(conn(), Scan.t() | Query.t(), keyword()) :: Enumerable.t()
