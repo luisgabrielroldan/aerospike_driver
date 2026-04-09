@@ -206,6 +206,211 @@ defmodule Aerospike.ScanOpsTest do
         Process.flag(:trap_exit, prev_trap)
       end
     end
+
+    @tag timeout: 5_000
+    test "concurrent nodes can interleave records" do
+      test_pid = self()
+
+      nodes = [
+        {:node1,
+         fn consumer ->
+           send(test_pid, {:node_ready, :node1, self()})
+           receive do: (:emit_first -> :ok)
+           send(consumer, {:test_record, {:node1, 1}})
+           send(test_pid, :node1_blocked)
+           receive do: (:emit_second -> :ok)
+           send(consumer, {:test_record, {:node1, 2}})
+           :ok
+         end},
+        {:node2,
+         fn consumer ->
+           send(test_pid, {:node_ready, :node2, self()})
+           receive do: (:emit_now -> :ok)
+           send(consumer, {:test_record, {:node2, 1}})
+           send(test_pid, :node2_emitted)
+           :ok
+         end},
+        {:node3,
+         fn consumer ->
+           send(test_pid, {:node_ready, :node3, self()})
+           receive do: (:emit_now -> :ok)
+           send(consumer, {:test_record, {:node3, 1}})
+           send(test_pid, :node3_emitted)
+           :ok
+         end}
+      ]
+
+      stream = build_concurrent_test_stream(nodes)
+      stream_task = Task.async(fn -> Enum.to_list(stream) end)
+
+      node1 = receive_node_ready(:node1)
+      node2 = receive_node_ready(:node2)
+      node3 = receive_node_ready(:node3)
+
+      send(node1, :emit_first)
+      assert_receive :node1_blocked, 1_000
+
+      send(node2, :emit_now)
+      send(node3, :emit_now)
+      assert_receive :node2_emitted, 1_000
+      assert_receive :node3_emitted, 1_000
+
+      send(node1, :emit_second)
+
+      records = Task.await(stream_task, 1_000)
+      assert records == [{:node1, 1}, {:node2, 1}, {:node3, 1}, {:node1, 2}]
+    end
+
+    @tag timeout: 5_000
+    test "max_concurrent_nodes: 1 preserves sequential node order" do
+      nodes = [
+        {:node1,
+         fn consumer ->
+           send(consumer, {:test_record, :node1})
+           :ok
+         end},
+        {:node2,
+         fn consumer ->
+           send(consumer, {:test_record, :node2})
+           :ok
+         end},
+        {:node3,
+         fn consumer ->
+           send(consumer, {:test_record, :node3})
+           :ok
+         end}
+      ]
+
+      stream = build_concurrent_test_stream(nodes, max_concurrent_nodes: 1)
+      assert Enum.to_list(stream) == [:node1, :node2, :node3]
+    end
+
+    @tag timeout: 5_000
+    test "max_concurrent_nodes: 2 never exceeds two active workers" do
+      test_pid = self()
+      counters = :atomics.new(2, [])
+
+      nodes =
+        Enum.map(1..4, fn idx ->
+          {idx,
+           fn consumer ->
+             current = :atomics.add_get(counters, 1, 1)
+             record_max_atomic(counters, current)
+             send(test_pid, {:worker_started, idx, self()})
+
+             try do
+               receive do: ({:release_worker, ^idx} -> :ok)
+               send(consumer, {:test_record, idx})
+               :ok
+             after
+               :atomics.sub_get(counters, 1, 1)
+             end
+           end}
+        end)
+
+      stream = build_concurrent_test_stream(nodes, max_concurrent_nodes: 2)
+      stream_task = Task.async(fn -> Enum.to_list(stream) end)
+
+      started =
+        1..2
+        |> Enum.map(fn _ -> receive_worker_started() end)
+        |> Map.new(fn {idx, pid} -> {idx, pid} end)
+
+      refute_receive {:worker_started, _, _}, 100
+      assert :atomics.get(counters, 2) <= 2
+
+      send(Map.fetch!(started, 1), {:release_worker, 1})
+      send(Map.fetch!(started, 2), {:release_worker, 2})
+
+      started3 = receive_worker_started()
+      started4 = receive_worker_started()
+
+      send(elem(started3, 1), {:release_worker, elem(started3, 0)})
+      send(elem(started4, 1), {:release_worker, elem(started4, 0)})
+
+      records = Task.await(stream_task, 1_000)
+      assert Enum.sort(records) == [1, 2, 3, 4]
+      assert :atomics.get(counters, 2) == 2
+    end
+
+    @tag timeout: 5_000
+    test "worker error causes stream failure and remaining workers are terminated" do
+      test_pid = self()
+
+      nodes = [
+        {:node1,
+         fn consumer ->
+           send(test_pid, {:node_ready, :node1, self()})
+           receive do: (:trigger_error -> :ok)
+           send(consumer, {:test_record, :before_error})
+           send(consumer, {:test_error, :node1_failed})
+           :error_sent
+         end},
+        {:node2,
+         fn _consumer ->
+           send(test_pid, {:node_ready, :node2, self()})
+           receive do: (:never -> :ok)
+           :ok
+         end}
+      ]
+
+      stream = build_concurrent_test_stream(nodes)
+
+      stream_task =
+        Task.async(fn ->
+          try do
+            Enum.to_list(stream)
+            :ok
+          rescue
+            e in Error -> {:raised, e}
+          end
+        end)
+
+      node1 = receive_node_ready(:node1)
+      node2 = receive_node_ready(:node2)
+      send(node1, :trigger_error)
+
+      assert {:raised, %Error{code: :network_error}} = Task.await(stream_task, 1_000)
+
+      node2_ref = Process.monitor(node2)
+      assert_receive {:DOWN, ^node2_ref, :process, ^node2, _reason}, 1_000
+    end
+
+    @tag timeout: 5_000
+    test "early halt terminates all concurrent workers" do
+      test_pid = self()
+
+      nodes =
+        Enum.map(1..3, fn idx ->
+          {idx,
+           fn consumer ->
+             send(test_pid, {:worker_started, idx, self()})
+             receive do: ({:emit_record, ^idx} -> :ok)
+             send(consumer, {:test_record, idx})
+             receive do: (:never -> :ok)
+             :ok
+           end}
+        end)
+
+      stream = build_concurrent_test_stream(nodes)
+      stream_task = Task.async(fn -> Enum.take(stream, 2) end)
+
+      worker_pids =
+        1..3
+        |> Enum.map(fn _ -> receive_worker_started() end)
+        |> Map.new(fn {idx, pid} -> {idx, pid} end)
+
+      send(Map.fetch!(worker_pids, 1), {:emit_record, 1})
+      send(Map.fetch!(worker_pids, 2), {:emit_record, 2})
+
+      records = Task.await(stream_task, 1_000)
+      assert length(records) == 2
+
+      Enum.each(worker_pids, fn {_idx, pid} ->
+        ref = Process.monitor(pid)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
+      end)
+    end
   end
 
   # Builds a Stream.resource that mirrors the ScanOps pattern:
@@ -232,6 +437,23 @@ defmodule Aerospike.ScanOpsTest do
           crash_before_done?
         )
 
+      monitor_ref = Process.monitor(producer)
+      %{producer: producer, monitor_ref: monitor_ref, done: false}
+    end
+
+    Stream.resource(
+      init_fn,
+      &next_test_stream/1,
+      &cleanup_test_stream/1
+    )
+  end
+
+  defp build_concurrent_test_stream(nodes, opts \\ []) when is_list(nodes) do
+    max_concurrent = Keyword.get(opts, :max_concurrent_nodes, 0)
+
+    init_fn = fn ->
+      parent = self()
+      producer = spawn_link(fn -> run_test_stream_coordinator(nodes, parent, max_concurrent) end)
       monitor_ref = Process.monitor(producer)
       %{producer: producer, monitor_ref: monitor_ref, done: false}
     end
@@ -333,6 +555,90 @@ defmodule Aerospike.ScanOpsTest do
       {:producer_pid, pid} -> pid
     after
       1_000 -> flunk("did not receive producer pid")
+    end
+  end
+
+  defp run_test_stream_coordinator([], consumer, _max_concurrent) do
+    send(consumer, :test_done)
+  end
+
+  defp run_test_stream_coordinator(nodes, consumer, max_concurrent) do
+    initial = initial_test_workers(max_concurrent, length(nodes))
+    {to_start, pending} = Enum.split(nodes, initial)
+    active = spawn_test_concurrent_workers(to_start, consumer, self(), 0)
+    await_test_concurrent_workers(pending, active, consumer)
+  end
+
+  defp initial_test_workers(max_concurrent, total)
+       when max_concurrent == 0 or max_concurrent >= total do
+    total
+  end
+
+  defp initial_test_workers(max_concurrent, _total), do: max_concurrent
+
+  defp spawn_test_concurrent_workers([], _consumer, _coordinator, acc), do: acc
+
+  defp spawn_test_concurrent_workers([{_node, node_fn} | rest], consumer, coordinator, acc) do
+    spawn_link(fn ->
+      case node_fn.(consumer) do
+        :ok -> send(coordinator, {:worker_done, self()})
+        :error_sent -> :ok
+      end
+    end)
+
+    spawn_test_concurrent_workers(rest, consumer, coordinator, acc + 1)
+  end
+
+  defp await_test_concurrent_workers(_pending, 0, consumer) do
+    send(consumer, :test_done)
+  end
+
+  defp await_test_concurrent_workers(pending, active, consumer) do
+    receive do
+      {:worker_done, _pid} ->
+        active2 = active - 1
+        {pending2, active3} = maybe_spawn_next_test_worker(pending, consumer, self(), active2)
+        await_test_concurrent_workers(pending2, active3, consumer)
+    end
+  end
+
+  defp maybe_spawn_next_test_worker([{_node, node_fn} | rest], consumer, coordinator, active) do
+    spawn_link(fn ->
+      case node_fn.(consumer) do
+        :ok -> send(coordinator, {:worker_done, self()})
+        :error_sent -> :ok
+      end
+    end)
+
+    {rest, active + 1}
+  end
+
+  defp maybe_spawn_next_test_worker([], _consumer, _coordinator, active), do: {[], active}
+
+  defp receive_node_ready(node_name) do
+    receive do
+      {:node_ready, ^node_name, pid} -> pid
+    after
+      1_000 -> flunk("did not receive ready signal for #{inspect(node_name)}")
+    end
+  end
+
+  defp receive_worker_started do
+    receive do
+      {:worker_started, idx, pid} -> {idx, pid}
+    after
+      1_000 -> flunk("did not receive worker_started signal")
+    end
+  end
+
+  defp record_max_atomic(counters, candidate) do
+    max_seen = :atomics.get(counters, 2)
+
+    if candidate > max_seen do
+      case :atomics.compare_exchange(counters, 2, max_seen, candidate) do
+        ^max_seen -> :ok
+        _ -> record_max_atomic(counters, candidate)
+      end
     end
   end
 

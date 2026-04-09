@@ -110,6 +110,9 @@ records = Aerospike.all!(:aero, Scan.new("test", "users") |> Scan.max_records(10
 `stream!/3` returns a lazy `Stream` of `%Aerospike.Record{}` structs. **No `max_records` is required** for streaming; use it for large or unknown result sizes.
 
 The `!` means consumption can raise `Aerospike.Error` on server or network failure mid-stream.
+By default, `stream!/3` fans out across all nodes concurrently. Use
+`max_concurrent_nodes: 1` to force sequential node processing, or set a
+larger positive bound to cap concurrent node streams.
 
 ```elixir
 Aerospike.stream!(:aero, Scan.new("test", "users"))
@@ -280,10 +283,6 @@ Scans use the scan path; query-specific short-query hints apply to `Query` execu
 
 ## Known limitations
 
-- **Sequential multi-node streaming:** In a multi-node cluster, `stream!/3`
-  processes nodes one at a time (node 1 fully, then node 2, etc.). Records
-  from later nodes don't appear until earlier nodes complete. This is correct
-  but increases time-to-first-record on later nodes.
 - **`count/3` streams all record headers client-side.** For unfiltered set
   counts, a raw info command (`sets/<ns>/<set>`) is faster because the
   server returns aggregated metadata without per-record traffic.

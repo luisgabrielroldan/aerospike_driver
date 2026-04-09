@@ -8,6 +8,9 @@ defmodule Aerospike.Bench.Config do
   @warmup_env "BENCH_WARMUP_S"
   @concurrency_env "BENCH_CONCURRENCY"
   @payload_sizes_env "BENCH_PAYLOAD_SIZES"
+  @stream_record_count_env "BENCH_STREAM_RECORD_COUNT"
+  @stream_ttfr_trials_env "BENCH_STREAM_TTFR_TRIALS"
+  @stream_max_concurrent_nodes_env "BENCH_STREAM_MAX_CONCURRENT_NODES"
 
   def load(overrides \\ %{}) when is_map(overrides) do
     profile = load_profile(overrides)
@@ -23,6 +26,9 @@ defmodule Aerospike.Bench.Config do
     |> apply_warmup_override(overrides)
     |> apply_concurrency_override(overrides)
     |> apply_payload_sizes_override(overrides)
+    |> apply_stream_record_count_override(overrides)
+    |> apply_stream_ttfr_trials_override(overrides)
+    |> apply_stream_max_concurrent_nodes_override(overrides)
   end
 
   defp load_profile(overrides) do
@@ -81,6 +87,53 @@ defmodule Aerospike.Bench.Config do
     end
   end
 
+  defp apply_stream_record_count_override(config, overrides) do
+    with :error <- Map.fetch(overrides, :stream_record_count),
+         nil <- System.get_env(@stream_record_count_env) do
+      config
+    else
+      {:ok, value} ->
+        Map.put(config, :stream_record_count, to_positive_integer!(value, :stream_record_count))
+
+      value ->
+        Map.put(config, :stream_record_count, to_positive_integer!(value, :stream_record_count))
+    end
+  end
+
+  defp apply_stream_ttfr_trials_override(config, overrides) do
+    with :error <- Map.fetch(overrides, :stream_ttfr_trials),
+         nil <- System.get_env(@stream_ttfr_trials_env) do
+      config
+    else
+      {:ok, value} ->
+        Map.put(config, :stream_ttfr_trials, to_positive_integer!(value, :stream_ttfr_trials))
+
+      value ->
+        Map.put(config, :stream_ttfr_trials, to_positive_integer!(value, :stream_ttfr_trials))
+    end
+  end
+
+  defp apply_stream_max_concurrent_nodes_override(config, overrides) do
+    with :error <- Map.fetch(overrides, :stream_max_concurrent_nodes),
+         nil <- System.get_env(@stream_max_concurrent_nodes_env) do
+      config
+    else
+      {:ok, value} ->
+        Map.put(
+          config,
+          :stream_max_concurrent_nodes,
+          to_non_negative_integer_list!(value, :stream_max_concurrent_nodes)
+        )
+
+      value ->
+        Map.put(
+          config,
+          :stream_max_concurrent_nodes,
+          to_non_negative_integer_list!(value, :stream_max_concurrent_nodes)
+        )
+    end
+  end
+
   defp to_positive_integer!(value, _field) when is_integer(value) and value > 0, do: value
 
   defp to_positive_integer!(value, field),
@@ -106,6 +159,23 @@ defmodule Aerospike.Bench.Config do
   end
 
   defp to_integer_list!(value, field), do: raise(ArgumentError, invalid_message(field, value))
+
+  defp to_non_negative_integer_list!(value, field) when is_list(value) do
+    value
+    |> Enum.map(&to_non_negative_integer!(&1, field))
+    |> reject_empty!(field)
+  end
+
+  defp to_non_negative_integer_list!(value, field) when is_binary(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(&to_non_negative_integer!(&1, field))
+    |> reject_empty!(field)
+  end
+
+  defp to_non_negative_integer_list!(value, field),
+    do: raise(ArgumentError, invalid_message(field, value))
 
   defp to_integer!(value, _field) when is_integer(value), do: value
 
