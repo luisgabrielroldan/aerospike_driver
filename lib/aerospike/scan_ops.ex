@@ -201,7 +201,17 @@ defmodule Aerospike.ScanOps do
 
         producer =
           spawn_link(fn ->
-            run_stream_producer(conn_name, prepared.node_wires, parent, ns, set, checkout_timeout)
+            max_concurrent = Keyword.get(opts, :max_concurrent_nodes, 0)
+
+            run_stream_coordinator(
+              conn_name,
+              prepared.node_wires,
+              parent,
+              ns,
+              set,
+              checkout_timeout,
+              max_concurrent
+            )
           end)
 
         monitor_ref = Process.monitor(producer)
@@ -320,60 +330,206 @@ defmodule Aerospike.ScanOps do
 
   defp cleanup_stream_producer(_), do: :ok
 
-  # Nodes are processed sequentially; concurrent fan-out is a future optimization.
-  defp run_stream_producer(_conn_name, [], parent, _ns, _set, _checkout_timeout) do
-    send(parent, {:scan_done, self()})
+  defp run_stream_coordinator(
+         _conn_name,
+         [],
+         consumer,
+         _ns,
+         _set,
+         _checkout_timeout,
+         _max_concurrent
+       ) do
+    send(consumer, {:scan_done, self()})
   end
 
-  defp run_stream_producer(
+  defp run_stream_coordinator(
          conn_name,
-         [{node_name, pool_pid, wire, _meta} | rest],
-         parent,
+         node_wires,
+         consumer,
          ns,
          set,
-         checkout_timeout
+         checkout_timeout,
+         max_concurrent
        ) do
-    result =
-      try do
-        NimblePool.checkout!(
-          pool_pid,
-          :checkout,
-          fn _from, conn ->
-            case Connection.send_command(conn, wire) do
-              {:ok, conn2} ->
-                read_stream_frames(conn2, conn_name, node_name, parent, ns, set)
+    initial = initial_stream_workers(max_concurrent, length(node_wires))
+    {to_start, pending} = Enum.split(node_wires, initial)
 
-              {:error, reason} ->
-                send(parent, {:scan_error, self(), reason})
-                {{:error, reason}, :close}
-            end
-          end,
-          checkout_timeout
-        )
-      catch
-        :exit, {:timeout, {NimblePool, :checkout, _}} ->
-          send(parent, {:scan_error, self(), Error.from_result_code(:pool_timeout)})
-          :error_sent
+    active =
+      spawn_stream_workers(to_start, conn_name, consumer, ns, set, checkout_timeout, self(), 0)
 
-        :exit, {:noproc, {NimblePool, :checkout, _}} ->
-          send(parent, {:scan_error, self(), Error.from_result_code(:invalid_node)})
-          :error_sent
+    await_stream_workers(conn_name, pending, active, consumer, ns, set, checkout_timeout)
+  end
 
-        :exit, reason ->
-          send(
-            parent,
-            {:scan_error, self(),
-             Error.from_result_code(:network_error, message: inspect(reason))}
+  defp initial_stream_workers(max_concurrent, total)
+       when max_concurrent == 0 or max_concurrent >= total do
+    total
+  end
+
+  defp initial_stream_workers(max_concurrent, _total), do: max_concurrent
+
+  defp spawn_stream_workers(
+         [],
+         _conn_name,
+         _consumer,
+         _ns,
+         _set,
+         _checkout_timeout,
+         _coordinator,
+         acc
+       ),
+       do: acc
+
+  defp spawn_stream_workers(
+         [{node_name, pool_pid, wire, _meta} | rest],
+         conn_name,
+         consumer,
+         ns,
+         set,
+         checkout_timeout,
+         coordinator,
+         acc
+       ) do
+    spawn_link(fn ->
+      case stream_one_node(
+             node_name,
+             pool_pid,
+             wire,
+             conn_name,
+             consumer,
+             ns,
+             set,
+             checkout_timeout
+           ) do
+        :ok -> send(coordinator, {:worker_done, self()})
+        :error_sent -> :ok
+      end
+    end)
+
+    spawn_stream_workers(
+      rest,
+      conn_name,
+      consumer,
+      ns,
+      set,
+      checkout_timeout,
+      coordinator,
+      acc + 1
+    )
+  end
+
+  defp await_stream_workers(
+         _conn_name,
+         _pending,
+         0,
+         consumer,
+         _ns,
+         _set,
+         _checkout_timeout
+       ) do
+    send(consumer, {:scan_done, self()})
+  end
+
+  defp await_stream_workers(conn_name, pending, active, consumer, ns, set, checkout_timeout) do
+    receive do
+      {:worker_done, _pid} ->
+        active2 = active - 1
+
+        {pending2, active3} =
+          maybe_spawn_next_stream_worker(
+            pending,
+            conn_name,
+            consumer,
+            ns,
+            set,
+            checkout_timeout,
+            self(),
+            active2
           )
 
-          :error_sent
+        await_stream_workers(conn_name, pending2, active3, consumer, ns, set, checkout_timeout)
+    end
+  end
+
+  defp maybe_spawn_next_stream_worker(
+         [{node_name, pool_pid, wire, _meta} | rest],
+         conn_name,
+         consumer,
+         ns,
+         set,
+         checkout_timeout,
+         coordinator,
+         active
+       ) do
+    spawn_link(fn ->
+      case stream_one_node(
+             node_name,
+             pool_pid,
+             wire,
+             conn_name,
+             consumer,
+             ns,
+             set,
+             checkout_timeout
+           ) do
+        :ok -> send(coordinator, {:worker_done, self()})
+        :error_sent -> :ok
       end
+    end)
+
+    {rest, active + 1}
+  end
+
+  defp maybe_spawn_next_stream_worker(
+         [],
+         _conn_name,
+         _consumer,
+         _ns,
+         _set,
+         _checkout_timeout,
+         _coordinator,
+         active
+       ) do
+    {[], active}
+  end
+
+  defp stream_one_node(node_name, pool_pid, wire, conn_name, report_to, ns, set, checkout_timeout) do
+    result =
+      NimblePool.checkout!(
+        pool_pid,
+        :checkout,
+        fn _from, conn ->
+          case Connection.send_command(conn, wire) do
+            {:ok, conn2} ->
+              read_stream_frames(conn2, conn_name, node_name, report_to, ns, set)
+
+            {:error, reason} ->
+              send(report_to, {:scan_error, self(), reason})
+              {{:error, reason}, :close}
+          end
+        end,
+        checkout_timeout
+      )
 
     case result do
-      :error_sent -> :ok
-      {:error, _} -> :ok
-      _ -> run_stream_producer(conn_name, rest, parent, ns, set, checkout_timeout)
+      {:error, _reason} -> :error_sent
+      _ -> :ok
     end
+  catch
+    :exit, {:timeout, {NimblePool, :checkout, _}} ->
+      send(report_to, {:scan_error, self(), Error.from_result_code(:pool_timeout)})
+      :error_sent
+
+    :exit, {:noproc, {NimblePool, :checkout, _}} ->
+      send(report_to, {:scan_error, self(), Error.from_result_code(:invalid_node)})
+      :error_sent
+
+    :exit, reason ->
+      send(
+        report_to,
+        {:scan_error, self(), Error.from_result_code(:network_error, message: inspect(reason))}
+      )
+
+      :error_sent
   end
 
   defp read_stream_frames(conn, conn_name, node_name, parent, ns, set) do
