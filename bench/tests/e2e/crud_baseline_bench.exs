@@ -73,6 +73,23 @@ defmodule Aerospike.Bench.E2E.CrudBaseline do
       "E2E-004 Get Large" => fn ->
         {:ok, %Record{bins: bins}} = Aerospike.get(@conn_name, state.large_read_key)
         true = map_size(bins) > 0
+      end,
+      "E2E-005 Exists" => fn ->
+        {:ok, true} = Aerospike.exists(@conn_name, state.small_read_key)
+      end,
+      "E2E-006 Delete" => fn ->
+        {:ok, _deleted?} =
+          Aerospike.delete(
+            @conn_name,
+            Aerospike.Bench.ring_next(state.delete_ring, state.delete_counter)
+          )
+      end,
+      "E2E-008 Touch" => fn ->
+        :ok =
+          Aerospike.touch(
+            @conn_name,
+            Aerospike.Bench.ring_next(state.touch_ring, state.touch_counter)
+          )
       end
     }
 
@@ -101,8 +118,18 @@ defmodule Aerospike.Bench.E2E.CrudBaseline do
         namespace
         |> E2EHelpers.key_ring(set, "e2e:put:large", @ring_size)
         |> Aerospike.Bench.prepare_ring(),
+      delete_ring:
+        namespace
+        |> E2EHelpers.key_ring(set, "e2e:delete", @ring_size)
+        |> Aerospike.Bench.prepare_ring(),
+      touch_ring:
+        namespace
+        |> E2EHelpers.key_ring(set, "e2e:touch", @ring_size)
+        |> Aerospike.Bench.prepare_ring(),
       small_counter: :atomics.new(1, []),
-      large_counter: :atomics.new(1, [])
+      large_counter: :atomics.new(1, []),
+      delete_counter: :atomics.new(1, []),
+      touch_counter: :atomics.new(1, [])
     }
   end
 
@@ -112,19 +139,27 @@ defmodule Aerospike.Bench.E2E.CrudBaseline do
 
     {small_ring, _small_ring_size} = state.small_ring
     {large_ring, _large_ring_size} = state.large_ring
+    {delete_ring, _delete_ring_size} = state.delete_ring
+    {touch_ring, _touch_ring_size} = state.touch_ring
 
     E2EHelpers.bootstrap_keys!(conn_name, Tuple.to_list(small_ring), state.small_payload)
     E2EHelpers.bootstrap_keys!(conn_name, Tuple.to_list(large_ring), state.large_payload)
+    E2EHelpers.bootstrap_keys!(conn_name, Tuple.to_list(delete_ring), state.small_payload)
+    E2EHelpers.bootstrap_keys!(conn_name, Tuple.to_list(touch_ring), state.small_payload)
   end
 
   defp teardown_dataset(conn_name, state) do
     {small_ring, _small_ring_size} = state.small_ring
     {large_ring, _large_ring_size} = state.large_ring
+    {delete_ring, _delete_ring_size} = state.delete_ring
+    {touch_ring, _touch_ring_size} = state.touch_ring
 
     keys =
       [state.small_read_key, state.large_read_key]
       |> Kernel.++(Tuple.to_list(small_ring))
       |> Kernel.++(Tuple.to_list(large_ring))
+      |> Kernel.++(Tuple.to_list(delete_ring))
+      |> Kernel.++(Tuple.to_list(touch_ring))
 
     E2EHelpers.teardown_keys(conn_name, keys)
   end
