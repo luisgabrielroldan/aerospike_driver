@@ -75,6 +75,53 @@ Common constructors:
 
 Other helpers ([`Filter.contains/3`](Aerospike.Filter.html#contains/3) for CDT indexes, [`Filter.geo_within/2`](Aerospike.Filter.html#geo_within/2), [`Filter.geo_contains/2`](Aerospike.Filter.html#geo_contains/2)) build SI predicates the same way; pass the result to [`Query.where/2`](Aerospike.Query.html#where/2).
 
+### Geospatial filters with `Aerospike.Geo`
+
+[`Aerospike.Geo`](Aerospike.Geo.html) provides typed geometry builders:
+
+- [`Geo.point/2`](Aerospike.Geo.html#point/2) for GeoJSON `Point`
+- [`Geo.polygon/1`](Aerospike.Geo.html#polygon/1) for GeoJSON `Polygon`
+- [`Geo.circle/3`](Aerospike.Geo.html#circle/3) for Aerospike `AeroCircle`
+
+Simple geo query example:
+
+```elixir
+alias Aerospike.{Filter, Geo, Query}
+
+{:ok, records} =
+  Query.new("test", "locations")
+  |> Query.where(Filter.geo_within("coords", Geo.circle(-122.5, 45.5, 5_000)))
+  |> Query.max_records(100)
+  |> then(&Aerospike.all(:aero, &1))
+```
+
+Use them directly with [`Filter.geo_within/2`](Aerospike.Filter.html#geo_within/2) and
+[`Filter.geo_contains/2`](Aerospike.Filter.html#geo_contains/2):
+
+```elixir
+alias Aerospike.{Filter, Geo, Query}
+
+region =
+  Geo.polygon([
+    [{-122.6, 45.4}, {-122.3, 45.4}, {-122.3, 45.7}, {-122.6, 45.7}, {-122.6, 45.4}]
+  ])
+
+query =
+  Query.new("test", "locations")
+  |> Query.where(Filter.geo_within("coords", region))
+  |> Query.max_records(1_000)
+```
+
+Backward-compatible raw GeoJSON strings still work:
+
+```elixir
+region_json = "{\"type\":\"AeroCircle\",\"coordinates\":[[-122.5,45.5],5000]}"
+
+Query.new("test", "locations")
+|> Query.where(Filter.geo_within("coords", region_json))
+|> Query.max_records(1_000)
+```
+
 ### `where` vs `filter`
 
 - **[`Query.where/2`](Aerospike.Query.html#where/2)** — secondary-index lookup. The server uses the index to find candidate records.

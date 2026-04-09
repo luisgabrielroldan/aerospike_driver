@@ -2,6 +2,7 @@ defmodule Aerospike.FilterTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Filter
+  alias Aerospike.Geo
 
   describe "range/3" do
     test "builds integer range filter" do
@@ -81,6 +82,31 @@ defmodule Aerospike.FilterTest do
     test "rejects empty geo string" do
       assert_raise ArgumentError, fn -> Filter.geo_within("loc", "") end
       assert_raise ArgumentError, fn -> Filter.geo_contains("loc", "") end
+    end
+
+    test "geo_within/2 accepts geo structs" do
+      polygon = Geo.polygon([[{-122.0, 45.0}, {-122.1, 45.1}, {-122.2, 45.2}]])
+      f = Filter.geo_within("loc", polygon)
+
+      assert f.index_type == :geo_within
+      assert f.begin == Geo.to_json(polygon)
+      assert f.end == Geo.to_json(polygon)
+    end
+
+    test "geo_within_radius/4 builds a circle filter" do
+      f = Filter.geo_within_radius("loc", -122.0, 45.0, 5_000)
+      expected = Geo.circle(-122.0, 45.0, 5_000)
+
+      assert f.index_type == :geo_within
+      assert f.begin == Geo.to_json(expected)
+    end
+
+    test "geo_contains_point/3 builds a point filter" do
+      f = Filter.geo_contains_point("loc", -122.0, 45.0)
+      expected = Geo.point(-122.0, 45.0)
+
+      assert f.index_type == :geo_contains
+      assert f.begin == Geo.to_json(expected)
     end
   end
 
