@@ -419,10 +419,6 @@ defmodule Aerospike.CRUD do
     CircuitBreaker.record_error(conn, node, :device_overload)
   end
 
-  defp maybe_record_device_overload(conn, node, {:error, %Error{code: :device_overload}}) do
-    CircuitBreaker.record_error(conn, node, :device_overload)
-  end
-
   defp maybe_record_device_overload(_conn, _node, _result), do: :ok
 
   # Wraps the command in a `:telemetry.span` so callers can observe latency,
