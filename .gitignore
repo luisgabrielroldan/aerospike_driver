@@ -29,3 +29,6 @@ aerospike_driver-*.tar
 
 # Generated TLS fixture material for local tests.
 /test/support/fixtures/tls/
+
+# Benchmark/test run artifacts.
+/bench/results/
