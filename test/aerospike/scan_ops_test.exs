@@ -34,8 +34,8 @@ defmodule Aerospike.ScanOpsTest do
   # used by ScanOps.stream/3 to manage the producer process. The pattern must
   # satisfy two constraints:
   #
-  # 1. Consumer crash → producer dies (link, for pool connection safety)
-  # 2. Early halt → producer killed without crashing the consumer (unlink first)
+  # 1. Consumer crash -> producer dies (link, for pool connection safety)
+  # 2. Early halt -> producer killed without crashing the consumer (unlink first)
   #
   # We build a Stream.resource that mirrors the exact pattern from ScanOps
   # (spawn_link, Process.monitor, EXIT/DOWN in next, demonitor + unlink+kill
@@ -707,7 +707,7 @@ defmodule Aerospike.ScanOpsTest do
         end
       end)
 
-      # partition 42 → "node1" → SlowPoolWorker (sleeps forever on checkout)
+      # partition 42 -> "node1" -> SlowPoolWorker (sleeps forever on checkout)
       :ets.insert(Tables.partitions(name), {{"fault_ns", 42, 0}, "node1"})
       :ets.insert(Tables.nodes(name), {"node1", %{pool_pid: pool}})
 

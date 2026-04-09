@@ -12,8 +12,8 @@ defmodule Aerospike.Protocol.Exp do
   #   exps:  [node]            — sub-expression nodes for compound operations
   #
   # String vs blob literals: both are Elixir binaries, so they are tagged:
-  #   {:string, s} → msgpack str (raw UTF-8)
-  #   {:blob, b}   → msgpack bin (0xC4/C5/C6 format)
+  #   {:string, s} -> msgpack str (raw UTF-8)
+  #   {:blob, b}   -> msgpack bin (0xC4/C5/C6 format)
   #
   # All string values in expression context (bin names, string literals) use plain
   # msgpack str — no particle-type prefix. This differs from CDT payloads.

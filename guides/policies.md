@@ -3,15 +3,15 @@
 Policies control how commands are executed: timeouts, record-existence behavior,
 generation checks (CAS), replica routing, and other per-command options.
 
-This client uses trailing keyword options (for example `Aerospike.put(conn, key, bins, opts)`)
+This client uses trailing keyword options (for example [`Aerospike.put/4`](Aerospike.html#put/4))
 instead of dedicated `WritePolicy`/`ReadPolicy` structs. You can set defaults once at
-`start_link/1` and override them per call.
+[`Aerospike.start_link/1`](Aerospike.html#start_link/1) and override them per call.
 
 ## How Policy Resolution Works
 
 For each command, the client merges policy options in this order:
 
-1. Connection defaults from `start_link(defaults: [...])`
+1. Connection defaults from [`start_link/1`](Aerospike.html#start_link/1) (`defaults: [...]`)
 2. Per-call options passed to the command
 
 Per-call values always win on key conflicts.
@@ -33,7 +33,7 @@ Per-call values always win on key conflicts.
 
 ## Write Policies
 
-Used by `put/4`, `add/4`, `append/4`, `prepend/4`.
+Used by [`put/4`](Aerospike.html#put/4), [`add/4`](Aerospike.html#add/4), [`append/4`](Aerospike.html#append/4), [`prepend/4`](Aerospike.html#prepend/4).
 
 | Option | Type | Meaning |
 | --- | --- | --- |
@@ -44,10 +44,10 @@ Used by `put/4`, `add/4`, `append/4`, `prepend/4`.
 | `:exists` | `:create_only` \| `:update_only` \| `:replace_only` \| `:create_or_replace` | Record existence behavior |
 | `:send_key` | boolean | Store the user key on the server |
 | `:durable_delete` | boolean | Tombstone-based delete behavior where applicable |
-| `:filter` | `%Aerospike.Exp{}` | Server-side expression filter |
+| `:filter` | [`%Aerospike.Exp{}`](Aerospike.Exp.html) | Server-side expression filter |
 | `:pool_checkout_timeout` | non-negative integer | Pool checkout timeout in milliseconds |
 | `:replica` | `:master` \| `:sequence` \| `:any` \| non-negative integer | Replica routing |
-| `:txn` | `%Aerospike.Txn{}` | Transaction handle |
+| `:txn` | [`%Aerospike.Txn{}`](Aerospike.Txn.html) | Transaction handle |
 
 ### Existence Policies
 
@@ -84,7 +84,7 @@ end
 
 ## Read Policies
 
-Used by `get/3`.
+Used by [`get/3`](Aerospike.html#get/3).
 
 | Option | Type | Meaning |
 | --- | --- | --- |
@@ -92,30 +92,30 @@ Used by `get/3`.
 | `:bins` | list of strings/atoms | Read only selected bins |
 | `:header_only` | boolean | Read metadata (generation/ttl) without bins |
 | `:read_touch_ttl_percent` | non-negative integer | Read-touch TTL percent |
-| `:filter` | `%Aerospike.Exp{}` | Server-side expression filter |
+| `:filter` | [`%Aerospike.Exp{}`](Aerospike.Exp.html) | Server-side expression filter |
 | `:pool_checkout_timeout` | non-negative integer | Pool checkout timeout in milliseconds |
 | `:replica` | `:master` \| `:sequence` \| `:any` \| non-negative integer | Replica routing |
-| `:txn` | `%Aerospike.Txn{}` | Transaction handle |
+| `:txn` | [`%Aerospike.Txn{}`](Aerospike.Txn.html) | Transaction handle |
 
 If you pass `:bins`, it must be a non-empty list. Omit `:bins` to read all bins.
 
 ## Delete, Exists, and Touch Policies
 
-### `delete/3`
+### [`delete/3`](Aerospike.html#delete/3)
 
-`delete/3` accepts: `:timeout`, `:durable_delete`, `:filter`, `:pool_checkout_timeout`, `:replica`, `:txn`.
+Accepts: `:timeout`, `:durable_delete`, `:filter`, `:pool_checkout_timeout`, `:replica`, `:txn`.
 
-### `exists/3`
+### [`exists/3`](Aerospike.html#exists/3)
 
-`exists/3` accepts: `:timeout`, `:filter`, `:pool_checkout_timeout`, `:replica`, `:txn`.
+Accepts: `:timeout`, `:filter`, `:pool_checkout_timeout`, `:replica`, `:txn`.
 
-### `touch/3`
+### [`touch/3`](Aerospike.html#touch/3)
 
-`touch/3` accepts: `:ttl`, `:timeout`, `:filter`, `:pool_checkout_timeout`, `:replica`, `:txn`.
+Accepts: `:ttl`, `:timeout`, `:filter`, `:pool_checkout_timeout`, `:replica`, `:txn`.
 
 ## Operate Policies
 
-`operate/4` combines read and write semantics. Supported options:
+[`operate/4`](Aerospike.html#operate/4) combines read and write semantics. Supported options:
 
 - `:ttl`
 - `:timeout`
@@ -133,7 +133,7 @@ If you pass `:bins`, it must be a non-empty list. Omit `:bins` to read all bins.
 
 ## Batch, Scan, Query, and Info Policies
 
-### Batch (`batch_get/3`, `batch_exists/3`, `batch_operate/3`)
+### Batch ([`batch_get/3`](Aerospike.html#batch_get/3), [`batch_exists/3`](Aerospike.html#batch_exists/3), [`batch_operate/3`](Aerospike.html#batch_operate/3))
 
 Supported options:
 
@@ -144,9 +144,9 @@ Supported options:
 - `:filter`
 - `:txn`
 
-For `batch_get/3`, read options such as `:bins` and `:header_only` are also supported.
+For [`batch_get/3`](Aerospike.html#batch_get/3), read options such as `:bins` and `:header_only` are also supported.
 
-### Scan and Query (`stream!/3`, `all/3`, `count/3`, `page/3`)
+### Scan and Query ([`stream!/3`](Aerospike.html#stream!/3), [`all/3`](Aerospike.html#all/3), [`count/3`](Aerospike.html#count/3), [`page/3`](Aerospike.html#page/3))
 
 Supported options:
 
@@ -154,7 +154,7 @@ Supported options:
 - `:pool_checkout_timeout`
 - `:replica`
 
-### Info/Admin (`info/3`, `info_node/4`, truncate/index helpers)
+### Info/Admin ([`info/3`](Aerospike.html#info/3), [`info_node/4`](Aerospike.html#info_node/4), truncate/index helpers)
 
 Supported options:
 
@@ -192,7 +192,7 @@ All policy options are validated. Invalid options return:
 {:error, %Aerospike.Error{code: :parameter_error}}
 ```
 
-Use this to fail fast on typos and invalid values (for example unsupported atoms for `:exists`).
+The error is an [`Aerospike.Error`](Aerospike.Error.html) struct. Use this to fail fast on typos and invalid values (for example unsupported atoms for `:exists`).
 
 ## Practical Recommendations
 

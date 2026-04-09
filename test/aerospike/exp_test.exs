@@ -4,13 +4,13 @@ defmodule Aerospike.ExpTest do
   alias Aerospike.Exp
 
   # Wire byte references (independently computed from Protocol.ExpTest).
-  # int_bin("age")  → fixarray(3), expOpBIN=81, ExpTypeINT=2, fixstr("age")
+  # int_bin("age")  -> fixarray(3), expOpBIN=81, ExpTypeINT=2, fixstr("age")
   @int_bin_age <<0x93, 0x51, 0x02, 0xA3, 0x61, 0x67, 0x65>>
-  # int(21)         → fixint(21) = <<0x15>>
+  # int(21)         -> fixint(21) = <<0x15>>
   @int_21 <<0x15>>
-  # int(65)         → fixint(65) = <<0x41>>
+  # int(65)         -> fixint(65) = <<0x41>>
   @int_65 <<0x41>>
-  # eq(int_bin_age, int_21) → fixarray(3), expOpEQ=1, int_bin_age, int_21
+  # eq(int_bin_age, int_21) -> fixarray(3), expOpEQ=1, int_bin_age, int_21
   @eq_age_21 <<0x93, 0x01>> <> @int_bin_age <> @int_21
 
   describe "from_wire/1 regression" do
@@ -45,7 +45,7 @@ defmodule Aerospike.ExpTest do
 
   describe "string literals" do
     test "str/1 encodes as plain msgpack str" do
-      # "hi" → fixstr(2) = <<0xA2, 0x68, 0x69>>
+      # "hi" -> fixstr(2) = <<0xA2, 0x68, 0x69>>
       assert %Exp{wire: <<0xA2, 0x68, 0x69>>} = Exp.str("hi")
     end
   end
@@ -68,7 +68,7 @@ defmodule Aerospike.ExpTest do
 
   describe "blob literals" do
     test "blob/1 encodes as msgpack bin format" do
-      # <<1, 2, 3>> → bin8(3) = <<0xC4, 0x03, 0x01, 0x02, 0x03>>
+      # <<1, 2, 3>> -> bin8(3) = <<0xC4, 0x03, 0x01, 0x02, 0x03>>
       assert %Exp{wire: <<0xC4, 0x03, 0x01, 0x02, 0x03>>} = Exp.blob(<<1, 2, 3>>)
     end
   end
@@ -201,7 +201,7 @@ defmodule Aerospike.ExpTest do
           Exp.gt(Exp.int_bin("age"), Exp.int(65))
         ])
 
-      # and_ → [16, eq_wire, gt_wire]; fixarray(3)=0x93, expOpAND=16=0x10
+      # and_ -> [16, eq_wire, gt_wire]; fixarray(3)=0x93, expOpAND=16=0x10
       expected = <<0x93, 0x10>> <> @eq_age_21 <> gt_wire
       assert %Exp{wire: ^expected} = result
     end
@@ -222,7 +222,7 @@ defmodule Aerospike.ExpTest do
           Exp.gt(Exp.int_bin("age"), Exp.int(65))
         ])
 
-      # or_ → [17, eq_wire, gt_wire]; expOpOR=17=0x11
+      # or_ -> [17, eq_wire, gt_wire]; expOpOR=17=0x11
       expected = <<0x93, 0x11>> <> @eq_age_21 <> gt_wire
       assert %Exp{wire: ^expected} = result
     end
@@ -230,7 +230,7 @@ defmodule Aerospike.ExpTest do
     test "not_/1 wraps a single sub-expression" do
       eq = Exp.eq(Exp.int_bin("age"), Exp.int(21))
       result = Exp.not_(eq)
-      # not_ → [18, eq_wire]; fixarray(2)=0x92, expOpNOT=18=0x12
+      # not_ -> [18, eq_wire]; fixarray(2)=0x92, expOpNOT=18=0x12
       expected = <<0x92, 0x12>> <> @eq_age_21
       assert %Exp{wire: ^expected} = result
     end

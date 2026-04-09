@@ -480,9 +480,9 @@ defmodule Aerospike.Policy do
   end
 
   # Builds the read AsmMsg, varying the wire shape based on options:
-  # - `header_only: true` → READ + NOBINDATA flags (metadata only, no bin payload)
-  # - `bins: [...]` → READ with per-bin READ operations (selective bin fetch)
-  # - otherwise → full record read (all bins)
+  # - `header_only: true` -> READ + NOBINDATA flags (metadata only, no bin payload)
+  # - `bins: [...]` -> READ with per-bin READ operations (selective bin fetch)
+  # - otherwise -> full record read (all bins)
   @doc false
   @spec read_message_for_opts(Key.t(), keyword()) :: AsmMsg.t()
   def read_message_for_opts(%Key{} = key, opts) when is_list(opts) do

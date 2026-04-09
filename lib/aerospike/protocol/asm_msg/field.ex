@@ -234,9 +234,9 @@ defmodule Aerospike.Protocol.AsmMsg.Field do
   @doc """
   Creates a KEY field from a Key struct's user_key.
 
-  - Integer user_key → particle type 1, 8 bytes big-endian
-  - String user_key → particle type 3, raw UTF-8
-  - nil user_key → nil (no field, typically digest-only key)
+  - Integer user_key -> particle type 1, 8 bytes big-endian
+  - String user_key -> particle type 3, raw UTF-8
+  - nil user_key -> nil (no field, typically digest-only key)
   """
   @spec key_from_user_key(%{user_key: integer() | binary() | nil}) :: t() | nil
   def key_from_user_key(%{user_key: n}) when is_integer(n) do

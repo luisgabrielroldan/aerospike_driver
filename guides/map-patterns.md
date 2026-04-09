@@ -2,11 +2,11 @@
 
 Aerospike maps are server-side key-value structures stored in a single bin. They support
 rich operations — lookups by key, index, rank, value ranges, and more — all executed
-atomically on the server. This guide covers real-world patterns using `Aerospike.Op.Map`.
+atomically on the server. This guide covers real-world patterns using [`Aerospike.Op.Map`](Aerospike.Op.Map.html).
 
 ## Map Basics
 
-Create a map by writing entries with `put/4` or `put_items/3`:
+Create a map by writing entries with [`put/4`](Aerospike.Op.Map.html#put/4) or [`put_items/3`](Aerospike.Op.Map.html#put_items/3):
 
 ```elixir
 alias Aerospike.Op.Map
@@ -22,7 +22,7 @@ key = Aerospike.key("test", "users", "user:42")
 ])
 ```
 
-Read entries back by key:
+Read entries back by key with [`get_by_key/3`](Aerospike.Op.Map.html#get_by_key/3):
 
 ```elixir
 {:ok, rec} = Aerospike.operate(:aero, key, [
@@ -96,7 +96,7 @@ Aerospike.operate(:aero, key, [
 
 ### Querying Events by Time Range
 
-Use `get_by_key_range/4` to retrieve events within a time window:
+Use [`get_by_key_range/4`](Aerospike.Op.Map.html#get_by_key_range/4) to retrieve events within a time window:
 
 ```elixir
 # Get events between two timestamps (inclusive start, exclusive end)
@@ -118,7 +118,7 @@ rec.bins["events"]  # => 6
 
 ### Trimming Old Events
 
-Keep only the last N events to bound record size. Use `remove_by_index_range/4` to
+Keep only the last N events to bound record size. Use [`remove_by_index_range/4`](Aerospike.Op.Map.html#remove_by_index_range/4) to
 remove everything except the most recent entries:
 
 ```elixir
@@ -129,7 +129,7 @@ Aerospike.operate(:aero, key, [
 ])
 ```
 
-Alternatively, remove events older than a threshold:
+Alternatively, remove events older than a threshold with [`remove_by_key_range/4`](Aerospike.Op.Map.html#remove_by_key_range/4):
 
 ```elixir
 # Remove events before a cutoff timestamp
@@ -142,7 +142,7 @@ Aerospike.operate(:aero, key, [
 
 ## Pattern: Document Store
 
-Use nested maps to store semi-structured documents:
+Use [`Aerospike.put/4`](Aerospike.html#put/4) with nested maps to store semi-structured documents:
 
 ```elixir
 key = Aerospike.key("test", "sightings", 5001)
@@ -159,7 +159,7 @@ Aerospike.put(:aero, key, %{
 })
 ```
 
-Atomically update a field inside the document and read another:
+Atomically update a field inside the document and read another. The example uses [`put/2`](Aerospike.Op.html#put/2) and [`get/1`](Aerospike.Op.html#get/1) from [`Aerospike.Op`](Aerospike.Op.html) (`import Aerospike.Op`).
 
 ```elixir
 alias Aerospike.Op.Map
@@ -247,4 +247,4 @@ Aerospike.operate(:aero, key, [
 
 - [List Patterns](list-patterns.md) — queues, time series, bounded lists
 - [Nested Operations](nested-operations.md) — operating on deeply nested maps and lists
-- `Aerospike.Op.Map` — complete API reference
+- [`Aerospike.Op.Map`](Aerospike.Op.Map.html) — complete API reference
