@@ -82,12 +82,23 @@ defmodule Aerospike.Repo do
     adapter = Keyword.get(opts, :adapter, Aerospike)
     conn_wrappers = conn_wrapper_defs()
 
+    conn_def =
+      if repo_name do
+        quote do
+          def conn, do: unquote(repo_name)
+        end
+      else
+        quote do
+          def conn, do: __MODULE__
+        end
+      end
+
     quote do
       @repo_otp_app unquote(otp_app)
       @repo_name unquote(repo_name)
       @repo_adapter unquote(adapter)
 
-      def conn, do: @repo_name || __MODULE__
+      unquote(conn_def)
 
       def config do
         @repo_otp_app

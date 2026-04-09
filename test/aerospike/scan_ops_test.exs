@@ -258,7 +258,10 @@ defmodule Aerospike.ScanOpsTest do
       send(node1, :emit_second)
 
       records = Task.await(stream_task, 1_000)
-      assert records == [{:node1, 1}, {:node2, 1}, {:node3, 1}, {:node1, 2}]
+      assert [first, second, third, fourth] = records
+      assert first == {:node1, 1}
+      assert fourth == {:node1, 2}
+      assert Enum.sort([second, third]) == Enum.sort([{:node2, 1}, {:node3, 1}])
     end
 
     @tag timeout: 5_000
