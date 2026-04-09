@@ -9,6 +9,9 @@ defmodule Aerospike.Bench.Scenarios.Default do
       concurrency: [1],
       fanout_batch_sizes: [100],
       fanout_large_batch_sizes: [1000],
+      stream_record_count: 5_000,
+      stream_ttfr_trials: 8,
+      stream_max_concurrent_nodes: [1, 2, 0],
       payload_sizes: [256, 4096],
       payload_profiles: %{
         small: %{bin: "payload", bytes: 256},
@@ -22,6 +25,9 @@ defmodule Aerospike.Bench.Scenarios.Default do
       concurrency: [1, 4],
       fanout_batch_sizes: [100],
       fanout_large_batch_sizes: [1000],
+      stream_record_count: 25_000,
+      stream_ttfr_trials: 16,
+      stream_max_concurrent_nodes: [1, 2, 0],
       payload_sizes: [256, 4096],
       payload_profiles: %{
         small: %{bin: "payload", bytes: 256},
@@ -35,6 +41,9 @@ defmodule Aerospike.Bench.Scenarios.Default do
       concurrency: [1, 4, 16],
       fanout_batch_sizes: [100],
       fanout_large_batch_sizes: [1000],
+      stream_record_count: 100_000,
+      stream_ttfr_trials: 24,
+      stream_max_concurrent_nodes: [1, 2, 0],
       payload_sizes: [256, 4096, 16384],
       payload_profiles: %{
         small: %{bin: "payload", bytes: 256},
