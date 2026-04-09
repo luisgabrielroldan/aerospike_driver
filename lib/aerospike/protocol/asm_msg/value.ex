@@ -2,6 +2,7 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @moduledoc false
 
   alias Aerospike.Error
+  alias Aerospike.Geo
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.MessagePack
@@ -74,13 +75,13 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
     cell_bytes = ncells * 8
 
     case rest do
-      <<_cells::binary-size(cell_bytes), json::binary>> -> {:ok, {:geojson, json}}
+      <<_cells::binary-size(cell_bytes), json::binary>> -> {:ok, Geo.from_json(json)}
       _ -> {:ok, {:geojson, rest}}
     end
   end
 
   def decode_value(@particle_geojson, data) when is_binary(data) do
-    {:ok, {:geojson, data}}
+    {:ok, Geo.from_json(data)}
   end
 
   def decode_value(particle_type, data) when is_integer(particle_type) and is_binary(data) do
@@ -130,6 +131,10 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   def encode_value({:bytes, bin}) when is_binary(bin) do
     {@particle_blob, bin}
   end
+
+  def encode_value(%Geo.Point{} = point), do: encode_value({:geojson, Geo.to_json(point)})
+  def encode_value(%Geo.Polygon{} = polygon), do: encode_value({:geojson, Geo.to_json(polygon)})
+  def encode_value(%Geo.Circle{} = circle), do: encode_value({:geojson, Geo.to_json(circle)})
 
   def encode_value({:geojson, json}) when is_binary(json) do
     # Wire layout: 1 byte flags + 2 bytes ncells (0) + JSON string.

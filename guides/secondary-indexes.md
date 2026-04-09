@@ -102,6 +102,38 @@ Index GeoJSON point or region bins for geospatial queries:
 :ok = Aerospike.IndexTask.wait(task)
 ```
 
+Once the index is ready, geospatial predicates can use typed
+[`Aerospike.Geo`](Aerospike.Geo.html) structs:
+
+```elixir
+alias Aerospike.{Filter, Geo, Query}
+
+point = Geo.point(-122.5, 45.5)
+region = Geo.circle(-122.5, 45.5, 5_000)
+
+{:ok, matches} =
+  Query.new("test", "locations")
+  |> Query.where(Filter.geo_within("coords", region))
+  |> Query.max_records(10_000)
+  |> then(&Aerospike.all(:aero, &1))
+
+{:ok, containing_regions} =
+  Query.new("test", "regions")
+  |> Query.where(Filter.geo_contains("shape", point))
+  |> Query.max_records(10_000)
+  |> then(&Aerospike.all(:aero, &1))
+```
+
+Raw GeoJSON strings remain supported for backward compatibility:
+
+```elixir
+region_json = "{\"type\":\"AeroCircle\",\"coordinates\":[[-122.5,45.5],5000]}"
+
+Query.new("test", "locations")
+|> Query.where(Filter.geo_within("coords", region_json))
+|> Query.max_records(10_000)
+```
+
 ## Collection Index Types
 
 When the indexed bin holds a List, Map key, or Map value, pass `:collection` to index the
