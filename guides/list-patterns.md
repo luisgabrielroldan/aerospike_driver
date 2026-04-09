@@ -2,11 +2,11 @@
 
 Aerospike lists are ordered collections stored in a single bin. They support append, insert,
 removal by index/value/rank, sorting, and range queries — all executed atomically on the
-server. This guide covers common real-world patterns using `Aerospike.Op.List`.
+server. This guide covers common real-world patterns using [`Aerospike.Op.List`](Aerospike.Op.List.html).
 
 ## List Basics
 
-Create and manipulate lists with `append/3`, `get/3`, and `size/2`:
+Create and manipulate lists with [`append/3`](Aerospike.Op.List.html#append/3), [`get/3`](Aerospike.Op.List.html#get/3), and [`size/2`](Aerospike.Op.List.html#size/2):
 
 ```elixir
 alias Aerospike.Op.List
@@ -126,7 +126,7 @@ Aerospike.operate(:aero, key, [
 
 ## Pattern: Bounded List (Keep Last N)
 
-Cap the list size to prevent unbounded growth. Use `trim/4` to keep only
+Cap the list size to prevent unbounded growth. Use [`trim/4`](Aerospike.Op.List.html#trim/4) to keep only
 the most recent entries:
 
 ```elixir
@@ -241,4 +241,4 @@ alias Aerospike.Op.List
 
 - [Map Patterns](map-patterns.md) — event containers, document stores, leaderboards
 - [Nested Operations](nested-operations.md) — operating on lists inside maps and vice versa
-- `Aerospike.Op.List` — complete API reference
+- [`Aerospike.Op.List`](Aerospike.Op.List.html) — complete API reference

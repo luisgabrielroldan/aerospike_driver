@@ -4,12 +4,12 @@ A secondary index (SI) lets you query records by bin value rather than primary k
 maintains the index on a per-namespace, per-set, per-bin basis and updates it automatically as
 records change.
 
-Secondary indexes are complementary to `Aerospike.Query` — once an index exists, pass
-`Aerospike.Filter` predicates in your query to use it.
+Secondary indexes are complementary to [`Aerospike.Query`](Aerospike.Query.html) — once an index exists, pass
+[`Aerospike.Filter`](Aerospike.Filter.html) predicates in your query to use it.
 
 ## Creating an Index
 
-`Aerospike.create_index/4` sends the creation command to the server. Index building happens
+[`Aerospike.create_index/4`](Aerospike.html#create_index/4) sends the creation command to the server. Index building happens
 asynchronously in the background:
 
 ```elixir
@@ -31,7 +31,7 @@ Required options:
 
 ## Waiting for the Index to Be Ready
 
-`create_index/4` returns an `%Aerospike.IndexTask{}`. Use `IndexTask.wait/2` to block until
+[`create_index/4`](Aerospike.html#create_index/4) returns an [`%Aerospike.IndexTask{}`](Aerospike.IndexTask.html). Use [`IndexTask.wait/2`](Aerospike.IndexTask.html#wait/2) to block until
 the server reports the index is fully built:
 
 ```elixir
@@ -48,7 +48,7 @@ case Aerospike.IndexTask.status(task) do
 end
 ```
 
-`IndexTask.wait/2` polls `status/1` in a loop. Options:
+[`IndexTask.wait/2`](Aerospike.IndexTask.html#wait/2) polls [`status/1`](Aerospike.IndexTask.html#status/1) in a loop. Options:
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -59,7 +59,7 @@ end
 
 ### Numeric
 
-Index integer or float bins. Use with `Filter.range/3` or `Filter.equal/2` (integers only):
+Index integer or float bins. Use with [`Filter.range/3`](Aerospike.Filter.html#range/3) or [`Filter.equal/2`](Aerospike.Filter.html#equal/2) (integers only):
 
 ```elixir
 {:ok, task} =
@@ -74,7 +74,7 @@ Index integer or float bins. Use with `Filter.range/3` or `Filter.equal/2` (inte
 
 ### String
 
-Index string bins. Use with `Filter.equal/2`:
+Index string bins. Use with [`Filter.equal/2`](Aerospike.Filter.html#equal/2):
 
 ```elixir
 {:ok, task} =
@@ -144,26 +144,24 @@ inner values rather than the bin container itself:
 
 ## Querying with an Index
 
-Pair secondary indexes with `Aerospike.Query` and `Aerospike.Filter`:
+Pair secondary indexes with [`Aerospike.Query`](Aerospike.Query.html) and [`Aerospike.Filter`](Aerospike.Filter.html). Execute with [`Aerospike.all/3`](Aerospike.html#all/3) (or [`stream!/3`](Aerospike.html#stream!/3), [`page/3`](Aerospike.html#page/3), etc.); [`all/3`](Aerospike.html#all/3) requires [`Query.max_records/2`](Aerospike.Query.html#max_records/2).
 
 ```elixir
 alias Aerospike.{Filter, Query}
 
 # Range query — requires a numeric index on "age"
 {:ok, records} =
-  Aerospike.query(:aero, %Query{
-    namespace: "test",
-    set: "users",
-    filter: Filter.range("age", 18, 65)
-  })
+  Query.new("test", "users")
+  |> Query.where(Filter.range("age", 18, 65))
+  |> Query.max_records(10_000)
+  |> then(&Aerospike.all(:aero, &1))
 
 # Equality query on a string index
 {:ok, records} =
-  Aerospike.query(:aero, %Query{
-    namespace: "test",
-    set: "users",
-    filter: Filter.equal("email", "user@example.com")
-  })
+  Query.new("test", "users")
+  |> Query.where(Filter.equal("email", "user@example.com"))
+  |> Query.max_records(10_000)
+  |> then(&Aerospike.all(:aero, &1))
 ```
 
 ### Combining Index Filters with Expression Filters
@@ -174,12 +172,13 @@ requiring an index:
 ```elixir
 alias Aerospike.{Exp, Filter, Query}
 
-{:ok, records} =
-  Aerospike.query(:aero, %Query{
-    namespace: "test",
-    set: "users",
-    filter: Filter.range("age", 18, 65)
-  }, filter: Exp.eq(Exp.str_bin("status"), Exp.val("active")))
+query =
+  Query.new("test", "users")
+  |> Query.where(Filter.range("age", 18, 65))
+  |> Query.filter(Exp.eq(Exp.str_bin("status"), Exp.val("active")))
+  |> Query.max_records(10_000)
+
+{:ok, records} = Aerospike.all(:aero, query)
 ```
 
 The index filter runs server-side first (fast path), then the expression filter applies to
@@ -191,7 +190,7 @@ the smaller result set.
 :ok = Aerospike.drop_index(:aero, "test", "users_age_idx")
 ```
 
-`drop_index/3` returns `:ok` whether or not the index existed.
+[`drop_index/3`](Aerospike.html#drop_index/3) returns `:ok` whether or not the index existed.
 
 ## Full Example: Build, Query, Drop
 
@@ -216,11 +215,10 @@ end
 
 # Query using the index
 {:ok, records} =
-  Aerospike.query(:aero, %Query{
-    namespace: "test",
-    set: "users",
-    filter: Filter.range("age", 18, 30)
-  })
+  Query.new("test", "users")
+  |> Query.where(Filter.range("age", 18, 30))
+  |> Query.max_records(10_000)
+  |> then(&Aerospike.all(:aero, &1))
 
 IO.puts("Found #{length(records)} users aged 18–30")
 
@@ -259,6 +257,6 @@ end
 
 ## Next Steps
 
-- `Aerospike.IndexTask` — polling task struct reference
-- `Aerospike.Filter` — index filter predicates (`equal/2`, `range/3`)
+- [`Aerospike.IndexTask`](Aerospike.IndexTask.html) — polling task struct reference
+- [`Aerospike.Filter`](Aerospike.Filter.html) — index filter predicates ([`equal/2`](Aerospike.Filter.html#equal/2), [`range/3`](Aerospike.Filter.html#range/3))
 - [Queries and Scanning](queries-and-scanning.md) — full query API, pagination, partition filters

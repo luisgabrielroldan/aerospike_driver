@@ -91,7 +91,7 @@ defmodule Aerospike.Txn do
 
   # Generates a uniformly random signed int64.
   # :rand.uniform(N) returns an integer in 1..N; subtracting 1 shifts it to 0..N-1.
-  # Adding @int64_min maps [0, 2^64-1] → [-2^63, 2^63-1].
+  # Adding @int64_min maps [0, 2^64-1] -> [-2^63, 2^63-1].
   defp random_id do
     @int64_min + :rand.uniform(@int64_range) - 1
   end

@@ -6,7 +6,7 @@ defmodule Aerospike.TxnOps do
   #   - state machine (:open, :verified, :committed, :aborted)
   #   - namespace constraint (all ops must target the same namespace)
   #   - server-returned deadline (populated by TxnMonitor.register_key)
-  #   - reads map: Key → record version (for verify phase)
+  #   - reads map: Key -> record version (for verify phase)
   #   - writes set: Key structs (for roll-forward/rollback phase)
   #   - write_in_doubt flag
 
@@ -18,7 +18,7 @@ defmodule Aerospike.TxnOps do
   @typedoc """
   Per-transaction row in the `txn_tracking` ETS table (`Tables.txn_tracking/1`).
 
-  Lifecycle: `state` progresses `:open` → `:verified` → `:committed` or `:aborted` (or
+  Lifecycle: `state` progresses `:open` -> `:verified` -> `:committed` or `:aborted` (or
   directly to `:aborted` on failure). `namespace` is set on the first participating key
   and must match thereafter. `deadline` is set when the server-side monitor record is
   registered. `reads` maps each read key to its record version for the verify phase;

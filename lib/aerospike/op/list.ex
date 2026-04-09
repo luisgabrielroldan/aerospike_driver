@@ -13,21 +13,21 @@ defmodule Aerospike.Op.List do
   a parameter error will be returned. If a range is partially out of bounds, the
   valid part of the range will be returned.
 
-      Index  0         → first item
-      Index  4         → fifth item
-      Index -1         → last item
-      Index -3         → third to last item
-      Index  1, Count 2 → second and third items
-      Index -3, Count 3 → last three items
+      Index  0         -> first item
+      Index  4         -> fifth item
+      Index -1         -> last item
+      Index -3         -> third to last item
+      Index  1, Count 2 -> second and third items
+      Index -3, Count 3 -> last three items
 
   ## Rank semantics
 
   Rank is the value-sorted position within the list:
 
-      Rank  0  → smallest value
-      Rank  N  → Nth smallest value
-      Rank -1  → largest value
-      Rank -N  → Nth largest value
+      Rank  0  -> smallest value
+      Rank  N  -> Nth smallest value
+      Rank -1  -> largest value
+      Rank -N  -> Nth largest value
 
   ## List ordering
 
@@ -532,13 +532,13 @@ defmodule Aerospike.Op.List do
 
   ## Examples (ordered list `[0, 4, 5, 9, 11, 15]`)
 
-      {value, rank} → removed items
-      {5,  0}  → [5, 9, 11, 15]
-      {5,  1}  → [9, 11, 15]
-      {5, -1}  → [4, 5, 9, 11, 15]
-      {3,  0}  → [4, 5, 9, 11, 15]
-      {3,  3}  → [11, 15]
-      {3, -3}  → [0, 4, 5, 9, 11, 15]
+      {value, rank} -> removed items
+      {5,  0}  -> [5, 9, 11, 15]
+      {5,  1}  -> [9, 11, 15]
+      {5, -1}  -> [4, 5, 9, 11, 15]
+      {3,  0}  -> [4, 5, 9, 11, 15]
+      {3,  3}  -> [11, 15]
+      {3, -3}  -> [0, 4, 5, 9, 11, 15]
   """
   @spec remove_by_value_rel_rank_range(String.t(), term(), integer(), keyword()) :: t()
   def remove_by_value_rel_rank_range(bin_name, value, rank, opts \\ [])
@@ -558,13 +558,13 @@ defmodule Aerospike.Op.List do
 
   ## Examples (ordered list `[0, 4, 5, 9, 11, 15]`)
 
-      {value, rank, count} → removed items
-      {5,  0, 2}  → [5, 9]
-      {5,  1, 1}  → [9]
-      {5, -1, 2}  → [4, 5]
-      {3,  0, 1}  → [4]
-      {3,  3, 7}  → [11, 15]
-      {3, -3, 2}  → []
+      {value, rank, count} -> removed items
+      {5,  0, 2}  -> [5, 9]
+      {5,  1, 1}  -> [9]
+      {5, -1, 2}  -> [4, 5]
+      {3,  0, 1}  -> [4]
+      {3,  3, 7}  -> [11, 15]
+      {3, -3, 2}  -> []
   """
   @spec remove_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), keyword()) ::
           t()
@@ -697,13 +697,13 @@ defmodule Aerospike.Op.List do
 
   ## Examples (ordered list `[0, 4, 5, 9, 11, 15]`)
 
-      {value, rank} → selected items
-      {5,  0}  → [5, 9, 11, 15]
-      {5,  1}  → [9, 11, 15]
-      {5, -1}  → [4, 5, 9, 11, 15]
-      {3,  0}  → [4, 5, 9, 11, 15]
-      {3,  3}  → [11, 15]
-      {3, -3}  → [0, 4, 5, 9, 11, 15]
+      {value, rank} -> selected items
+      {5,  0}  -> [5, 9, 11, 15]
+      {5,  1}  -> [9, 11, 15]
+      {5, -1}  -> [4, 5, 9, 11, 15]
+      {3,  0}  -> [4, 5, 9, 11, 15]
+      {3,  3}  -> [11, 15]
+      {3, -3}  -> [0, 4, 5, 9, 11, 15]
   """
   @spec get_by_value_rel_rank_range(String.t(), term(), integer(), keyword()) :: t()
   def get_by_value_rel_rank_range(bin_name, value, rank, opts \\ []) when is_binary(bin_name) do
@@ -722,13 +722,13 @@ defmodule Aerospike.Op.List do
 
   ## Examples (ordered list `[0, 4, 5, 9, 11, 15]`)
 
-      {value, rank, count} → selected items
-      {5,  0, 2}  → [5, 9]
-      {5,  1, 1}  → [9]
-      {5, -1, 2}  → [4, 5]
-      {3,  0, 1}  → [4]
-      {3,  3, 7}  → [11, 15]
-      {3, -3, 2}  → []
+      {value, rank, count} -> selected items
+      {5,  0, 2}  -> [5, 9]
+      {5,  1, 1}  -> [9]
+      {5, -1, 2}  -> [4, 5]
+      {3,  0, 1}  -> [4]
+      {3,  3, 7}  -> [11, 15]
+      {3, -3, 2}  -> []
   """
   @spec get_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), keyword()) ::
           t()

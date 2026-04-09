@@ -1,12 +1,12 @@
 # Nested CDT Operations
 
 Aerospike supports operations on deeply nested structures — maps inside maps,
-lists inside maps, maps inside lists, and arbitrary combinations. The `Aerospike.Ctx`
-module provides context paths that tell the server exactly where to apply an operation.
+lists inside maps, maps inside lists, and arbitrary combinations. The
+[`Aerospike.Ctx`](Aerospike.Ctx.html) module provides context paths that tell the server exactly where to apply an operation.
 
 ## The Context Path
 
-A context path is a list of `Aerospike.Ctx` elements that navigate from the top-level
+A context path is a list of context elements (from that module) that navigate from the top-level
 bin down to the target element. Think of it like a path in a nested data structure:
 
 ```elixir
@@ -18,6 +18,8 @@ ctx: [Aerospike.Ctx.map_key("geo")]
 ```
 
 ## Context Types
+
+These helpers are defined on [`Aerospike.Ctx`](Aerospike.Ctx.html):
 
 | Function | Navigates By | Use Case |
 |----------|-------------|----------|
@@ -171,7 +173,7 @@ rec.bins["grid"]  # => 3
 
 ## Combining Nested Operations
 
-Multiple nested operations can be combined in a single atomic `operate` call,
+Multiple nested operations can be combined in a single atomic [`Aerospike.operate/4`](Aerospike.html#operate/4) call,
 even targeting different paths within the same bin:
 
 ```elixir
@@ -203,14 +205,14 @@ Aerospike.put(:aero, key, %{
 
 ## Tips
 
-- **Context paths are relative to the bin.** The first argument to any Op function is
+- **Context paths are relative to the bin.** The first argument to any operation builder is
   the bin name. The `ctx:` navigates within that bin's value.
 
-- **Negative indexes work in context too.** `Ctx.list_index(-1)` targets the last element,
-  `Ctx.map_rank(-1)` targets the highest-valued map entry.
+- **Negative indexes work in context too.** [`Ctx.list_index/1`](Aerospike.Ctx.html#list_index/1) with `-1` targets the last element;
+  [`Ctx.map_rank/1`](Aerospike.Ctx.html#map_rank/1) with `-1` targets the highest-valued map entry.
 
-- **Context is supported on all CDT operations.** Every function in `Aerospike.Op.List`
-  and `Aerospike.Op.Map` accepts `ctx:`.
+- **Context is supported on all CDT operations.** Every function in [`Aerospike.Op.List`](Aerospike.Op.List.html)
+  and [`Aerospike.Op.Map`](Aerospike.Op.Map.html) accepts `ctx:`.
 
 - **Keep nesting shallow when possible.** While Aerospike supports deep nesting, flatter
   structures with multiple bins are often simpler to query and maintain.
@@ -219,4 +221,4 @@ Aerospike.put(:aero, key, %{
 
 - [Map Patterns](map-patterns.md) — event containers, document stores, leaderboards
 - [List Patterns](list-patterns.md) — queues, time series, bounded lists
-- `Aerospike.Ctx` — complete context type reference
+- [`Aerospike.Ctx`](Aerospike.Ctx.html) — complete context type reference

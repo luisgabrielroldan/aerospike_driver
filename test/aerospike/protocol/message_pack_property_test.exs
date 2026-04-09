@@ -7,8 +7,8 @@ defmodule Aerospike.Protocol.MessagePackPropertyTest do
   @moduletag :property
 
   # Boundary integers that probe each encoding format transition.
-  # Sorted by format: positive fixint → uint8 → uint16 → uint32 → uint64,
-  # and negative fixint → int8 → int16 → int32 → int64.
+  # Sorted by format: positive fixint -> uint8 -> uint16 -> uint32 -> uint64,
+  # and negative fixint -> int8 -> int16 -> int32 -> int64.
   @boundary_integers [
     # positive fixint (0x00..0x7F)
     0,
@@ -170,7 +170,7 @@ defmodule Aerospike.Protocol.MessagePackPropertyTest do
 
   describe "edge cases: collection header format boundaries" do
     test "fixmap max: 15 entries use single-byte header 0x8F" do
-      # fixmap range: 0x80 | n for n in 0..15 → 0x80..0x8F
+      # fixmap range: 0x80 | n for n in 0..15 -> 0x80..0x8F
       map = Map.new(1..15, fn i -> {i, i} end)
       assert <<0x8F, _::binary>> = MessagePack.pack!(map)
       assert MessagePack.unpack!(MessagePack.pack!(map)) == map
@@ -184,7 +184,7 @@ defmodule Aerospike.Protocol.MessagePackPropertyTest do
     end
 
     test "fixarray max: 15 elements use single-byte header 0x9F" do
-      # fixarray range: 0x90 | n for n in 0..15 → 0x90..0x9F
+      # fixarray range: 0x90 | n for n in 0..15 -> 0x90..0x9F
       list = Enum.to_list(1..15)
       assert <<0x9F, _::binary>> = MessagePack.pack!(list)
       assert MessagePack.unpack!(MessagePack.pack!(list)) == list
@@ -200,14 +200,14 @@ defmodule Aerospike.Protocol.MessagePackPropertyTest do
 
   describe "edge cases: float and integer extremes" do
     test "float 0.0 encodes as float64 with all-zero payload" do
-      # IEEE 754 positive zero: sign=0, exponent=0, mantissa=0 → all 64 bits zero
+      # IEEE 754 positive zero: sign=0, exponent=0, mantissa=0 -> all 64 bits zero
       packed = MessagePack.pack!(0.0)
       assert <<0xCB, 0::64>> = packed
       assert MessagePack.unpack!(packed) == 0.0
     end
 
     test "float -0.0 encodes with sign bit set, distinct wire bytes from 0.0" do
-      # IEEE 754 negative zero: sign=1, exponent=0, mantissa=0 → 0x8000000000000000
+      # IEEE 754 negative zero: sign=1, exponent=0, mantissa=0 -> 0x8000000000000000
       # Elixir equality treats -0.0 == 0.0 in comparisons
       neg_zero_bytes = <<0xCB, 1::1, 0::63>>
       assert MessagePack.pack!(-0.0) == neg_zero_bytes
