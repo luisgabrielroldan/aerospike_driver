@@ -16,6 +16,7 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @particle_map 19
   @particle_list 20
   @particle_geojson 23
+  @ordered_collection_sentinel_ext_types [1, 3, 8]
 
   @doc """
   Decodes wire particle bytes to an Elixir term.
@@ -109,14 +110,41 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   end
 
   defp normalize_msgpack_particle_strings(list) when is_list(list) do
-    Enum.map(list, &normalize_msgpack_particle_strings/1)
+    list
+    |> Enum.map(&normalize_msgpack_particle_strings/1)
+    |> drop_ordered_list_sentinel()
   end
 
   defp normalize_msgpack_particle_strings(map) when is_map(map) do
-    Map.new(map, fn {k, v} ->
+    map
+    |> Map.new(fn {k, v} ->
       {normalize_msgpack_particle_strings(k), normalize_msgpack_particle_strings(v)}
     end)
+    |> drop_ordered_map_sentinel()
   end
+
+  defp drop_ordered_map_sentinel(map) when is_map(map) do
+    map
+    |> Enum.reject(fn
+      {key, nil} -> ordered_collection_sentinel_key?(key)
+      _ -> false
+    end)
+    |> Map.new()
+  end
+
+  defp drop_ordered_list_sentinel([head | tail]) do
+    if ordered_collection_sentinel_key?(head), do: tail, else: [head | tail]
+  end
+
+  defp drop_ordered_list_sentinel([]), do: []
+
+  defp ordered_collection_sentinel_key?({:ext, type, payload})
+       when is_integer(type) and type in @ordered_collection_sentinel_ext_types and
+              payload == <<>> do
+    true
+  end
+
+  defp ordered_collection_sentinel_key?(_other), do: false
 
   @doc """
   Encodes an Elixir term to `{particle_type, data}` for wire use.
