@@ -69,7 +69,7 @@ defmodule Aerospike.TxnMonitorTest do
     end
 
     test "decodes as a valid AS_MSG", %{wire: wire} do
-      assert {:ok, {2, 3, body}} = Message.decode(wire)
+      assert {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
       assert {:ok, %AsmMsg{}} = AsmMsg.decode(body)
     end
 
@@ -366,7 +366,7 @@ defmodule Aerospike.TxnMonitorTest do
   end
 
   defp decode_msg!(wire) do
-    {:ok, {2, 3, body}} = Message.decode(wire)
+    {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
     {:ok, msg} = AsmMsg.decode(body)
     msg
   end

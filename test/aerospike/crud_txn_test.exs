@@ -124,7 +124,7 @@ defmodule Aerospike.CRUDTxnTest do
         base_write_msg(key)
         |> CRUD.maybe_add_mrt_fields(@conn, key, [txn: txn], true)
 
-      wire = Message.encode_as_msg(AsmMsg.encode(msg))
+      wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       assert {:ok, {2, 3, body}} = Message.decode(wire)
       assert {:ok, decoded} = AsmMsg.decode(body)
 
@@ -151,7 +151,7 @@ defmodule Aerospike.CRUDTxnTest do
         base_read_msg(key)
         |> CRUD.maybe_add_mrt_fields(@conn, key, [txn: txn], false)
 
-      wire = Message.encode_as_msg(AsmMsg.encode(msg))
+      wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       assert {:ok, {2, 3, body}} = Message.decode(wire)
       assert {:ok, decoded} = AsmMsg.decode(body)
 
@@ -162,7 +162,7 @@ defmodule Aerospike.CRUDTxnTest do
     test "wire without txn has no MRT fields", %{key: key} do
       msg = base_write_msg(key)
 
-      wire = Message.encode_as_msg(AsmMsg.encode(msg))
+      wire = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       assert {:ok, {2, 3, body}} = Message.decode(wire)
       assert {:ok, decoded} = AsmMsg.decode(body)
 

@@ -53,7 +53,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
   describe "encode/1" do
     test "encodes minimal message with no fields or operations" do
       msg = %AsmMsg{}
-      encoded = AsmMsg.encode(msg)
+      encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
       # 22-byte header with all zeros except header_size
       assert byte_size(encoded) == 22
@@ -73,7 +73,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
     test "encodes message with info flags" do
       import Bitwise
       msg = %AsmMsg{info1: 0x03, info2: 0x01, info3: 0x10, info4: 0x02}
-      encoded = AsmMsg.encode(msg)
+      encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
       <<22, info1, info2, info3, info4, _rest::binary>> = encoded
       assert info1 == 0x03
@@ -84,7 +84,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
 
     test "encodes generation and expiration" do
       msg = %AsmMsg{generation: 5, expiration: 3600}
-      encoded = AsmMsg.encode(msg)
+      encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
       <<_header::binary-6, generation::32-big, expiration::32-big, _rest::binary>> = encoded
       assert generation == 5
@@ -93,7 +93,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
 
     test "encodes signed timeout" do
       msg = %AsmMsg{timeout: -1}
-      encoded = AsmMsg.encode(msg)
+      encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
       <<_header::binary-14, timeout::32-big-signed, _rest::binary>> = encoded
       assert timeout == -1
@@ -107,7 +107,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
         ]
       }
 
-      encoded = AsmMsg.encode(msg)
+      encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
       # Check field count
       <<_::binary-18, field_count::16-big, _op_count::16-big, rest::binary>> = encoded
@@ -132,7 +132,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
         ]
       }
 
-      encoded = AsmMsg.encode(msg)
+      encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
       # Check operation count
       <<_::binary-20, op_count::16-big, rest::binary>> = encoded
@@ -212,7 +212,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
   describe "encode/decode roundtrip" do
     test "roundtrips minimal message" do
       msg = %AsmMsg{}
-      assert {:ok, decoded} = msg |> AsmMsg.encode() |> AsmMsg.decode()
+      assert {:ok, decoded} = msg |> AsmMsg.encode() |> IO.iodata_to_binary() |> AsmMsg.decode()
       assert decoded.info1 == 0
       assert decoded.fields == []
       assert decoded.operations == []
@@ -230,7 +230,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
         timeout: 1000
       }
 
-      assert {:ok, decoded} = msg |> AsmMsg.encode() |> AsmMsg.decode()
+      assert {:ok, decoded} = msg |> AsmMsg.encode() |> IO.iodata_to_binary() |> AsmMsg.decode()
       assert decoded.info1 == msg.info1
       assert decoded.info2 == msg.info2
       assert decoded.info3 == msg.info3
@@ -249,7 +249,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
         ]
       }
 
-      assert {:ok, decoded} = msg |> AsmMsg.encode() |> AsmMsg.decode()
+      assert {:ok, decoded} = msg |> AsmMsg.encode() |> IO.iodata_to_binary() |> AsmMsg.decode()
       assert length(decoded.fields) == 3
 
       [ns, set, digest] = decoded.fields
@@ -270,7 +270,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
         ]
       }
 
-      assert {:ok, decoded} = msg |> AsmMsg.encode() |> AsmMsg.decode()
+      assert {:ok, decoded} = msg |> AsmMsg.encode() |> IO.iodata_to_binary() |> AsmMsg.decode()
       assert length(decoded.operations) == 3
 
       [op1, op2, op3] = decoded.operations
@@ -302,7 +302,7 @@ defmodule Aerospike.Protocol.AsmMsgTest do
         ]
       }
 
-      assert {:ok, decoded} = msg |> AsmMsg.encode() |> AsmMsg.decode()
+      assert {:ok, decoded} = msg |> AsmMsg.encode() |> IO.iodata_to_binary() |> AsmMsg.decode()
 
       assert decoded.info1 == msg.info1
       assert decoded.info2 == msg.info2

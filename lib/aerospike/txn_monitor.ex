@@ -146,7 +146,7 @@ defmodule Aerospike.TxnMonitor do
   @doc false
   @spec encode_monitor_msg(String.t(), binary(), non_neg_integer(), non_neg_integer(), [
           Operation.t()
-        ]) :: binary()
+        ]) :: iodata()
   def encode_monitor_msg(namespace, digest, info2, expiration, operations) do
     %AsmMsg{
       info2: info2,
@@ -159,7 +159,7 @@ defmodule Aerospike.TxnMonitor do
       operations: operations
     }
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   @doc false

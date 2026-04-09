@@ -144,7 +144,7 @@ defmodule Aerospike.TxnRollTest do
   describe "encode_verify_msg/2" do
     test "decodes as valid AS_MSG", %{key: key} do
       wire = TxnRoll.encode_verify_msg(key, 42)
-      assert {:ok, {2, 3, body}} = Message.decode(wire)
+      assert {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
       assert {:ok, %AsmMsg{}} = AsmMsg.decode(body)
     end
 
@@ -422,7 +422,7 @@ defmodule Aerospike.TxnRollTest do
   # ---------------------------------------------------------------------------
 
   defp decode_roll_wire!(wire) do
-    {:ok, {2, 3, body}} = Message.decode(wire)
+    {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
     {:ok, msg} = AsmMsg.decode(body)
     msg
   end

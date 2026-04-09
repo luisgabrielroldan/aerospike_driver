@@ -272,7 +272,7 @@ defmodule Aerospike.TxnRoll do
       ]
     }
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   # Roll-forward message: durable write with MRT roll-forward flag and MRT_ID.
@@ -300,7 +300,7 @@ defmodule Aerospike.TxnRoll do
       ]
     }
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp code_to_error(code) do

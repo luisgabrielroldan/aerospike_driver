@@ -76,9 +76,11 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     Key.partition_id(Key.from_digest(@namespace, @set, digest))
   end
 
+  defp encode_bin(msg), do: IO.iodata_to_binary(AsmMsg.encode(msg))
+
   test "parse: single record then LAST" do
     d = digest_fixture("one")
-    body = AsmMsg.encode(record_msg(digest: d)) <> AsmMsg.encode(last_msg())
+    body = encode_bin(record_msg(digest: d)) <> encode_bin(last_msg())
 
     assert {:ok, [rec], []} = ScanResponse.parse(body, @namespace, @set)
     assert rec.bins == %{"age" => 42}
@@ -95,10 +97,10 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     d3 = digest_fixture("c")
 
     body =
-      AsmMsg.encode(record_msg(digest: d1, generation: 1)) <>
-        AsmMsg.encode(record_msg(digest: d2, generation: 2)) <>
-        AsmMsg.encode(record_msg(digest: d3, generation: 3)) <>
-        AsmMsg.encode(last_msg())
+      encode_bin(record_msg(digest: d1, generation: 1)) <>
+        encode_bin(record_msg(digest: d2, generation: 2)) <>
+        encode_bin(record_msg(digest: d3, generation: 3)) <>
+        encode_bin(last_msg())
 
     assert {:ok, records, []} = ScanResponse.parse(body, @namespace, @set)
     assert length(records) == 3
@@ -106,7 +108,7 @@ defmodule Aerospike.Protocol.ScanResponseTest do
   end
 
   test "parse: empty scan (LAST only, rc 0)" do
-    body = AsmMsg.encode(last_msg())
+    body = encode_bin(last_msg())
     assert {:ok, [], []} = ScanResponse.parse(body, @namespace, @set)
   end
 
@@ -115,8 +117,8 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     d2 = digest_fixture("p2")
 
     body =
-      AsmMsg.encode(record_msg(digest: d1, generation: 1)) <>
-        AsmMsg.encode(record_msg(digest: d2, generation: 2))
+      encode_bin(record_msg(digest: d1, generation: 1)) <>
+        encode_bin(record_msg(digest: d2, generation: 2))
 
     assert {:error, %{code: :parse_error}} = ScanResponse.parse(body, @namespace, @set)
 
@@ -129,8 +131,8 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     expected_id = Key.partition_id(Key.from_digest(@namespace, @set, d))
 
     body =
-      AsmMsg.encode(partition_done_msg(d)) <>
-        AsmMsg.encode(last_msg())
+      encode_bin(partition_done_msg(d)) <>
+        encode_bin(last_msg())
 
     assert {:ok, [], [info]} = ScanResponse.parse(body, @namespace, @set)
     assert info.id == expected_id
@@ -143,26 +145,26 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     bval_bin = <<7::64-signed-little>>
 
     body =
-      AsmMsg.encode(partition_done_msg(d, bval_data: bval_bin)) <>
-        AsmMsg.encode(last_msg())
+      encode_bin(partition_done_msg(d, bval_data: bval_bin)) <>
+        encode_bin(last_msg())
 
     assert {:ok, [], [info]} = ScanResponse.parse(body, @namespace, @set)
     assert info.bval == 7
   end
 
   test "parse: LAST frame with fatal result_code returns error" do
-    body = AsmMsg.encode(last_msg(rc: 9))
+    body = encode_bin(last_msg(rc: 9))
     assert {:error, %{code: :timeout}} = ScanResponse.parse(body, @namespace, @set)
   end
 
   test "parse: LAST frame with key_not_found is acceptable" do
-    body = AsmMsg.encode(last_msg(rc: 2))
+    body = encode_bin(last_msg(rc: 2))
     assert {:ok, [], []} = ScanResponse.parse(body, @namespace, @set)
   end
 
   test "parse_frame: one record frame" do
     d = digest_fixture("frame")
-    bin = AsmMsg.encode(record_msg(digest: d))
+    bin = encode_bin(record_msg(digest: d))
 
     assert {:ok, %{records: [rec], partition_done: nil, last?: false}} =
              ScanResponse.parse_frame(bin, @namespace, @set)
@@ -171,28 +173,28 @@ defmodule Aerospike.Protocol.ScanResponseTest do
   end
 
   test "parse_frame: LAST-only frame" do
-    bin = AsmMsg.encode(last_msg())
+    bin = encode_bin(last_msg())
 
     assert {:ok, %{records: [], partition_done: nil, last?: true}} =
              ScanResponse.parse_frame(bin, @namespace, @set)
   end
 
   test "parse_frame: rejects trailing bytes" do
-    bin = AsmMsg.encode(last_msg()) <> <<0, 1, 2>>
+    bin = encode_bin(last_msg()) <> <<0, 1, 2>>
 
     assert {:error, %{code: :parse_error}} = ScanResponse.parse_frame(bin, @namespace, @set)
   end
 
   test "parse: key_not_found RC is skipped (not a stream terminator)" do
     terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
-    body = AsmMsg.encode(terminal) <> AsmMsg.encode(last_msg())
+    body = encode_bin(terminal) <> encode_bin(last_msg())
 
     assert {:ok, [], []} = ScanResponse.parse(body, @namespace, @set)
   end
 
   test "parse: key_not_found RC without LAST is incomplete" do
     terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
-    body = AsmMsg.encode(terminal)
+    body = encode_bin(terminal)
 
     assert {:error, %{code: :parse_error, message: msg}} =
              ScanResponse.parse(body, @namespace, @set)
@@ -203,7 +205,7 @@ defmodule Aerospike.Protocol.ScanResponseTest do
   describe "count_records/1" do
     test "single record then LAST returns 1" do
       d = digest_fixture("cnt1")
-      body = AsmMsg.encode(record_msg(digest: d)) <> AsmMsg.encode(last_msg())
+      body = encode_bin(record_msg(digest: d)) <> encode_bin(last_msg())
 
       assert {:ok, 1} = ScanResponse.count_records(body)
     end
@@ -214,22 +216,22 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       d3 = digest_fixture("cc")
 
       body =
-        AsmMsg.encode(record_msg(digest: d1, generation: 1)) <>
-          AsmMsg.encode(record_msg(digest: d2, generation: 2)) <>
-          AsmMsg.encode(record_msg(digest: d3, generation: 3)) <>
-          AsmMsg.encode(last_msg())
+        encode_bin(record_msg(digest: d1, generation: 1)) <>
+          encode_bin(record_msg(digest: d2, generation: 2)) <>
+          encode_bin(record_msg(digest: d3, generation: 3)) <>
+          encode_bin(last_msg())
 
       assert {:ok, 3} = ScanResponse.count_records(body)
     end
 
     test "empty scan (LAST only) returns 0" do
-      body = AsmMsg.encode(last_msg())
+      body = encode_bin(last_msg())
       assert {:ok, 0} = ScanResponse.count_records(body)
     end
 
     test "without terminal LAST returns error" do
       d = digest_fixture("cnt_no_last")
-      body = AsmMsg.encode(record_msg(digest: d))
+      body = encode_bin(record_msg(digest: d))
 
       assert {:error, %{code: :parse_error}} =
                ScanResponse.count_records(body)
@@ -239,8 +241,8 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       d = digest_fixture("cnt_pd")
 
       body =
-        AsmMsg.encode(partition_done_msg(d)) <>
-          AsmMsg.encode(last_msg())
+        encode_bin(partition_done_msg(d)) <>
+          encode_bin(last_msg())
 
       assert {:ok, 0} = ScanResponse.count_records(body)
     end
@@ -250,28 +252,28 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       dp = digest_fixture("cnt_part")
 
       body =
-        AsmMsg.encode(record_msg(digest: dr)) <>
-          AsmMsg.encode(partition_done_msg(dp)) <>
-          AsmMsg.encode(last_msg())
+        encode_bin(record_msg(digest: dr)) <>
+          encode_bin(partition_done_msg(dp)) <>
+          encode_bin(last_msg())
 
       assert {:ok, 1} = ScanResponse.count_records(body)
     end
 
     test "LAST with fatal result_code returns error" do
-      body = AsmMsg.encode(last_msg(rc: 9))
+      body = encode_bin(last_msg(rc: 9))
       assert {:error, %{code: :timeout}} = ScanResponse.count_records(body)
     end
 
     test "key_not_found RC is skipped (not a stream terminator)" do
       terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
-      body = AsmMsg.encode(terminal) <> AsmMsg.encode(last_msg())
+      body = encode_bin(terminal) <> encode_bin(last_msg())
 
       assert {:ok, 0} = ScanResponse.count_records(body)
     end
 
     test "key_not_found RC without LAST is incomplete" do
       terminal = %AsmMsg{result_code: 2, fields: [], operations: []}
-      body = AsmMsg.encode(terminal)
+      body = encode_bin(terminal)
 
       assert {:error, %{code: :parse_error, message: msg}} =
                ScanResponse.count_records(body)
@@ -284,9 +286,9 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       d2 = digest_fixture("agree_b")
 
       body =
-        AsmMsg.encode(record_msg(digest: d1, generation: 1)) <>
-          AsmMsg.encode(record_msg(digest: d2, generation: 2)) <>
-          AsmMsg.encode(last_msg())
+        encode_bin(record_msg(digest: d1, generation: 1)) <>
+          encode_bin(record_msg(digest: d2, generation: 2)) <>
+          encode_bin(last_msg())
 
       {:ok, records, _parts} = ScanResponse.parse(body, @namespace, @set)
       {:ok, count} = ScanResponse.count_records(body)
@@ -297,7 +299,7 @@ defmodule Aerospike.Protocol.ScanResponseTest do
   describe "parse_stream_chunk/3" do
     test "returns done? = true when LAST frame terminates the chunk" do
       d = digest_fixture("stream_done")
-      body = AsmMsg.encode(record_msg(digest: d)) <> AsmMsg.encode(last_msg())
+      body = encode_bin(record_msg(digest: d)) <> encode_bin(last_msg())
 
       assert {:ok, [rec], [], true} = ScanResponse.parse_stream_chunk(body, @namespace, @set)
       assert rec.bins == %{"age" => 42}
@@ -308,20 +310,20 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     end
 
     test "LAST-only chunk returns done? = true with no records" do
-      body = AsmMsg.encode(last_msg())
+      body = encode_bin(last_msg())
       assert {:ok, [], [], true} = ScanResponse.parse_stream_chunk(body, @namespace, @set)
     end
 
     test "partition_done + LAST returns done? = true with partition info" do
       d = digest_fixture("stream_pd")
-      body = AsmMsg.encode(partition_done_msg(d)) <> AsmMsg.encode(last_msg())
+      body = encode_bin(partition_done_msg(d)) <> encode_bin(last_msg())
 
       assert {:ok, [], [info], true} = ScanResponse.parse_stream_chunk(body, @namespace, @set)
       assert info.digest == d
     end
 
     test "fatal LAST returns error" do
-      body = AsmMsg.encode(last_msg(rc: 9))
+      body = encode_bin(last_msg(rc: 9))
 
       assert {:error, %{code: :timeout}} =
                ScanResponse.parse_stream_chunk(body, @namespace, @set)
@@ -353,7 +355,7 @@ defmodule Aerospike.Protocol.ScanResponseTest do
         ]
       }
 
-      body = AsmMsg.encode(msg) <> AsmMsg.encode(last_msg())
+      body = encode_bin(msg) <> encode_bin(last_msg())
       assert {:ok, [rec], []} = ScanResponse.parse(body, @namespace, @set)
       assert rec.key.user_key == 99
     end
@@ -382,14 +384,14 @@ defmodule Aerospike.Protocol.ScanResponseTest do
         ]
       }
 
-      body = AsmMsg.encode(msg) <> AsmMsg.encode(last_msg())
+      body = encode_bin(msg) <> encode_bin(last_msg())
       assert {:ok, [rec], []} = ScanResponse.parse(body, @namespace, @set)
       assert rec.key.user_key == "mykey"
     end
 
     test "missing KEY field leaves user_key as nil" do
       d = digest_fixture("no_uk")
-      body = AsmMsg.encode(record_msg(digest: d)) <> AsmMsg.encode(last_msg())
+      body = encode_bin(record_msg(digest: d)) <> encode_bin(last_msg())
 
       assert {:ok, [rec], []} = ScanResponse.parse(body, @namespace, @set)
       assert rec.key.user_key == nil
@@ -398,37 +400,37 @@ defmodule Aerospike.Protocol.ScanResponseTest do
 
   describe "lazy_stream_chunk_terminal?/1" do
     test "returns true for LAST frame" do
-      body = AsmMsg.encode(last_msg())
+      body = encode_bin(last_msg())
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
     test "returns false for record without LAST" do
       d = digest_fixture("lazy_cont")
-      body = AsmMsg.encode(record_msg(digest: d))
+      body = encode_bin(record_msg(digest: d))
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == false
     end
 
     test "returns true for record then LAST" do
       d = digest_fixture("lazy_done")
-      body = AsmMsg.encode(record_msg(digest: d)) <> AsmMsg.encode(last_msg())
+      body = encode_bin(record_msg(digest: d)) <> encode_bin(last_msg())
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
     test "returns true for error result code" do
       error_msg = %AsmMsg{result_code: 9, fields: [], operations: []}
-      body = AsmMsg.encode(error_msg)
+      body = encode_bin(error_msg)
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
     test "returns false for key_not_found frame (per-record skip, not terminal)" do
       msg = %AsmMsg{result_code: 2, fields: [], operations: []}
-      body = AsmMsg.encode(msg)
+      body = encode_bin(msg)
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == false
     end
 
     test "returns false for filtered_out frame (per-record skip, not terminal)" do
       msg = %AsmMsg{result_code: 27, fields: [], operations: []}
-      body = AsmMsg.encode(msg)
+      body = encode_bin(msg)
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == false
     end
 
@@ -437,13 +439,13 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     end
 
     test "returns true for LAST with trailing bytes" do
-      body = AsmMsg.encode(last_msg()) <> <<0, 0>>
+      body = encode_bin(last_msg()) <> <<0, 0>>
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
 
     test "returns true for partition_done + LAST" do
       d = digest_fixture("lazy_pd")
-      body = AsmMsg.encode(partition_done_msg(d)) <> AsmMsg.encode(last_msg())
+      body = encode_bin(partition_done_msg(d)) <> encode_bin(last_msg())
       assert ScanResponse.lazy_stream_chunk_terminal?(body) == true
     end
   end
@@ -451,7 +453,7 @@ defmodule Aerospike.Protocol.ScanResponseTest do
   describe "parse: set_name defaults" do
     test "set_name defaults to nil (empty string internally)" do
       d = digest_fixture("default_set")
-      body = AsmMsg.encode(record_msg(digest: d)) <> AsmMsg.encode(last_msg())
+      body = encode_bin(record_msg(digest: d)) <> encode_bin(last_msg())
 
       assert {:ok, [rec], []} = ScanResponse.parse(body, @namespace)
       assert rec.key.namespace == @namespace
@@ -497,7 +499,7 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     end
 
     test "LAST with unknown result_code 255 returns server_error" do
-      body = AsmMsg.encode(last_msg(rc: 255))
+      body = encode_bin(last_msg(rc: 255))
 
       assert {:error, %{code: :server_error}} = ScanResponse.parse(body, @namespace, @set)
     end
@@ -511,7 +513,7 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     end
 
     test "duplicate LAST frames in one body return parse_error" do
-      body = AsmMsg.encode(last_msg()) <> AsmMsg.encode(last_msg())
+      body = encode_bin(last_msg()) <> encode_bin(last_msg())
 
       assert {:error, %{code: :parse_error}} = ScanResponse.parse(body, @namespace, @set)
     end
