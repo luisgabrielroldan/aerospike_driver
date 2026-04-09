@@ -22,7 +22,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
   @batch_msg_ttl 0x08
 
   @doc false
-  @spec encode_batch_get([{non_neg_integer(), Key.t()}], keyword()) :: binary()
+  @spec encode_batch_get([{non_neg_integer(), Key.t()}], keyword()) :: iodata()
   def encode_batch_get(indexed_keys, merged_opts) when is_list(indexed_keys) do
     {read_attr, bin_ops} = read_attr_and_ops_for_get(merged_opts)
     op_count = length(bin_ops)
@@ -36,7 +36,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
   end
 
   @doc false
-  @spec encode_batch_exists([{non_neg_integer(), Key.t()}], keyword()) :: binary()
+  @spec encode_batch_exists([{non_neg_integer(), Key.t()}], keyword()) :: iodata()
   def encode_batch_exists(indexed_keys, merged_opts) when is_list(indexed_keys) do
     read_attr = AsmMsg.info1_read() ||| AsmMsg.info1_nobindata()
 
@@ -77,21 +77,13 @@ defmodule Aerospike.Protocol.BatchEncoder do
     else
       exp = Keyword.get(opts, :read_touch_ttl_percent, 0)
       fields_part = batch_key_fields(key, 0, op_count, opts)
+      ops_io = if op_count == 0, do: [], else: Enum.map(bin_ops, &Operation.encode/1)
 
-      ops_bin =
-        if op_count == 0,
-          do: <<>>,
-          else: bin_ops |> Enum.map(&Operation.encode/1) |> IO.iodata_to_binary()
-
-      <<
-        @batch_msg_info ||| @batch_msg_ttl::8,
-        read_attr::8,
-        0::8,
-        0::8,
-        exp::32-big,
-        fields_part::binary,
-        ops_bin::binary
-      >>
+      [
+        <<@batch_msg_info ||| @batch_msg_ttl::8, read_attr::8, 0::8, 0::8, exp::32-big>>,
+        fields_part,
+        ops_io
+      ]
     end
   end
 
@@ -103,7 +95,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
   defp repeat_ns_set?(nil, _b, _, _), do: false
 
   @doc false
-  @spec encode_batch_operate([{non_neg_integer(), Batch.t()}], keyword()) :: binary()
+  @spec encode_batch_operate([{non_neg_integer(), Batch.t()}], keyword()) :: iodata()
   def encode_batch_operate(indexed_ops, merged_opts) when is_list(indexed_ops) do
     body = batch_index_body_operate(indexed_ops, merged_opts)
     wrap_batch_message(body, merged_opts)
@@ -119,8 +111,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
         {[acc, <<idx::32-big, key.digest::binary>>, inner], key}
       end)
 
-    entries_bin = IO.iodata_to_binary(entries_io)
-    <<max::32-big, flags::8, entries_bin::binary>>
+    [<<max::32-big, flags::8>>, entries_io]
   end
 
   defp batch_index_body_operate(indexed_ops, global_opts) do
@@ -131,15 +122,13 @@ defmodule Aerospike.Protocol.BatchEncoder do
     # byte between e.g. read → write would inherit the wrong sub-message shape and
     # the server can mis-handle later ops (writes/deletes appearing to succeed locally
     # while the record is unchanged).
-    entries_bin =
-      indexed_ops
-      |> Enum.map(fn {idx, batch_rec} ->
+    entries_io =
+      Enum.map(indexed_ops, fn {idx, batch_rec} ->
         {chunk, _} = operate_chunk(idx, batch_rec, global_opts, nil)
         chunk
       end)
-      |> IO.iodata_to_binary()
 
-    <<max::32-big, flags::8, entries_bin::binary>>
+    [<<max::32-big, flags::8>>, entries_io]
   end
 
   defp operate_chunk(idx, %Batch.Read{key: key, opts: o}, global_opts, prev) do
@@ -154,7 +143,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
         read_entry_bytes(key, read_attr, op_count, bin_ops, merged, nil)
       end
 
-    {<<idx::32-big, key.digest::binary, inner::binary>>, key}
+    {[<<idx::32-big, key.digest::binary>>, inner], key}
   end
 
   defp operate_chunk(idx, %Batch.Put{key: key, bins: bins, opts: o}, global_opts, prev) do
@@ -167,21 +156,17 @@ defmodule Aerospike.Protocol.BatchEncoder do
       else
         {r, w, i, gen, exp} = put_write_tuple(merged)
         fields = batch_key_fields(key, 0, length(ops), merged)
-        ops_bin = ops |> Enum.map(&Operation.encode/1) |> IO.iodata_to_binary()
+        ops_io = Enum.map(ops, &Operation.encode/1)
 
-        <<
-          @batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8,
-          r::8,
-          w::8,
-          i::8,
-          gen::16-big,
-          exp::32-big,
-          fields::binary,
-          ops_bin::binary
-        >>
+        [
+          <<@batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8, r::8, w::8, i::8,
+            gen::16-big, exp::32-big>>,
+          fields,
+          ops_io
+        ]
       end
 
-    {<<idx::32-big, key.digest::binary, inner::binary>>, key}
+    {[<<idx::32-big, key.digest::binary>>, inner], key}
   end
 
   defp operate_chunk(idx, %Batch.Delete{key: key, opts: o}, global_opts, prev) do
@@ -201,18 +186,14 @@ defmodule Aerospike.Protocol.BatchEncoder do
 
         fields = batch_key_fields(key, 0, 0, merged)
 
-        <<
-          @batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8,
-          0::8,
-          w::8,
-          0::8,
-          0::16-big,
-          0::32-big,
-          fields::binary
-        >>
+        [
+          <<@batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8, 0::8, w::8, 0::8, 0::16-big,
+            0::32-big>>,
+          fields
+        ]
       end
 
-    {<<idx::32-big, key.digest::binary, inner::binary>>, key}
+    {[<<idx::32-big, key.digest::binary>>, inner], key}
   end
 
   defp operate_chunk(idx, %Batch.Operate{key: key, ops: ops, opts: o}, global_opts, prev) do
@@ -226,7 +207,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
         operate_inner_bytes(key, ops, st, merged)
       end
 
-    {<<idx::32-big, key.digest::binary, inner::binary>>, key}
+    {[<<idx::32-big, key.digest::binary>>, inner], key}
   end
 
   defp operate_chunk(
@@ -253,19 +234,15 @@ defmodule Aerospike.Protocol.BatchEncoder do
         fields_inner = batch_key_fields(key, 3, 0, merged)
         udf_fields = udf_extra_fields(pkg, f, args)
 
-        <<
-          @batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8,
-          0::8,
-          w::8,
-          i::8,
-          0::16-big,
-          exp::32-big,
-          fields_inner::binary,
-          udf_fields::binary
-        >>
+        [
+          <<@batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8, 0::8, w::8, i::8, 0::16-big,
+            exp::32-big>>,
+          fields_inner,
+          udf_fields
+        ]
       end
 
-    {<<idx::32-big, key.digest::binary, inner::binary>>, key}
+    {[<<idx::32-big, key.digest::binary>>, inner], key}
   end
 
   defp operate_inner_bytes(key, ops, st, merged) do
@@ -285,7 +262,7 @@ defmodule Aerospike.Protocol.BatchEncoder do
         info2
       end
 
-    ops_bin = ops |> Enum.map(&Operation.encode/1) |> IO.iodata_to_binary()
+    ops_io = Enum.map(ops, &Operation.encode/1)
     fields = batch_key_fields(key, 0, length(ops), merged)
 
     if st.has_write? do
@@ -293,28 +270,20 @@ defmodule Aerospike.Protocol.BatchEncoder do
       {w, i, gen} = inner_write_flags(merged, info2)
       exp_rw = Keyword.get(merged, :ttl, 0)
 
-      <<
-        @batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8,
-        r::8,
-        w::8,
-        i::8,
-        gen::16-big,
-        exp_rw::32-big,
-        fields::binary,
-        ops_bin::binary
-      >>
+      [
+        <<@batch_msg_info ||| @batch_msg_gen ||| @batch_msg_ttl::8, r::8, w::8, i::8, gen::16-big,
+          exp_rw::32-big>>,
+        fields,
+        ops_io
+      ]
     else
       exp = Keyword.get(merged, :read_touch_ttl_percent, 0)
 
-      <<
-        @batch_msg_info ||| @batch_msg_ttl::8,
-        info1::8,
-        0::8,
-        0::8,
-        exp::32-big,
-        fields::binary,
-        ops_bin::binary
-      >>
+      [
+        <<@batch_msg_info ||| @batch_msg_ttl::8, info1::8, 0::8, 0::8, exp::32-big>>,
+        fields,
+        ops_io
+      ]
     end
   end
 
@@ -383,9 +352,11 @@ defmodule Aerospike.Protocol.BatchEncoder do
   defp udf_extra_fields(package, function, args) do
     arg_body = args |> Enum.map(&pack_udf_arg/1) |> MessagePack.pack!()
 
-    Field.encode(%Field{type: Field.type_udf_package_name(), data: package}) <>
-      Field.encode(%Field{type: Field.type_udf_function(), data: function}) <>
+    [
+      Field.encode(%Field{type: Field.type_udf_package_name(), data: package}),
+      Field.encode(%Field{type: Field.type_udf_function(), data: function}),
       Field.encode(%Field{type: Field.type_udf_arglist(), data: arg_body})
+    ]
   end
 
   defp pack_udf_arg(s) when is_binary(s), do: {:particle_string, s}
@@ -410,18 +381,16 @@ defmodule Aerospike.Protocol.BatchEncoder do
     fc_arg = extra_fc + if(send_key? and key.user_key != nil, do: 1, else: 0)
     written_fc = fc_arg + 2
 
-    base =
-      <<
-        written_fc::16-big,
-        op_count::16-big
-      >> <>
-        Field.encode(Field.namespace(key.namespace)) <>
-        Field.encode(Field.set(key.set))
+    base = [
+      <<written_fc::16-big, op_count::16-big>>,
+      Field.encode(Field.namespace(key.namespace)),
+      Field.encode(Field.set(key.set))
+    ]
 
     if send_key? and key.user_key != nil do
       case Field.key_from_user_key(%{user_key: key.user_key}) do
         nil -> base
-        kf -> base <> Field.encode(kf)
+        kf -> [base, Field.encode(kf)]
       end
     else
       base
@@ -431,34 +400,27 @@ defmodule Aerospike.Protocol.BatchEncoder do
   defp wrap_batch_message(batch_index_body, opts) do
     timeout = Keyword.get(opts, :timeout, 0)
 
-    filter_bin =
+    filter_io =
       case Keyword.get(opts, :filter) do
         %Exp{wire: wire} when is_binary(wire) ->
           Field.encode(%Field{type: Field.type_filter_exp(), data: wire})
 
         _ ->
-          <<>>
+          []
       end
 
-    field_count = if filter_bin == <<>>, do: 1, else: 2
+    field_count = if filter_io == [], do: 1, else: 2
 
-    as_body =
-      <<
-        22::8,
-        AsmMsg.info1_batch()::8,
-        0::8,
-        0::8,
-        0::8,
-        0::8,
-        0::32-big,
-        0::32-big,
-        timeout::32-signed-big,
-        field_count::16-big,
-        0::16-big
-      >> <>
-        Field.encode(%Field{type: Field.type_batch_index(), data: batch_index_body}) <>
-        filter_bin
+    batch_field_data_len = IO.iodata_length(batch_index_body) + 1
 
-    Message.encode_as_msg(as_body)
+    as_body = [
+      <<22::8, AsmMsg.info1_batch()::8, 0::8, 0::8, 0::8, 0::8, 0::32-big, 0::32-big,
+        timeout::32-signed-big, field_count::16-big, 0::16-big>>,
+      <<batch_field_data_len::32-big, Field.type_batch_index()::8>>,
+      batch_index_body,
+      filter_io
+    ]
+
+    Message.encode_as_msg_iodata(as_body)
   end
 end

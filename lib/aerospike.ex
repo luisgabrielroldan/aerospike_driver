@@ -107,6 +107,10 @@ defmodule Aerospike do
   * `:connect_timeout` — TCP connect timeout in ms (default `5000`).
   * `:tend_interval` — periodic cluster tend interval in ms (default `1000`).
   * `:recv_timeout` — receive timeout for protocol reads in ms (default `5000`).
+  * `:max_error_rate` — per-node circuit-breaker threshold within the configured
+    tend window (default `100`). Set to `0` to disable breaker logic.
+  * `:error_rate_window` — circuit-breaker window size in tend ticks
+    (default `1`).
   * `:auth_opts` — optional authentication keyword list.
   * `:tls` — when `true`, upgrades each node connection with TLS after TCP connect (default `false`).
   * `:tls_opts` — keyword list passed to `:ssl.connect/3` (certificates, verify, SNI, etc.; default `[]`).
@@ -125,6 +129,25 @@ defmodule Aerospike do
           cacertfile: "/etc/ssl/certs/ca-certificates.crt"
         ]
       )
+
+  ## Circuit breaker example
+
+      Aerospike.start_link(
+        name: :aero_cb,
+        hosts: ["127.0.0.1:3000"],
+        max_error_rate: 50,
+        error_rate_window: 5
+      )
+
+  The breaker uses fixed-threshold semantics per node: requests are rejected
+  with `:max_error_rate` once a node reaches `max_error_rate` errors inside the
+  window, and counters reset every `error_rate_window` tend ticks.
+
+  Telemetry events:
+
+  * `[:aerospike, :circuit_breaker, :increment]`
+  * `[:aerospike, :circuit_breaker, :reject]`
+  * `[:aerospike, :circuit_breaker, :reset]`
 
   """
   @spec start_link(keyword()) :: Supervisor.on_start()

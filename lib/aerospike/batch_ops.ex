@@ -4,6 +4,7 @@ defmodule Aerospike.BatchOps do
   # Internal batch orchestration: defaults, per-node grouping, encode, pool checkout, parse.
 
   alias Aerospike.Batch
+  alias Aerospike.CircuitBreaker
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Policy
@@ -98,12 +99,14 @@ defmodule Aerospike.BatchOps do
     merge_slot_results(
       conn,
       groups,
-      fn _node, %{pool_pid: pool, entries: entries} ->
+      fn node, %{pool_pid: pool, entries: entries} ->
         wire = BatchEncoder.encode_batch_get(entries, read_opts_for_batch_get(merged))
         timeout = Keyword.get(merged, :pool_checkout_timeout, 5_000)
 
         with {:ok, body} <- Router.checkout_and_request_stream(pool, wire, timeout) do
-          BatchResponse.parse_batch_get(body, all_keys)
+          result = BatchResponse.parse_batch_get(body, all_keys)
+          maybe_record_device_overload(conn, node, result)
+          result
         end
       end,
       length(all_keys),
@@ -132,12 +135,14 @@ defmodule Aerospike.BatchOps do
     merge_slot_results(
       conn,
       groups,
-      fn _node, %{pool_pid: pool, entries: entries} ->
+      fn node, %{pool_pid: pool, entries: entries} ->
         wire = BatchEncoder.encode_batch_exists(entries, merged)
         timeout = Keyword.get(merged, :pool_checkout_timeout, 5_000)
 
         with {:ok, body} <- Router.checkout_and_request_stream(pool, wire, timeout) do
-          BatchResponse.parse_batch_exists(body, count)
+          result = BatchResponse.parse_batch_exists(body, count)
+          maybe_record_device_overload(conn, node, result)
+          result
         end
       end,
       count,
@@ -155,7 +160,7 @@ defmodule Aerospike.BatchOps do
     merge_slot_results(
       conn,
       groups,
-      fn _node, %{pool_pid: pool, entries: entries} ->
+      fn node, %{pool_pid: pool, entries: entries} ->
         indexed_batch =
           Enum.map(entries, fn {idx, _key} -> {idx, elem(ops_tuple, idx)} end)
 
@@ -163,7 +168,9 @@ defmodule Aerospike.BatchOps do
         timeout = Keyword.get(merged, :pool_checkout_timeout, 5_000)
 
         with {:ok, body} <- Router.checkout_and_request_stream(pool, wire, timeout) do
-          BatchResponse.parse_batch_operate(body, all_ops)
+          result = BatchResponse.parse_batch_operate(body, all_ops)
+          maybe_record_device_overload(conn, node, result)
+          result
         end
       end,
       n,
@@ -283,4 +290,10 @@ defmodule Aerospike.BatchOps do
   end
 
   defp telemetry_ns_set(_), do: {"", ""}
+
+  defp maybe_record_device_overload(conn, node_name, {:error, %Error{code: :device_overload}}) do
+    CircuitBreaker.record_error(conn, node_name, :device_overload)
+  end
+
+  defp maybe_record_device_overload(_conn, _node_name, _result), do: :ok
 end

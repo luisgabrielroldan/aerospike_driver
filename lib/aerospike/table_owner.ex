@@ -57,6 +57,15 @@ defmodule Aerospike.TableOwner do
     _ = :ets.new(Aerospike.Tables.txn_tracking(name), [:set, :public, :named_table])
     _ = :ets.new(Aerospike.Tables.meta(name), [:set, :public, :named_table])
 
+    _ =
+      :ets.new(Aerospike.Tables.breaker(name), [
+        :set,
+        :public,
+        :named_table,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
+
     {:ok, %{name: name}}
   end
 end

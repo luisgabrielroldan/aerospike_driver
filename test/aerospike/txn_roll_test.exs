@@ -15,15 +15,7 @@ defmodule Aerospike.TxnRollTest do
 
   setup do
     name = :"txn_roll_test_#{:erlang.unique_integer([:positive])}"
-    {:ok, pid} = TableOwner.start_link(name: name)
-
-    on_exit(fn ->
-      try do
-        if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
-      catch
-        :exit, _ -> :ok
-      end
-    end)
+    _pid = start_supervised!({TableOwner, name: name})
 
     txn = Txn.new()
     key = Key.new("test", "users", "roll-test-key")
@@ -152,7 +144,7 @@ defmodule Aerospike.TxnRollTest do
   describe "encode_verify_msg/2" do
     test "decodes as valid AS_MSG", %{key: key} do
       wire = TxnRoll.encode_verify_msg(key, 42)
-      assert {:ok, {2, 3, body}} = Message.decode(wire)
+      assert {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
       assert {:ok, %AsmMsg{}} = AsmMsg.decode(body)
     end
 
@@ -430,7 +422,7 @@ defmodule Aerospike.TxnRollTest do
   # ---------------------------------------------------------------------------
 
   defp decode_roll_wire!(wire) do
-    {:ok, {2, 3, body}} = Message.decode(wire)
+    {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
     {:ok, msg} = AsmMsg.decode(body)
     msg
   end

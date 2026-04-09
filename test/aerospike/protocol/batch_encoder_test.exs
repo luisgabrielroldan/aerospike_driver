@@ -16,7 +16,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
   # Decode the outer wire message, then extract the BATCH_INDEX field data.
   # Returns {outer_msg, batch_body} where batch_body is the raw batch index payload.
   defp decode_batch_body(wire) do
-    {:ok, {2, 3, body}} = Message.decode(wire)
+    {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
     {:ok, msg} = AsmMsg.decode(body)
     [%Field{type: 41, data: batch_body}] = Enum.filter(msg.fields, &(&1.type == 41))
     {msg, batch_body}
@@ -50,7 +50,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
   end
 
   test "encode_batch_get/2 wraps AS_MSG with INFO1_BATCH and batch field", %{key: key} do
-    wire = BatchEncoder.encode_batch_get([{0, key}], timeout: 1500)
+    wire = BatchEncoder.encode_batch_get([{0, key}], timeout: 1500) |> IO.iodata_to_binary()
     assert {:ok, {2, 3, body}} = Message.decode(wire)
     assert byte_size(body) >= 22
     # Inner AS_MSG: first byte is header size, second is info1.
@@ -60,14 +60,14 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
   end
 
   test "encode_batch_exists/2 is batch-framed", %{key: key} do
-    wire = BatchEncoder.encode_batch_exists([{0, key}], [])
+    wire = BatchEncoder.encode_batch_exists([{0, key}], []) |> IO.iodata_to_binary()
     assert {:ok, {2, 3, body}} = Message.decode(wire)
     <<_sz::8, info1::8, _::binary>> = body
     assert info1 == AsmMsg.info1_batch()
   end
 
   test "encode_batch_get/2 empty list still builds valid message" do
-    wire = BatchEncoder.encode_batch_get([], timeout: 0)
+    wire = BatchEncoder.encode_batch_get([], timeout: 0) |> IO.iodata_to_binary()
     assert {:ok, {2, 3, _body}} = Message.decode(wire)
   end
 
@@ -75,22 +75,22 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
     key: key
   } do
     wire = BatchEncoder.encode_batch_get([{0, key}], header_only: true, timeout: 100)
-    assert {:ok, _} = Message.decode(wire)
+    assert {:ok, _} = wire |> IO.iodata_to_binary() |> Message.decode()
 
     wire_bins = BatchEncoder.encode_batch_get([{0, key}], bins: [:z_bin], timeout: 50)
-    assert {:ok, _} = Message.decode(wire_bins)
+    assert {:ok, _} = wire_bins |> IO.iodata_to_binary() |> Message.decode()
 
     k2 = Key.new(key.namespace, key.set, "encoder-ut-b")
     wire_rep = BatchEncoder.encode_batch_get([{0, key}, {1, k2}], timeout: 50)
-    assert {:ok, _} = Message.decode(wire_rep)
+    assert {:ok, _} = wire_rep |> IO.iodata_to_binary() |> Message.decode()
 
     wire_f =
       BatchEncoder.encode_batch_get([{0, key}], filter: Exp.from_wire(<<1, 2, 3>>), timeout: 0)
 
-    assert {:ok, _} = Message.decode(wire_f)
+    assert {:ok, _} = wire_f |> IO.iodata_to_binary() |> Message.decode()
 
     wire_ra = BatchEncoder.encode_batch_get([{0, key}], respond_all_keys: false, timeout: 0)
-    assert {:ok, _} = Message.decode(wire_ra)
+    assert {:ok, _} = wire_ra |> IO.iodata_to_binary() |> Message.decode()
   end
 
   test "encode_batch_operate/2 covers read, put, delete, udf, operate read and write", %{key: key} do
@@ -121,7 +121,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
         []
       )
 
-    assert {:ok, _} = Message.decode(wire)
+    assert {:ok, _} = wire |> IO.iodata_to_binary() |> Message.decode()
   end
 
   test "encode_batch_operate/2 repeat ns/set and send_key", %{key: key} do
@@ -131,7 +131,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
         []
       )
 
-    assert {:ok, _} = Message.decode(wire_rep_reads)
+    assert {:ok, _} = wire_rep_reads |> IO.iodata_to_binary() |> Message.decode()
 
     wire_rep_puts =
       BatchEncoder.encode_batch_operate(
@@ -142,7 +142,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
         []
       )
 
-    assert {:ok, _} = Message.decode(wire_rep_puts)
+    assert {:ok, _} = wire_rep_puts |> IO.iodata_to_binary() |> Message.decode()
 
     wire_rep_del =
       BatchEncoder.encode_batch_operate(
@@ -153,7 +153,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
         []
       )
 
-    assert {:ok, _} = Message.decode(wire_rep_del)
+    assert {:ok, _} = wire_rep_del |> IO.iodata_to_binary() |> Message.decode()
 
     wire_rep_op =
       BatchEncoder.encode_batch_operate(
@@ -164,7 +164,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
         []
       )
 
-    assert {:ok, _} = Message.decode(wire_rep_op)
+    assert {:ok, _} = wire_rep_op |> IO.iodata_to_binary() |> Message.decode()
 
     wire_rep_udf =
       BatchEncoder.encode_batch_operate(
@@ -175,7 +175,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
         []
       )
 
-    assert {:ok, _} = Message.decode(wire_rep_udf)
+    assert {:ok, _} = wire_rep_udf |> IO.iodata_to_binary() |> Message.decode()
 
     wire_hdr =
       BatchEncoder.encode_batch_operate(
@@ -183,14 +183,14 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
         []
       )
 
-    assert {:ok, _} = Message.decode(wire_hdr)
+    assert {:ok, _} = wire_hdr |> IO.iodata_to_binary() |> Message.decode()
   end
 
   describe "byte-layout assertions" do
     test "outer AS_MSG BATCH_INDEX field has type byte 41 (Field.type_batch_index)" do
       key = Key.new("testns", "set1", "enc-t1")
       wire = BatchEncoder.encode_batch_get([{0, key}], [])
-      {:ok, {2, 3, body}} = Message.decode(wire)
+      {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
       {:ok, msg} = AsmMsg.decode(body)
       # There must be exactly one batch_index field (type 41)
       batch_field = Enum.find(msg.fields, &(&1.type == Field.type_batch_index()))
@@ -323,7 +323,7 @@ defmodule Aerospike.Protocol.BatchEncoderTest do
       key = Key.new("testns", "set1", "enc-t10")
       filter = Exp.from_wire(<<0xDE, 0xAD, 0xBE, 0xEF>>)
       wire = BatchEncoder.encode_batch_get([{0, key}], filter: filter)
-      {:ok, {2, 3, body}} = Message.decode(wire)
+      {:ok, {2, 3, body}} = wire |> IO.iodata_to_binary() |> Message.decode()
       {:ok, msg} = AsmMsg.decode(body)
 
       filter_field = Enum.find(msg.fields, &(&1.type == Field.type_filter_exp()))

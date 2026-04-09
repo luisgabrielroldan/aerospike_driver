@@ -29,7 +29,7 @@ defmodule Aerospike.Protocol.ScanQuery do
   `node_partitions` supplies PID_ARRAY / DIGEST_ARRAY data and the per-node `record_max`
   cap (from the orchestrator). `opts`: `:timeout` (default `30_000` ms), `:task_id` (`uint64`).
   """
-  @spec build_scan(Scan.t(), node_partitions(), keyword()) :: binary()
+  @spec build_scan(Scan.t(), node_partitions(), keyword()) :: iodata()
   def build_scan(%Scan{} = scan, node_partitions, opts \\ []) when is_list(opts) do
     sock_ms = Keyword.get(opts, :timeout, 30_000)
     query_id = task_id_u64(opts)
@@ -66,7 +66,7 @@ defmodule Aerospike.Protocol.ScanQuery do
       operations: ops
     }
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   @doc """
@@ -74,7 +74,7 @@ defmodule Aerospike.Protocol.ScanQuery do
 
   Requires `query.index_filter`. See `build_scan/3` for `node_partitions` and `opts`.
   """
-  @spec build_query(Query.t(), node_partitions(), keyword()) :: binary()
+  @spec build_query(Query.t(), node_partitions(), keyword()) :: iodata()
   def build_query(%Query{} = query, node_partitions, opts \\ []) when is_list(opts) do
     case query.index_filter do
       nil ->
@@ -133,7 +133,7 @@ defmodule Aerospike.Protocol.ScanQuery do
       operations: ops
     }
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp task_id_u64(opts) do

@@ -12,6 +12,7 @@ defmodule Aerospike.CRUD do
   # 4. Route to the correct node via the partition map and send the wire bytes.
   # 5. Decode the response, track transaction state, and emit telemetry.
 
+  alias Aerospike.CircuitBreaker
   alias Aerospike.Error
   alias Aerospike.Exp
   alias Aerospike.Key
@@ -325,7 +326,7 @@ defmodule Aerospike.CRUD do
     |> Policy.apply_write_policy(merged)
     |> apply_filter_exp(merged)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   # UDF args use Aerospike-aware MessagePack encoding: strings carry the particle
@@ -374,7 +375,7 @@ defmodule Aerospike.CRUD do
     |> Policy.apply_send_key(key, merged)
     |> maybe_add_mrt_fields(conn, key, merged, st.has_write?)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp operate_fields(%Key{} = key) do
@@ -397,6 +398,7 @@ defmodule Aerospike.CRUD do
         case AsmMsg.decode(body) do
           {:ok, msg} ->
             result = on_msg.(msg, node)
+            maybe_record_device_overload(conn, node, result)
             track_txn_response(txn_track, msg, result)
             result
 
@@ -412,6 +414,12 @@ defmodule Aerospike.CRUD do
         {{:error, e}, nil}
     end
   end
+
+  defp maybe_record_device_overload(conn, node, {{:error, %Error{code: :device_overload}}, _}) do
+    CircuitBreaker.record_error(conn, node, :device_overload)
+  end
+
+  defp maybe_record_device_overload(_conn, _node, _result), do: :ok
 
   # Wraps the command in a `:telemetry.span` so callers can observe latency,
   # success/failure, and which node handled the request.
@@ -440,7 +448,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, true)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp base_write_msg(%Key{} = key, ops) do
@@ -454,7 +462,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, false)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp encode_delete(conn, key, merged) do
@@ -464,7 +472,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, true)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp base_delete_msg(%Key{} = key) do
@@ -478,7 +486,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, false)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   defp base_exists_msg(%Key{} = key) do
@@ -492,7 +500,7 @@ defmodule Aerospike.CRUD do
     |> apply_filter_exp(merged)
     |> maybe_add_mrt_fields(conn, key, merged, true)
     |> AsmMsg.encode()
-    |> Message.encode_as_msg()
+    |> Message.encode_as_msg_iodata()
   end
 
   @doc false

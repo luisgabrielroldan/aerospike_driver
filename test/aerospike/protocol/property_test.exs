@@ -212,7 +212,7 @@ defmodule Aerospike.Protocol.PropertyTest do
           timeout: timeout
         }
 
-        encoded = AsmMsg.encode(msg)
+        encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
         assert {:ok, decoded} = AsmMsg.decode(encoded)
         assert decoded.info1 == info1
@@ -242,7 +242,7 @@ defmodule Aerospike.Protocol.PropertyTest do
           ]
         }
 
-        encoded = AsmMsg.encode(msg)
+        encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
         assert {:ok, decoded} = AsmMsg.decode(encoded)
         assert length(decoded.fields) == 3
@@ -268,7 +268,7 @@ defmodule Aerospike.Protocol.PropertyTest do
           ]
         }
 
-        encoded = AsmMsg.encode(msg)
+        encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
         assert {:ok, decoded} = AsmMsg.decode(encoded)
         assert length(decoded.operations) == 2
@@ -287,7 +287,7 @@ defmodule Aerospike.Protocol.PropertyTest do
               info2 <- integer(0..255)
             ) do
         msg = %AsmMsg{info1: info1, info2: info2}
-        encoded = AsmMsg.encode(msg)
+        encoded = IO.iodata_to_binary(AsmMsg.encode(msg))
 
         <<header_size::8, _rest::binary>> = encoded
         assert header_size == 22
@@ -312,7 +312,7 @@ defmodule Aerospike.Protocol.PropertyTest do
         }
 
         # Encode as complete message
-        full_msg = Message.encode_as_msg(AsmMsg.encode(asm_msg))
+        full_msg = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(asm_msg)))
 
         # Decode message envelope
         assert {:ok, {2, 3, payload}} = Message.decode(full_msg)

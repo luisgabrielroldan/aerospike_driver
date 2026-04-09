@@ -90,7 +90,7 @@ defmodule Aerospike.Protocol.GoldenFileTest do
         ]
       }
 
-      encoded = Message.encode_as_msg(AsmMsg.encode(msg))
+      encoded = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       fixture = Fixtures.asm_msg_get_simple()
 
       assert encoded == fixture
@@ -110,7 +110,7 @@ defmodule Aerospike.Protocol.GoldenFileTest do
     test "encode matches exists command fixture" do
       digest = :binary.copy(<<0xAB>>, 20)
       msg = AsmMsg.exists_command("test", "users", digest)
-      encoded = Message.encode_as_msg(AsmMsg.encode(msg))
+      encoded = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       assert encoded == Fixtures.asm_msg_exists_simple()
     end
   end
@@ -129,7 +129,7 @@ defmodule Aerospike.Protocol.GoldenFileTest do
     test "encode matches touch command fixture" do
       digest = :binary.copy(<<0xCD>>, 20)
       msg = AsmMsg.touch_command("test", "users", digest)
-      encoded = Message.encode_as_msg(AsmMsg.encode(msg))
+      encoded = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       assert encoded == Fixtures.asm_msg_touch_simple()
     end
   end
@@ -180,7 +180,7 @@ defmodule Aerospike.Protocol.GoldenFileTest do
         ]
       }
 
-      encoded = Message.encode_as_msg(AsmMsg.encode(msg))
+      encoded = IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
       fixture = Fixtures.asm_msg_put_simple()
 
       assert encoded == fixture

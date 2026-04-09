@@ -176,6 +176,18 @@ defmodule Aerospike.Policy do
                   connect_timeout: [type: :non_neg_integer, default: 5_000],
                   tend_interval: [type: :non_neg_integer, default: 1_000],
                   recv_timeout: [type: :non_neg_integer, default: 5_000],
+                  max_error_rate: [
+                    type: :non_neg_integer,
+                    default: 100,
+                    doc:
+                      "Per-node error threshold for the circuit breaker. `0` disables breaker checks and error counting."
+                  ],
+                  error_rate_window: [
+                    type: :pos_integer,
+                    default: 1,
+                    doc:
+                      "Tend-tick window size used with `:max_error_rate`. Counters reset every `error_rate_window` tend ticks."
+                  ],
                   auth_opts: [type: :keyword_list, default: []],
                   tls: [
                     type: :boolean,
@@ -222,7 +234,11 @@ defmodule Aerospike.Policy do
   def start_schema, do: @start_schema
 
   @doc false
-  def validate_start(opts) when is_list(opts), do: NimbleOptions.validate(opts, @start_schema)
+  def validate_start(opts) when is_list(opts) do
+    with {:ok, validated} <- NimbleOptions.validate(opts, @start_schema) do
+      validate_breaker_ratio(validated)
+    end
+  end
 
   @doc false
   def validate_start!(opts) when is_list(opts) do
@@ -291,6 +307,30 @@ defmodule Aerospike.Policy do
        }}
     else
       {:ok, validated}
+    end
+  end
+
+  defp validate_breaker_ratio(validated) do
+    max_error_rate = Keyword.fetch!(validated, :max_error_rate)
+    error_rate_window = Keyword.fetch!(validated, :error_rate_window)
+
+    if max_error_rate == 0 do
+      {:ok, validated}
+    else
+      ratio = div(max_error_rate, error_rate_window)
+
+      if ratio in 1..100 do
+        {:ok, validated}
+      else
+        {:error,
+         %NimbleOptions.ValidationError{
+           key: :max_error_rate,
+           keys_path: [],
+           value: max_error_rate,
+           message:
+             "invalid max_error_rate/error_rate_window ratio; requires 1 <= div(max_error_rate, error_rate_window) <= 100 when max_error_rate > 0"
+         }}
+      end
     end
   end
 
