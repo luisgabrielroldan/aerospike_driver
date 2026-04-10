@@ -111,6 +111,29 @@ defmodule Aerospike.Integration.OperateTest do
     assert rec.bins["tag"] == "ok"
   end
 
+  test "operate add accumulates float delta", %{conn: conn, host: host, port: port} do
+    key = Helpers.unique_key("test", "operate_itest")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    import Op
+
+    assert {:ok, rec1} =
+             Aerospike.operate(conn, key, [
+               add("price", 1.5),
+               get("price")
+             ])
+
+    assert rec1.bins["price"] == 1.5
+
+    assert {:ok, rec2} =
+             Aerospike.operate(conn, key, [
+               add("price", 2.5),
+               get("price")
+             ])
+
+    assert rec2.bins["price"] == 4.0
+  end
+
   test "operate returns per-op values for repeated same-bin ops", %{
     conn: conn,
     host: host,
