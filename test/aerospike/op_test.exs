@@ -30,6 +30,13 @@ defmodule Aerospike.OpTest do
     assert op.op_type == Operation.op_add()
   end
 
+  test "add encodes float delta" do
+    op = Op.add("f", 1.5)
+    assert op.op_type == Operation.op_add()
+    assert op.particle_type == 2
+    assert op.data == <<1.5::64-float-big>>
+  end
+
   test "append and prepend" do
     assert Op.append("s", "x").op_type == Operation.op_append()
     assert Op.prepend("s", "x").op_type == Operation.op_prepend()

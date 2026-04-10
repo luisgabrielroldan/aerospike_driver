@@ -70,10 +70,10 @@ defmodule Aerospike.Op do
   end
 
   @doc """
-  Atomically adds `delta` to an integer bin (64-bit signed).
+  Atomically adds `delta` to an integer or float bin.
   """
-  @spec add(String.t(), integer()) :: t()
-  def add(bin_name, delta) when is_binary(bin_name) and is_integer(delta),
+  @spec add(String.t(), integer() | float()) :: t()
+  def add(bin_name, delta) when is_binary(bin_name) and (is_integer(delta) or is_float(delta)),
     do: Operation.add(bin_name, delta)
 
   @doc """

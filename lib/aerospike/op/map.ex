@@ -56,10 +56,63 @@ defmodule Aerospike.Op.Map do
   - `return_count/0` — count of affected entries
   - `return_key/0` — key(s) of affected entries
   - `return_value/0` — value(s) of affected entries
-  - `return_key_value/0` — key/value pairs
+  - `return_key_value/0` — key/value pairs as an Elixir map
   - `return_exists/0` — existence flag(s) for matched entries
 
   Each function documents its default when `return_type:` is omitted.
+
+  ## Result shapes in `record.bins`
+
+  The Elixir type of `record.bins[bin_name]` depends on how many entries were
+  matched and which `return_type` was used:
+
+  | `return_type` | Single match | Multiple matches |
+  |---|---|---|
+  | `return_none/0` | `nil` | `nil` |
+  | `return_count/0` | `integer()` | `integer()` |
+  | `return_index/0` / `return_rank/0` | `integer()` | `[integer()]` |
+  | `return_key/0` / `return_value/0` | scalar | `[scalar]` |
+  | `return_key_value/0` | `%{key => value}` | `%{key => value}` |
+  | `return_exists/0` | `boolean()` | `[boolean()]` |
+
+  > #### `return_key_value/0` decodes to an Elixir map {: .info}
+  >
+  > Operations using `return_key_value()` — including `get_by_index_range/4`,
+  > `get_by_rank_range/4`, `get_by_key_range/4`, and similar range functions —
+  > return an Elixir **map** (`%{key => value}`), not a list or tuple pairs.
+  > This follows directly from MessagePack: the Aerospike server encodes
+  > key-value CDT results as a MsgPack map, which the driver decodes to
+  > `%{key => value}`.
+  >
+  > To extract values in a stable order, sort the map by key before processing:
+  >
+  >     # get_by_index_range returns %{minute_index => price}
+  >     %{bins: %{"stock" => entries}} = record
+  >     prices =
+  >       entries
+  >       |> Enum.sort_by(fn {k, _v} -> k end)
+  >       |> Enum.map(fn {_k, v} -> v end)
+
+  ## `respond_per_each_op: true` and multi-op results
+
+  When multiple operations target the **same bin** and
+  `respond_per_each_op: true` is passed to `Aerospike.operate/4`, the driver
+  collects each op's result into a flat list under that bin name. This is how
+  the 7-op rank pattern works in practice:
+
+      # Two ops on "stock" → record.bins["stock"] == [max_val, max_idx]
+      Aerospike.operate(conn, key, [
+        Map.get_by_rank("stock", -1, return_type: Map.return_value()),
+        Map.get_by_rank("stock", -1, return_type: Map.return_index())
+      ], respond_per_each_op: true)
+
+  This flat-list accumulation is **not** the same as `return_key_value()`.
+  The two must not be confused:
+
+  - `return_key_value()` on a single range op → `%{key => value}` map in
+    `record.bins[bin_name]`
+  - `respond_per_each_op: true` with N scalar ops on the same bin → `[v1, v2,
+    ...]` list in `record.bins[bin_name]`, one element per op, in issue order
 
   ## Examples
 
@@ -362,7 +415,13 @@ defmodule Aerospike.Op.Map do
   @doc """
   Removes `count` entries starting at `index`.
 
-  Default `return_type:` is `return_key/0`.
+  A `count` of `0` is a valid server-side no-op — no entries are removed and
+  no error is returned. This makes it safe to include the op unconditionally
+  in a write pipeline when the trim count is computed as
+  `max(0, current_index - window_size)`.
+
+  Default `return_type:` is `return_key/0`. Pass `return_type: return_none()`
+  when the removed keys are not needed (avoids unnecessary wire data).
   """
   @spec remove_by_index_range(String.t(), integer(), integer(), keyword()) :: t()
   def remove_by_index_range(bin_name, index, count, opts \\ [])
@@ -510,7 +569,25 @@ defmodule Aerospike.Op.Map do
   @doc """
   Returns `count` entries starting at map index `index`.
 
-  Default `return_type:` is `return_key_value/0`.
+  Negative `index` counts from the end: `-N` starts at the N-th entry from
+  the last. To fetch the last `N` entries of a KEY_VALUE_ORDERED map, pass
+  `index: -N, count: N`.
+
+  Default `return_type:` is `return_key_value/0`, which returns an Elixir map
+  (`%{key => value}`). Entries are returned in ascending key order. To process
+  them in insertion order, sort by key before iterating:
+
+      {:ok, record} =
+        Aerospike.operate(conn, key, [
+          Map.get_by_index_range("stock", -60, 60)
+        ])
+
+      prices =
+        record.bins["stock"]
+        |> Enum.sort_by(fn {k, _v} -> k end)
+        |> Enum.map(fn {_k, v} -> v end)
+
+  See the module-level "Result shapes" section for the full return-type table.
   """
   @spec get_by_index_range(String.t(), integer(), integer(), keyword()) :: t()
   def get_by_index_range(bin_name, index, count, opts \\ [])
@@ -546,8 +623,22 @@ defmodule Aerospike.Op.Map do
   @doc """
   Returns `count` entries starting at value-sorted rank `rank`.
 
-  Default `return_type:` is `return_key_value/0`. Using `rank: -1` with a positive `count`
-  returns the top *N* items by value rank.
+  Using `rank: -1` with a positive `count` returns the top *N* items by value
+  rank (highest values first when iterating the result in reverse).
+
+  Default `return_type:` is `return_key_value/0`, which returns an Elixir map
+  (`%{key => value}`). If you need the results in a specific order, use
+  `return_type: return_key()` or `return_type: return_value()` to get flat
+  lists, or sort the returned map by key/value after the fact.
+
+  > #### Leaderboard pattern with `respond_per_each_op: true` {: .tip}
+  >
+  > For ranked leaderboards, it is common to issue multiple single-rank ops
+  > (one `get_by_rank` per position) with `respond_per_each_op: true` rather
+  > than a single range op. This produces a flat `[k1, v1, k2, v2, ...]` list
+  > in `record.bins[bin_name]` — one element per op in issue order — which is
+  > easier to pattern-match positionally than a map. See the module-level
+  > "Result shapes" section for the distinction between the two approaches.
   """
   @spec get_by_rank_range(String.t(), integer(), integer(), keyword()) :: t()
   def get_by_rank_range(bin_name, rank, count, opts \\ [])

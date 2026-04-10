@@ -287,15 +287,24 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   end
 
   @doc """
-  Creates an add (increment) operation.
+  Creates an add (increment) operation with an integer or float value.
   """
-  @spec add(String.t(), integer()) :: t()
+  @spec add(String.t(), integer() | float()) :: t()
   def add(bin_name, value) when is_binary(bin_name) and is_integer(value) do
     %__MODULE__{
       op_type: @add,
       particle_type: @particle_integer,
       bin_name: bin_name,
       data: <<value::64-big-signed>>
+    }
+  end
+
+  def add(bin_name, value) when is_binary(bin_name) and is_float(value) do
+    %__MODULE__{
+      op_type: @add,
+      particle_type: @particle_float,
+      bin_name: bin_name,
+      data: <<value::64-float-big>>
     }
   end
 
