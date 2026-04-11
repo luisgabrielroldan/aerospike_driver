@@ -44,6 +44,54 @@ defmodule Aerospike.RepoTest do
 
     def commit(conn, txn), do: record(:commit, [conn, txn], {:ok, :committed})
     def abort(conn, txn), do: record(:abort, [conn, txn], {:ok, :aborted})
+
+    def create_user(conn, user_name, password, roles, opts \\ []),
+      do: record(:create_user, [conn, user_name, password, roles, opts], :ok)
+
+    def create_pki_user(conn, user_name, roles, opts \\ []),
+      do: record(:create_pki_user, [conn, user_name, roles, opts], :ok)
+
+    def drop_user(conn, user_name, opts \\ []),
+      do: record(:drop_user, [conn, user_name, opts], :ok)
+
+    def change_password(conn, user_name, password, opts \\ []),
+      do: record(:change_password, [conn, user_name, password, opts], :ok)
+
+    def grant_roles(conn, user_name, roles, opts \\ []),
+      do: record(:grant_roles, [conn, user_name, roles, opts], :ok)
+
+    def revoke_roles(conn, user_name, roles, opts \\ []),
+      do: record(:revoke_roles, [conn, user_name, roles, opts], :ok)
+
+    def query_user(conn, user_name, opts \\ []),
+      do: record(:query_user, [conn, user_name, opts], {:ok, :user})
+
+    def query_users(conn, opts \\ []),
+      do: record(:query_users, [conn, opts], {:ok, []})
+
+    def create_role(conn, role_name, privileges, opts \\ []),
+      do: record(:create_role, [conn, role_name, privileges, opts], :ok)
+
+    def drop_role(conn, role_name, opts \\ []),
+      do: record(:drop_role, [conn, role_name, opts], :ok)
+
+    def grant_privileges(conn, role_name, privileges, opts \\ []),
+      do: record(:grant_privileges, [conn, role_name, privileges, opts], :ok)
+
+    def revoke_privileges(conn, role_name, privileges, opts \\ []),
+      do: record(:revoke_privileges, [conn, role_name, privileges, opts], :ok)
+
+    def set_whitelist(conn, role_name, whitelist, opts \\ []),
+      do: record(:set_whitelist, [conn, role_name, whitelist, opts], :ok)
+
+    def set_quotas(conn, role_name, read_quota, write_quota, opts \\ []),
+      do: record(:set_quotas, [conn, role_name, read_quota, write_quota, opts], :ok)
+
+    def query_role(conn, role_name, opts \\ []),
+      do: record(:query_role, [conn, role_name, opts], {:ok, :role})
+
+    def query_roles(conn, opts \\ []),
+      do: record(:query_roles, [conn, opts], {:ok, []})
   end
 
   defmodule DefaultRepo do
@@ -61,6 +109,7 @@ defmodule Aerospike.RepoTest do
 
   @meta_functions [{:module_info, 0}, {:module_info, 1}, {:__info__, 1}]
   @repo_only_functions [{:conn, 0}, {:config, 0}]
+  @admin_only_functions [{:conn, 0}]
   @non_conn_passthrough [:key, :key_digest]
   @repo_intentional_extras [{:child_spec, 1}, {:start_link, 1}]
 
@@ -159,9 +208,17 @@ defmodule Aerospike.RepoTest do
         end)
         |> Enum.sort()
 
-      actual =
+      repo_surface =
         NamedRepo.__info__(:functions)
         |> Enum.reject(&(&1 in @meta_functions or &1 in @repo_only_functions))
+
+      admin_surface =
+        NamedRepo.Admin.__info__(:functions)
+        |> Enum.reject(&(&1 in @meta_functions or &1 in @admin_only_functions))
+
+      actual =
+        (repo_surface ++ admin_surface)
+        |> Enum.uniq()
         |> Enum.sort()
 
       missing = expected -- actual

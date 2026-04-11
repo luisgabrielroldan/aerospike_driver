@@ -62,6 +62,16 @@ defmodule Aerospike.Cluster do
   @doc false
   def cluster_name(name) when is_atom(name), do: :"#{name}_cluster"
 
+  @doc false
+  @spec rotate_auth_credential(atom(), String.t(), binary()) :: :ok | {:error, :cluster_not_found}
+  def rotate_auth_credential(name, user_name, credential)
+      when is_atom(name) and is_binary(user_name) and is_binary(credential) do
+    case Process.whereis(cluster_name(name)) do
+      nil -> {:error, :cluster_not_found}
+      pid -> GenServer.call(pid, {:rotate_auth_credential, user_name, credential})
+    end
+  end
+
   @impl true
   def init(opts) when is_list(opts) do
     Process.flag(:trap_exit, true)
@@ -72,6 +82,7 @@ defmodule Aerospike.Cluster do
     # Persist per-command policy defaults so CRUD can merge them at call time.
     policy_defaults = Keyword.get(opts, :defaults, [])
     :ets.insert(Tables.meta(name), {:policy_defaults, policy_defaults})
+    :ets.insert(Tables.meta(name), {:auth_opts, Keyword.get(opts, :auth_opts, [])})
     max_error_rate = Keyword.get(opts, :max_error_rate, 100)
     error_rate_window = Keyword.get(opts, :error_rate_window, 1)
 
@@ -165,6 +176,23 @@ defmodule Aerospike.Cluster do
     new_state = do_periodic_tend(state)
     _ = schedule_tend(new_state)
     {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_call({:rotate_auth_credential, user_name, credential}, _from, state) do
+    auth_opts =
+      state.auth_opts
+      |> Keyword.put(:user, user_name)
+      |> Keyword.put(:credential, credential)
+
+    :ets.insert(Tables.meta(state.name), {:auth_opts, auth_opts})
+
+    state =
+      state
+      |> Map.put(:auth_opts, auth_opts)
+      |> restart_node_pools()
+
+    {:reply, :ok, state}
   end
 
   # Connects to a seed, discovers peers, builds the partition map, and marks
@@ -515,6 +543,25 @@ defmodule Aerospike.Cluster do
       {:error, {:already_started, pool_pid}} -> {:ok, pool_pid}
       {:error, :already_present} -> {:error, :pool_already_present}
       {:error, _} = err -> err
+    end
+  end
+
+  defp restart_node_pools(state) do
+    Enum.reduce(:ets.tab2list(Tables.nodes(state.name)), state, fn {node_name, row}, acc ->
+      restart_node_pool(acc, node_name, row)
+    end)
+  end
+
+  defp restart_node_pool(state, node_name, %{host: host, port: port} = row) do
+    _ = NodeSupervisor.stop_pool(state.node_supervisor, node_name)
+
+    case ensure_node_pool(state, node_name, host, port) do
+      {:ok, pool_pid} ->
+        :ets.insert(Tables.nodes(state.name), {node_name, %{row | pool_pid: pool_pid}})
+        state
+
+      {:error, _reason} ->
+        state
     end
   end
 

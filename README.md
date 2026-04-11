@@ -27,6 +27,7 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 - **Read policies** — selective bin projection, header-only reads
 - **Policy defaults** — configure defaults for read, write, delete, exists, touch, operate, batch, scan, and query; override per call
 - **Admin & info operations** — raw `info`, per-node `info_node`, node listing, and `truncate`
+- **Security administration** — manage users, PKI users, roles, privileges, whitelists, and quotas on secured Enterprise clusters
 - **TLS support** — optional TLS and mTLS for node connections
 - **Circuit breaker** — per-node error-rate rejection with telemetry
 - **Telemetry** — emits `[:aerospike, :command, :start | :stop | :exception]` events
@@ -105,6 +106,68 @@ Supervisor.start_link(children, strategy: :one_for_one)
 | `:tls`                   | boolean          | `false` | When `true`, upgrades TCP with TLS (`:ssl.connect/3`). |
 | `:tls_opts`              | keyword list     | `[]`    | Options for `:ssl.connect/3` (certs, verify, SNI, etc.). |
 | `:defaults`              | keyword list     | `[]`    | Per-command policy defaults (see below).            |
+
+### Security Administration
+
+Security administration is available on secured Aerospike Enterprise clusters.
+Authenticate the client with a hashed admin credential in `:auth_opts`:
+
+```elixir
+alias Aerospike.Admin.PasswordHash
+
+{:ok, _pid} =
+  Aerospike.start_link(
+    name: :aero_admin,
+    hosts: ["127.0.0.1:3200"],
+    auth_opts: [
+      user: "admin",
+      credential: PasswordHash.hash("admin")
+    ]
+  )
+```
+
+Create and inspect a user:
+
+```elixir
+:ok = Aerospike.create_user(:aero_admin, "ops-reader", "secret-pass", ["read"])
+{:ok, %Aerospike.User{name: "ops-reader", roles: ["read"]}} =
+  Aerospike.query_user(:aero_admin, "ops-reader")
+```
+
+Create and manage a role with scoped privileges:
+
+```elixir
+alias Aerospike.Privilege
+
+role_privileges = [
+  %Privilege{code: :read, namespace: "test", set: "reports"}
+]
+
+:ok =
+  Aerospike.create_role(
+    :aero_admin,
+    "report_reader",
+    role_privileges,
+    whitelist: ["10.0.0.0/24"],
+    read_quota: 100
+  )
+
+:ok =
+  Aerospike.grant_privileges(
+    :aero_admin,
+    "report_reader",
+    [%Privilege{code: :read_write, namespace: "test", set: "scratch"}]
+  )
+```
+
+The full surface includes `create_pki_user/4`, `drop_user/3`, `change_password/4`,
+`grant_roles/4`, `revoke_roles/4`, `query_users/2`, `drop_role/3`,
+`revoke_privileges/4`, `set_whitelist/4`, `set_quotas/5`, and `query_roles/2`.
+After a successful self-password change, the running client rotates its
+in-memory credential source for future reconnects, but a restarted client still
+depends on the credentials supplied in `:auth_opts`.
+See [Security Administration](guides/security-administration.md) for the complete flow
+and test-environment requirements.
 
 ### Writing Records
 
