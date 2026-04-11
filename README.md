@@ -12,21 +12,25 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 
 - **OTP-native** — starts under a supervisor, pools connections automatically via NimblePool
 - **Cluster-aware** — discovers nodes, maintains partition maps, routes operations to the correct node
+- **Repo wrapper** — optional `use Aerospike.Repo` convenience API bound to one connection
 - **Single-record CRUD** — `put`, `get`, `delete`, `exists`, `touch` with bang variants
 - **Operate** — atomic multi-operation per record (`add`, `append`, `prepend`, custom op lists)
 - **Batch operations** — `batch_get`, `batch_exists`, `batch_operate` for multi-key round-trips
-- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`
-- **CDT operations** — List, Map, Bit, and HLL operations with nested context (`Ctx`)
+- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`, with cursor paging and partition filters
+- **CDT operations** — List, Map, Bit, HLL, and expression ops with nested context (`Ctx`)
 - **Server-side expressions** — filter results with `Aerospike.Exp` expressions
+- **Geospatial support** — typed geo helpers plus geo query filters
 - **Secondary indexes** — `create_index` / `drop_index` with async `IndexTask` polling
 - **UDF management** — `register_udf`, `remove_udf`, `apply_udf` for Lua user-defined functions
 - **Transactions** — multi-record transactions (`transaction/2`, `commit/2`, `abort/2`) on Enterprise Edition
 - **Write policies** — TTL, generation checks (CAS), create/update/replace semantics, durable delete
 - **Read policies** — selective bin projection, header-only reads
-- **Policy defaults** — set read/write timeouts and options once at connection time; override per call
+- **Policy defaults** — configure defaults for read, write, delete, exists, touch, operate, batch, scan, and query; override per call
+- **Admin & info operations** — raw `info`, per-node `info_node`, node listing, and `truncate`
 - **TLS support** — optional TLS and mTLS for node connections
+- **Circuit breaker** — per-node error-rate rejection with telemetry
 - **Telemetry** — emits `[:aerospike, :command, :start | :stop | :exception]` events
-- **Pure Elixir** — only runtime dependencies are `nimble_options`, `nimble_pool`, and `telemetry`; crypto uses Erlang's `:crypto` (RIPEMD-160 digests)
+- **Pure Elixir** — no NIFs; runtime deps stay small (`jason`, `nimble_options`, `nimble_pool`, `telemetry`) and crypto uses Erlang's `:crypto` (RIPEMD-160 digests)
 
 See the [CHANGELOG](CHANGELOG.md) for what shipped in each version.
 
@@ -37,7 +41,7 @@ Add `aerospike_driver` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:aerospike_driver, "~> 0.1.0"}
+    {:aerospike_driver, "~> 0.2.0"}
   ]
 end
 ```
