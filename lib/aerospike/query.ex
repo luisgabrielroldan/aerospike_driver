@@ -6,6 +6,11 @@ defmodule Aerospike.Query do
   and `filter/2` for additional expression filters (AND-ed at execution time).
 
   Only one secondary-index filter is kept; `where/2` **replaces** any previous predicate.
+
+  `%Aerospike.Query{}` stays a pure record-selection builder. Execute intent lives in
+  explicit facade functions such as `Aerospike.query_stream/3`,
+  `Aerospike.query_execute/4`, `Aerospike.query_udf/6`, and
+  `Aerospike.query_aggregate/6`.
   """
 
   alias Aerospike.Exp

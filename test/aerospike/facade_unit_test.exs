@@ -5,6 +5,7 @@ defmodule Aerospike.FacadeUnitTest do
 
   alias Aerospike.Batch
   alias Aerospike.Key
+  alias Aerospike.Query
   alias Aerospike.Scan
   alias Aerospike.TableOwner
   alias Aerospike.Tables
@@ -296,6 +297,38 @@ defmodule Aerospike.FacadeUnitTest do
       end
     end
 
+    test "query-specific read APIs map option validation errors and bang wrappers raise" do
+      query = Query.new("test", "users")
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_stream(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_stream!(:nonexistent, query, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_all(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_all!(:nonexistent, query, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_count(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_count!(:nonexistent, query, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_page(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_page!(:nonexistent, query, bad_opt: true)
+      end
+    end
+
     test "admin wrappers map validation errors", %{} do
       assert {:error, %Aerospike.Error{code: :parameter_error}} =
                Aerospike.info(:nonexistent, "namespaces", bad_opt: true)
@@ -344,6 +377,44 @@ defmodule Aerospike.FacadeUnitTest do
 
       assert {:error, %Aerospike.Error{}} =
                Aerospike.apply_udf(conn, key, "pkg", "f", [], timeout: 1_000)
+    end
+
+    test "phase 2 query/UDF APIs expose explicit placeholder contracts" do
+      query = Query.new("test", "users")
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.list_udfs(:nonexistent, bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :unsupported_feature}} =
+               Aerospike.list_udfs(:nonexistent)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.list_udfs!(:nonexistent)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_execute(:nonexistent, query, [])
+
+      assert {:error, %Aerospike.Error{code: :unsupported_feature}} =
+               Aerospike.query_execute(:nonexistent, query, [:write_op])
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_execute!(:nonexistent, query, [:write_op])
+      end
+
+      assert {:error, %Aerospike.Error{code: :unsupported_feature}} =
+               Aerospike.query_udf(:nonexistent, query, "pkg", "fn", [])
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_udf!(:nonexistent, query, "pkg", "fn", [])
+      end
+
+      assert {:error, %Aerospike.Error{code: :unsupported_feature}} =
+               Aerospike.query_aggregate(:nonexistent, query, "pkg", "fn", [])
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_aggregate!(:nonexistent, query, "pkg", "fn", [])
+      end
     end
 
     test "transaction wrappers delegate to TxnRoll variants" do

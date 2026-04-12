@@ -52,6 +52,7 @@ defmodule Aerospike do
   alias Aerospike.BatchOps
   alias Aerospike.CRUD
   alias Aerospike.Error
+  alias Aerospike.ExecuteTask
   alias Aerospike.IndexTask
   alias Aerospike.Key
   alias Aerospike.Page
@@ -65,6 +66,7 @@ defmodule Aerospike do
   alias Aerospike.Supervisor, as: AeroSupervisor
   alias Aerospike.Txn
   alias Aerospike.TxnRoll
+  alias Aerospike.UDF
   alias Aerospike.User
 
   @typedoc """
@@ -88,6 +90,15 @@ defmodule Aerospike do
 
   @typedoc "Security privilege descriptor used in role operations."
   @type privilege :: Privilege.t()
+
+  @typedoc "Server-side UDF package metadata returned by `list_udfs/2`."
+  @type udf_info :: UDF.t()
+
+  @typedoc "Background query task returned by `query_execute/4` and `query_udf/6`."
+  @type execute_task :: ExecuteTask.t()
+
+  @typedoc "One aggregate result emitted by `query_aggregate/6`."
+  @type aggregate_value :: term()
 
   @doc """
   Returns a child specification for supervision trees.
@@ -737,6 +748,241 @@ defmodule Aerospike do
       when is_atom(conn) and is_list(ops) and is_list(opts) do
     case batch_operate(conn, ops, opts) do
       {:ok, rs} -> rs
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns a lazy `Stream` of records from a secondary-index query.
+
+  This is the explicit query-read entry point for `%Aerospike.Query{}`.
+  Unlike `query_aggregate/6`, it always yields `%Aerospike.Record{}` structs.
+
+  ## Options
+
+  Query policy: `:timeout`, `:pool_checkout_timeout`, `:replica`,
+  `:max_concurrent_nodes` (0 = all nodes).
+  """
+  @spec query_stream(conn(), Query.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, Error.t()}
+  def query_stream(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case validate_scan_query_opts(query, opts) do
+      {:ok, call_opts} ->
+        {:ok, ScanOps.stream(conn, query, call_opts)}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_stream/3` but returns the stream or raises `Aerospike.Error`.
+  """
+  @spec query_stream!(conn(), Query.t(), keyword()) :: Enumerable.t()
+  def query_stream!(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case query_stream(conn, query, opts) do
+      {:ok, stream} -> stream
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Eagerly collects query records into a list.
+
+  Requires `max_records` on the query builder.
+  """
+  @spec query_all(conn(), Query.t(), keyword()) ::
+          {:ok, [Aerospike.Record.t()]} | {:error, Error.t()}
+  def query_all(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case validate_scan_query_opts(query, opts) do
+      {:ok, call_opts} ->
+        ScanOps.all(conn, query, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_all/3` but returns the list or raises `Aerospike.Error`.
+  """
+  @spec query_all!(conn(), Query.t(), keyword()) :: [Aerospike.Record.t()]
+  def query_all!(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case query_all(conn, query, opts) do
+      {:ok, records} -> records
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Counts records matching a secondary-index query.
+  """
+  @spec query_count(conn(), Query.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, Error.t()}
+  def query_count(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case validate_scan_query_opts(query, opts) do
+      {:ok, call_opts} ->
+        ScanOps.count(conn, query, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_count/3` but returns the count or raises `Aerospike.Error`.
+  """
+  @spec query_count!(conn(), Query.t(), keyword()) :: non_neg_integer()
+  def query_count!(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case query_count(conn, query, opts) do
+      {:ok, n} -> n
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns one page of records from a query with cursor-based pagination.
+  """
+  @spec query_page(conn(), Query.t(), keyword()) :: {:ok, Page.t()} | {:error, Error.t()}
+  def query_page(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    {cursor, opts2} = Keyword.pop(opts, :cursor)
+
+    case validate_scan_query_opts(query, opts2) do
+      {:ok, call_opts} ->
+        opts3 = if cursor != nil, do: Keyword.put(call_opts, :cursor, cursor), else: call_opts
+        ScanOps.page(conn, query, opts3)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_page/3` but returns `%Aerospike.Page{}` or raises `Aerospike.Error`.
+  """
+  @spec query_page!(conn(), Query.t(), keyword()) :: Page.t()
+  def query_page!(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case query_page(conn, query, opts) do
+      {:ok, page} -> page
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns metadata for all UDF packages registered in the cluster.
+
+  This is a Phase 2 API surface definition. Runtime support is added in the
+  subsequent implementation task.
+
+  ## Options
+
+  Info policy: `:timeout`, `:pool_checkout_timeout`.
+  """
+  @spec list_udfs(conn(), keyword()) :: {:ok, [udf_info()]} | {:error, Error.t()}
+  def list_udfs(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case Policy.validate_info(opts) do
+      {:ok, _call_opts} ->
+        unsupported_phase_2_operation(:list_udfs)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `list_udfs/2` but returns the list or raises `Aerospike.Error`.
+  """
+  @spec list_udfs!(conn(), keyword()) :: [udf_info()]
+  def list_udfs!(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case list_udfs(conn, opts) do
+      {:ok, udfs} -> udfs
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Starts a background query that applies write operations to matching records.
+
+  Returns an `%Aerospike.ExecuteTask{}` that can later be polled or awaited.
+  Runtime support is added in a later Phase 2 task.
+  """
+  @spec query_execute(conn(), Query.t(), list(), keyword()) ::
+          {:ok, execute_task()} | {:error, Error.t()}
+  def query_execute(conn, %Query{} = _query, ops, opts \\ [])
+      when is_atom(conn) and is_list(ops) and is_list(opts) do
+    with :ok <- validate_query_ops(ops) do
+      unsupported_phase_2_operation(:query_execute)
+    end
+  end
+
+  @doc """
+  Same as `query_execute/4` but returns the task or raises `Aerospike.Error`.
+  """
+  @spec query_execute!(conn(), Query.t(), list(), keyword()) :: execute_task()
+  def query_execute!(conn, %Query{} = query, ops, opts \\ [])
+      when is_atom(conn) and is_list(ops) and is_list(opts) do
+    case query_execute(conn, query, ops, opts) do
+      {:ok, task} -> task
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Starts a background query that applies a record UDF to matching records.
+
+  Returns an `%Aerospike.ExecuteTask{}` that can later be polled or awaited.
+  Runtime support is added in a later Phase 2 task.
+  """
+  @spec query_udf(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, execute_task()} | {:error, Error.t()}
+  def query_udf(conn, %Query{} = _query, package, function, args, opts \\ [])
+      when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    unsupported_phase_2_operation(:query_udf)
+  end
+
+  @doc """
+  Same as `query_udf/6` but returns the task or raises `Aerospike.Error`.
+  """
+  @spec query_udf!(conn(), Query.t(), String.t(), String.t(), list(), keyword()) :: execute_task()
+  def query_udf!(conn, %Query{} = query, package, function, args, opts \\ [])
+      when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    case query_udf(conn, query, package, function, args, opts) do
+      {:ok, task} -> task
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Builds a lazy enumerable of aggregate values from a query-wide stream UDF.
+
+  This is distinct from `query_stream/3`: aggregate queries yield transformed
+  values, not `%Aerospike.Record{}` structs. Runtime support is added in a
+  later Phase 2 task.
+  """
+  @spec query_aggregate(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t()}
+  def query_aggregate(conn, %Query{} = _query, package, function, args, opts \\ [])
+      when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    unsupported_phase_2_operation(:query_aggregate)
+  end
+
+  @doc """
+  Same as `query_aggregate/6` but returns the enumerable or raises `Aerospike.Error`.
+  """
+  @spec query_aggregate!(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          Enumerable.t()
+  def query_aggregate!(conn, %Query{} = query, package, function, args, opts \\ [])
+      when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    case query_aggregate(conn, query, package, function, args, opts) do
+      {:ok, stream} -> stream
       {:error, %Error{} = e} -> raise e
     end
   end
@@ -1723,6 +1969,27 @@ defmodule Aerospike do
 
   defp validate_scan_query_opts(%Query{} = _scannable, opts) when is_list(opts),
     do: Policy.validate_query(opts)
+
+  defp validate_query_ops([]) do
+    {:error,
+     Error.from_result_code(:parameter_error, message: "query operations cannot be empty")}
+  end
+
+  defp validate_query_ops(_ops), do: :ok
+
+  @spec unsupported_phase_2_operation(atom()) :: {:ok, term()} | {:error, Error.t()}
+  defp unsupported_phase_2_operation(op_name) do
+    case Process.get({__MODULE__, :phase_2_placeholder_result}) do
+      {:ok, result} ->
+        {:ok, result}
+
+      _ ->
+        {:error,
+         Error.from_result_code(:unsupported_feature,
+           message: "#{op_name} is defined but not implemented yet"
+         )}
+    end
+  end
 
   defp validate_role_names(roles) when is_list(roles) do
     if Enum.all?(roles, &is_binary/1) do
