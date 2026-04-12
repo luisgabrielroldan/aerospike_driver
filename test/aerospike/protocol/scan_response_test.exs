@@ -51,6 +51,25 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     }
   end
 
+  defp aggregate_msg(result, opts \\ []) do
+    rc = Keyword.get(opts, :rc, 0)
+    bin_name = Keyword.get(opts, :bin_name, "SUCCESS")
+
+    %AsmMsg{
+      info1: AsmMsg.info1_read(),
+      result_code: rc,
+      fields: [],
+      operations: [
+        %Operation{
+          op_type: Operation.op_read(),
+          particle_type: Operation.particle_string(),
+          bin_name: bin_name,
+          data: result
+        }
+      ]
+    }
+  end
+
   defp partition_done_msg(digest, opts \\ []) do
     bval_data = Keyword.get(opts, :bval_data)
     partition_id = Keyword.get(opts, :partition_id, partition_id_from_digest(digest))
@@ -563,6 +582,51 @@ defmodule Aerospike.Protocol.ScanResponseTest do
       header = raw_header(field_count: 1, info3: @info3_last)
 
       assert {:error, %{code: :parse_error}} = ScanResponse.count_records(header)
+    end
+  end
+
+  describe "parse_aggregate_stream_chunk/3" do
+    test "returns aggregate SUCCESS values and terminal state" do
+      body = encode_bin(aggregate_msg("42")) <> encode_bin(last_msg())
+
+      assert {:ok, ["42"], [], true} =
+               ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+    end
+
+    test "keeps partition_done markers in aggregate streams" do
+      d = digest_fixture("agg_pd")
+      body = encode_bin(partition_done_msg(d)) <> encode_bin(last_msg())
+
+      assert {:ok, [], [info], true} =
+               ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+
+      assert info.digest == d
+    end
+
+    test "rejects aggregate frames without exactly one operation" do
+      body =
+        encode_bin(%AsmMsg{result_code: 0, fields: [], operations: []}) <> encode_bin(last_msg())
+
+      assert {:error, %{code: :parse_error, message: msg}} =
+               ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+
+      assert msg =~ "exactly one operation"
+    end
+
+    test "translates FAILURE aggregate bins into query_generic" do
+      body = encode_bin(aggregate_msg("boom", bin_name: "FAILURE")) <> encode_bin(last_msg())
+
+      assert {:error, %{code: :query_generic, message: "boom"}} =
+               ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+    end
+
+    test "rejects aggregate frames without SUCCESS or FAILURE bins" do
+      body = encode_bin(aggregate_msg("42", bin_name: "OTHER")) <> encode_bin(last_msg())
+
+      assert {:error, %{code: :parse_error, message: msg}} =
+               ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+
+      assert msg =~ "expected SUCCESS bin"
     end
   end
 end

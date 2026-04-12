@@ -176,7 +176,41 @@ defmodule Aerospike.ScanOps do
     merged = Policy.merge_defaults(conn_name, policy_kind(scannable), opts)
 
     Stream.resource(
-      fn -> init_stream_state(conn_name, scannable, merged) end,
+      fn ->
+        init_stream_state(
+          conn_name,
+          scannable,
+          merged,
+          :stream,
+          nil,
+          &ScanResponse.parse_stream_chunk/3
+        )
+      end,
+      &next_stream/1,
+      &cleanup_stream/1
+    )
+  end
+
+  @spec query_aggregate(atom(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          Enumerable.t()
+  def query_aggregate(conn_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_atom(conn_name) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    merged = Policy.merge_defaults(conn_name, :query, opts)
+
+    Stream.resource(
+      fn ->
+        init_stream_state(
+          conn_name,
+          query,
+          merged,
+          :query_aggregate,
+          fn q, node_partitions, run_opts ->
+            ScanQuery.build_query_aggregate(q, node_partitions, package, function, args, run_opts)
+          end,
+          &ScanResponse.parse_aggregate_stream_chunk/3
+        )
+      end,
       &next_stream/1,
       &cleanup_stream/1
     )
@@ -225,7 +259,7 @@ defmodule Aerospike.ScanOps do
     end)
   end
 
-  defp init_stream_state(conn_name, scannable, opts) do
+  defp init_stream_state(conn_name, scannable, opts, command, wire_builder, parser) do
     distribute_fn = fn total, n ->
       case total do
         t when is_integer(t) and t > 0 -> distribute_record_max(t, n)
@@ -235,11 +269,11 @@ defmodule Aerospike.ScanOps do
 
     {ns, set} = namespace_set(scannable)
 
-    case prepare_fanout(conn_name, scannable, opts, distribute_fn) do
+    case prepare_fanout(conn_name, scannable, opts, distribute_fn, wire_builder) do
       {:ok, prepared} ->
         parent = self()
         checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
-        meta = stream_telemetry_meta(conn_name, scannable, ns, set)
+        meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
         t0 = :erlang.monotonic_time()
 
         :telemetry.execute(
@@ -259,7 +293,8 @@ defmodule Aerospike.ScanOps do
               ns,
               set,
               checkout_timeout,
-              max_concurrent
+              max_concurrent,
+              parser
             )
           end)
 
@@ -274,7 +309,7 @@ defmodule Aerospike.ScanOps do
 
       {:error, %Error{} = err} ->
         t0 = :erlang.monotonic_time()
-        meta = stream_telemetry_meta(conn_name, scannable, ns, set)
+        meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
 
         :telemetry.execute(
           [:aerospike, :command, :start],
@@ -386,7 +421,8 @@ defmodule Aerospike.ScanOps do
          _ns,
          _set,
          _checkout_timeout,
-         _max_concurrent
+         _max_concurrent,
+         _parser
        ) do
     send(consumer, {:scan_done, self()})
   end
@@ -398,15 +434,23 @@ defmodule Aerospike.ScanOps do
          ns,
          set,
          checkout_timeout,
-         max_concurrent
+         max_concurrent,
+         parser
        ) do
+    stream_ctx = %{
+      consumer: consumer,
+      ns: ns,
+      set: set,
+      checkout_timeout: checkout_timeout,
+      parser: parser
+    }
+
     initial = initial_stream_workers(max_concurrent, length(node_wires))
     {to_start, pending} = Enum.split(node_wires, initial)
 
-    active =
-      spawn_stream_workers(to_start, conn_name, consumer, ns, set, checkout_timeout, self(), 0)
+    active = spawn_stream_workers(to_start, conn_name, stream_ctx, self(), 0)
 
-    await_stream_workers(conn_name, pending, active, consumer, ns, set, checkout_timeout)
+    await_stream_workers(conn_name, pending, active, stream_ctx)
   end
 
   defp initial_stream_workers(max_concurrent, total)
@@ -419,10 +463,7 @@ defmodule Aerospike.ScanOps do
   defp spawn_stream_workers(
          [],
          _conn_name,
-         _consumer,
-         _ns,
-         _set,
-         _checkout_timeout,
+         _stream_ctx,
          _coordinator,
          acc
        ),
@@ -431,95 +472,45 @@ defmodule Aerospike.ScanOps do
   defp spawn_stream_workers(
          [{node_name, pool_pid, wire, _meta} | rest],
          conn_name,
-         consumer,
-         ns,
-         set,
-         checkout_timeout,
+         stream_ctx,
          coordinator,
          acc
        ) do
     spawn_link(fn ->
-      case stream_one_node(
-             node_name,
-             pool_pid,
-             wire,
-             conn_name,
-             consumer,
-             ns,
-             set,
-             checkout_timeout
-           ) do
+      case stream_one_node(node_name, pool_pid, wire, conn_name, stream_ctx) do
         :ok -> send(coordinator, {:worker_done, self()})
         :error_sent -> :ok
       end
     end)
 
-    spawn_stream_workers(
-      rest,
-      conn_name,
-      consumer,
-      ns,
-      set,
-      checkout_timeout,
-      coordinator,
-      acc + 1
-    )
+    spawn_stream_workers(rest, conn_name, stream_ctx, coordinator, acc + 1)
   end
 
-  defp await_stream_workers(
-         _conn_name,
-         _pending,
-         0,
-         consumer,
-         _ns,
-         _set,
-         _checkout_timeout
-       ) do
+  defp await_stream_workers(_conn_name, _pending, 0, %{consumer: consumer}) do
     send(consumer, {:scan_done, self()})
   end
 
-  defp await_stream_workers(conn_name, pending, active, consumer, ns, set, checkout_timeout) do
+  defp await_stream_workers(conn_name, pending, active, stream_ctx) do
     receive do
       {:worker_done, _pid} ->
         active2 = active - 1
 
         {pending2, active3} =
-          maybe_spawn_next_stream_worker(
-            pending,
-            conn_name,
-            consumer,
-            ns,
-            set,
-            checkout_timeout,
-            self(),
-            active2
-          )
+          maybe_spawn_next_stream_worker(pending, conn_name, stream_ctx, self(), active2)
 
-        await_stream_workers(conn_name, pending2, active3, consumer, ns, set, checkout_timeout)
+        await_stream_workers(conn_name, pending2, active3, stream_ctx)
     end
   end
 
   defp maybe_spawn_next_stream_worker(
          [{node_name, pool_pid, wire, _meta} | rest],
          conn_name,
-         consumer,
-         ns,
-         set,
-         checkout_timeout,
+         stream_ctx,
          coordinator,
          active
        ) do
     spawn_link(fn ->
-      case stream_one_node(
-             node_name,
-             pool_pid,
-             wire,
-             conn_name,
-             consumer,
-             ns,
-             set,
-             checkout_timeout
-           ) do
+      case stream_one_node(node_name, pool_pid, wire, conn_name, stream_ctx) do
         :ok -> send(coordinator, {:worker_done, self()})
         :error_sent -> :ok
       end
@@ -531,17 +522,16 @@ defmodule Aerospike.ScanOps do
   defp maybe_spawn_next_stream_worker(
          [],
          _conn_name,
-         _consumer,
-         _ns,
-         _set,
-         _checkout_timeout,
+         _stream_ctx,
          _coordinator,
          active
        ) do
     {[], active}
   end
 
-  defp stream_one_node(node_name, pool_pid, wire, conn_name, report_to, ns, set, checkout_timeout) do
+  defp stream_one_node(node_name, pool_pid, wire, conn_name, stream_ctx) do
+    checkout_timeout = stream_ctx.checkout_timeout
+
     result =
       NimblePool.checkout!(
         pool_pid,
@@ -549,10 +539,10 @@ defmodule Aerospike.ScanOps do
         fn _from, conn ->
           case Connection.send_command(conn, wire) do
             {:ok, conn2} ->
-              read_stream_frames(conn2, conn_name, node_name, report_to, ns, set)
+              read_stream_frames(conn2, conn_name, node_name, stream_ctx)
 
             {:error, reason} ->
-              send(report_to, {:scan_error, self(), reason})
+              send(stream_ctx.consumer, {:scan_error, self(), reason})
               {{:error, reason}, :close}
           end
         end,
@@ -565,23 +555,25 @@ defmodule Aerospike.ScanOps do
     end
   catch
     :exit, {:timeout, {NimblePool, :checkout, _}} ->
-      send(report_to, {:scan_error, self(), Error.from_result_code(:pool_timeout)})
+      send(stream_ctx.consumer, {:scan_error, self(), Error.from_result_code(:pool_timeout)})
       :error_sent
 
     :exit, {:noproc, {NimblePool, :checkout, _}} ->
-      send(report_to, {:scan_error, self(), Error.from_result_code(:invalid_node)})
+      send(stream_ctx.consumer, {:scan_error, self(), Error.from_result_code(:invalid_node)})
       :error_sent
 
     :exit, reason ->
       send(
-        report_to,
+        stream_ctx.consumer,
         {:scan_error, self(), Error.from_result_code(:network_error, message: inspect(reason))}
       )
 
       :error_sent
   end
 
-  defp read_stream_frames(conn, conn_name, node_name, parent, ns, set) do
+  defp read_stream_frames(conn, conn_name, node_name, stream_ctx) do
+    parent = stream_ctx.consumer
+
     case Connection.recv_frame(conn) do
       {:ok, conn2, body, proto_last?} ->
         dispatch_parsed_stream_frame(
@@ -589,10 +581,8 @@ defmodule Aerospike.ScanOps do
           body,
           conn_name,
           node_name,
-          parent,
-          ns,
-          set,
-          proto_last?
+          proto_last?,
+          stream_ctx
         )
 
       {:error, reason} ->
@@ -606,19 +596,19 @@ defmodule Aerospike.ScanOps do
          body,
          conn_name,
          node_name,
-         parent,
-         ns,
-         set,
-         proto_last?
+         proto_last?,
+         stream_ctx
        ) do
-    case ScanResponse.parse_stream_chunk(body, ns, set) do
+    %{consumer: parent, ns: ns, set: set, parser: parser} = stream_ctx
+
+    case parser.(body, ns, set) do
       {:ok, rs, _parts, stream_done?} ->
         if rs != [], do: send(parent, {:scan_records, self(), rs})
 
         if stream_done? or proto_last? do
           {{:ok, :done}, conn2}
         else
-          read_stream_frames(conn2, conn_name, node_name, parent, ns, set)
+          read_stream_frames(conn2, conn_name, node_name, stream_ctx)
         end
 
       {:error, %Error{} = e} ->
@@ -1042,9 +1032,9 @@ defmodule Aerospike.ScanOps do
   defp scannable_command(:page, %Scan{}), do: :scan_page
   defp scannable_command(:page, %Query{}), do: :query_page
 
-  defp stream_telemetry_meta(conn_name, scannable, ns, set) do
+  defp stream_telemetry_meta(command, conn_name, scannable, ns, set) do
     %{
-      command: :stream,
+      command: command,
       conn: conn_name,
       namespace: ns,
       set: set || "",

@@ -42,6 +42,18 @@ defmodule Aerospike.Integration.QueryExecuteTest do
       aerospike:update(rec)
       return value
     end
+
+    local function sum_reducer(left, right)
+      return left + right
+    end
+
+    function sum_bin(stream, bin_name)
+      local function mapper(rec)
+        return rec[bin_name] or 0
+      end
+
+      return stream : map(mapper) : reduce(sum_reducer)
+    end
     """
 
     {:ok, register_task} = Aerospike.register_udf(conn, udf_source, server_name)
@@ -139,6 +151,23 @@ defmodule Aerospike.Integration.QueryExecuteTest do
       assert {:ok, record} = Aerospike.get(conn, key)
       assert record.bins["state"] == "udf"
     end)
+  end
+
+  test "query_aggregate/6 streams aggregate values instead of records", %{
+    conn: conn,
+    set: set,
+    package: package
+  } do
+    query =
+      Query.new(@namespace, set)
+      |> Query.where(Filter.range("age", 20, 24))
+
+    assert {:ok, stream} = Aerospike.query_aggregate(conn, query, package, "sum_bin", ["age"])
+    results = Enum.to_list(stream)
+
+    assert results != []
+    assert Enum.all?(results, &is_integer/1)
+    assert Enum.sum(results) == 110
   end
 
   defp await_cluster_ready(name, timeout \\ 5_000) do

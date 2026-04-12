@@ -223,6 +223,36 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert field_data(msg, Field.type_records_per_second()) == <<321::32-signed-big>>
   end
 
+  test "build_query_aggregate/6 uses UDF_OP=1 and keeps query read flags" do
+    q =
+      Query.new("ns", "set1")
+      |> Query.where(Filter.equal("city", "mtv"))
+      |> Query.select(["score"])
+
+    wire =
+      ScanQuery.build_query_aggregate(
+        q,
+        %{parts_full: [5], parts_partial: [], record_max: 11},
+        "pkg",
+        "sum_scores",
+        ["score"],
+        task_id: 101
+      )
+
+    msg = decode_as_msg(wire)
+
+    assert Bitwise.band(msg.info1, AsmMsg.info1_read()) != 0
+    assert Bitwise.band(msg.info1, AsmMsg.info1_short_query()) != 0
+    assert Bitwise.band(msg.info2, AsmMsg.info2_relax_ap_long_query()) != 0
+    assert Bitwise.band(msg.info3, AsmMsg.info3_partition_done()) != 0
+    assert field_data(msg, Field.type_udf_op()) == <<1>>
+    assert field_data(msg, Field.type_udf_package_name()) == "pkg"
+    assert field_data(msg, Field.type_udf_function()) == "sum_scores"
+    assert field_data(msg, Field.type_query_id()) == <<101::64-unsigned-big>>
+    assert field_data(msg, Field.type_max_records()) == <<11::64-signed-big>>
+    assert Enum.map(msg.operations, & &1.bin_name) == ["score"]
+  end
+
   test "scan attaches FILTER_EXP from expression filters" do
     scan =
       Scan.new("ns")

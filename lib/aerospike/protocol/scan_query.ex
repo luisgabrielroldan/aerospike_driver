@@ -120,7 +120,39 @@ defmodule Aerospike.Protocol.ScanQuery do
     end
   end
 
-  defp build_query_with_filter(query, node_partitions, opts, index_filter) do
+  @doc """
+  Builds a query wire message for aggregate UDF execution over query matches.
+  """
+  @spec build_query_aggregate(
+          Query.t(),
+          node_partitions(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: iodata()
+  def build_query_aggregate(
+        %Query{} = query,
+        node_partitions,
+        package,
+        function,
+        args,
+        opts \\ []
+      )
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    case query.index_filter do
+      nil ->
+        raise ArgumentError,
+              "build_query_aggregate/6 requires query.index_filter set via Query.where/2"
+
+      %Filter{} = index_filter ->
+        build_query_with_filter(query, node_partitions, opts, index_filter,
+          udf: {1, package, function, args}
+        )
+    end
+  end
+
+  defp build_query_with_filter(query, node_partitions, opts, index_filter, extra_fields \\ []) do
     sock_ms = Keyword.get(opts, :timeout, 30_000)
     query_id = task_id_u64(opts)
 
@@ -155,6 +187,7 @@ defmodule Aerospike.Protocol.ScanQuery do
       ])
       |> Enum.reject(&is_nil/1)
       |> Kernel.++(filter_exp_fields(exp_bin))
+      |> Kernel.++(query_udf_fields(extra_fields))
 
     ops = query_operations(query)
 
@@ -279,18 +312,24 @@ defmodule Aerospike.Protocol.ScanQuery do
   defp background_query_fields(operations: _operations), do: []
 
   defp background_query_fields(udf: {package, function, args}) do
+    query_udf_fields(udf: {2, package, function, args})
+  end
+
+  defp background_query_operations(operations: operations), do: operations
+  defp background_query_operations(udf: _udf), do: []
+
+  defp query_udf_fields([]), do: []
+
+  defp query_udf_fields(udf: {mode, package, function, args}) do
     arglist = MessagePack.pack!(Enum.map(args, &pack_udf_arg/1))
 
     [
-      Field.udf_op(2),
+      Field.udf_op(mode),
       Field.udf_package_name(package),
       Field.udf_function(function),
       Field.udf_arglist(arglist)
     ]
   end
-
-  defp background_query_operations(operations: operations), do: operations
-  defp background_query_operations(udf: _udf), do: []
 
   defp maybe_append_table(fields, nil), do: fields
   defp maybe_append_table(fields, set) when is_binary(set), do: fields ++ [Field.set(set)]

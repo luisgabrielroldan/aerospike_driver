@@ -431,11 +431,15 @@ defmodule Aerospike.FacadeUnitTest do
         Aerospike.query_udf!(conn, query, "pkg", "fn", [])
       end
 
-      assert {:error, %Aerospike.Error{code: :unsupported_feature}} =
-               Aerospike.query_aggregate(:nonexistent, query, "pkg", "fn", [])
+      assert {:ok, aggregate_stream} =
+               Aerospike.query_aggregate(conn, query, "pkg", "fn", [])
 
       assert_raise Aerospike.Error, fn ->
-        Aerospike.query_aggregate!(:nonexistent, query, "pkg", "fn", [])
+        Enum.to_list(aggregate_stream)
+      end
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_aggregate!(conn, query, "pkg", "fn", []) |> Enum.to_list()
       end
     end
 

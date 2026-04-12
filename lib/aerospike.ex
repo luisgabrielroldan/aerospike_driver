@@ -973,15 +973,22 @@ defmodule Aerospike do
   Builds a lazy enumerable of aggregate values from a query-wide stream UDF.
 
   This is distinct from `query_stream/3`: aggregate queries yield transformed
-  values, not `%Aerospike.Record{}` structs. Runtime support is added in a
-  later Phase 2 task.
+  values, not `%Aerospike.Record{}` structs. Depending on server/runtime
+  behavior, the enumerable may emit one or more aggregate values.
   """
   @spec query_aggregate(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
-  def query_aggregate(conn, %Query{} = _query, package, function, args, opts \\ [])
+  def query_aggregate(conn, %Query{} = query, package, function, args, opts \\ [])
       when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
              is_list(opts) do
-    unsupported_phase_2_operation(:query_aggregate)
+    case validate_scan_query_opts(query, opts) do
+      {:ok, call_opts} ->
+        {:ok, ScanOps.query_aggregate(conn, query, package, function, args, call_opts)}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
   end
 
   @doc """
@@ -2018,20 +2025,6 @@ defmodule Aerospike do
   end
 
   defp query_background_write_op?(_), do: false
-
-  @spec unsupported_phase_2_operation(atom()) :: {:ok, term()} | {:error, Error.t()}
-  defp unsupported_phase_2_operation(op_name) do
-    case Process.get({__MODULE__, :phase_2_placeholder_result}) do
-      {:ok, result} ->
-        {:ok, result}
-
-      _ ->
-        {:error,
-         Error.from_result_code(:unsupported_feature,
-           message: "#{op_name} is defined but not implemented yet"
-         )}
-    end
-  end
 
   defp validate_role_names(roles) when is_list(roles) do
     if Enum.all?(roles, &is_binary/1) do
