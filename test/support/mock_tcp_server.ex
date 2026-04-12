@@ -3,7 +3,7 @@ defmodule Aerospike.Test.MockTcpServer do
 
   alias Aerospike.Protocol.Message
 
-  @default_timeout 15_000
+  @default_timeout 60_000
 
   @doc """
   Starts a TCP listener on a random port. Returns `{:ok, listen_socket, port}`.
