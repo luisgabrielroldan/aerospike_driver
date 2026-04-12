@@ -11,7 +11,7 @@ defmodule Aerospike.IndexTask do
 
   ## Usage
 
-      {:ok, task} = Aerospike.create_index(:aero, "test", "demo",
+      {:ok, task} = MyApp.Repo.create_index("test", "demo",
         bin: "age", name: "age_idx", type: :numeric
       )
 
@@ -22,7 +22,7 @@ defmodule Aerospike.IndexTask do
       :ok = Aerospike.IndexTask.wait(task, timeout: 30_000)
 
       # Drop the index when no longer needed
-      :ok = Aerospike.drop_index(:aero, "test", "age_idx")
+      :ok = MyApp.Repo.drop_index("test", "age_idx")
 
   """
 

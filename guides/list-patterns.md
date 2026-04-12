@@ -11,21 +11,21 @@ Create and manipulate lists with [`append/3`](Aerospike.Op.List.html#append/3), 
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 
 # Build a list from scratch
-{:ok, _} = Aerospike.operate(:aero, key, [
+{:ok, _} = MyApp.Repo.operate(key, [
   List.append("tags", "trial"),
   List.append("tags", "beta"),
   List.append("tags", "vip")
 ])
 
 # Read the list size
-{:ok, rec} = Aerospike.operate(:aero, key, [List.size("tags")])
+{:ok, rec} = MyApp.Repo.operate(key, [List.size("tags")])
 rec.bins["tags"]  # => 3
 
 # Read the first item
-{:ok, rec} = Aerospike.operate(:aero, key, [List.get("tags", 0)])
+{:ok, rec} = MyApp.Repo.operate(key, [List.get("tags", 0)])
 rec.bins["tags"]  # => "trial"
 ```
 
@@ -55,22 +55,22 @@ remove from the front to dequeue:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "jobs", "queue:emails")
+key = MyApp.Repo.key("test", "jobs", "queue:emails")
 
 # Enqueue items
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.append("queue", %{"to" => "ada@example.com", "subject" => "Welcome"}),
   List.append("queue", %{"to" => "bob@example.com", "subject" => "Verify"})
 ])
 
 # Dequeue: pop the first item (returns and removes it)
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.pop("queue", 0)
 ])
 rec.bins["queue"]  # => %{"to" => "ada@example.com", "subject" => "Welcome"}
 
 # Atomic enqueue + dequeue in one round-trip
-{:ok, _} = Aerospike.operate(:aero, key, [
+{:ok, _} = MyApp.Repo.operate(key, [
   List.append("queue", %{"to" => "carol@example.com", "subject" => "Reset"}),
   List.pop("queue", 0)
 ])
@@ -82,7 +82,7 @@ Pop multiple items at once for batch processing:
 
 ```elixir
 # Dequeue up to 10 items
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.pop_range("queue", 0, 10)
 ])
 jobs = rec.bins["queue"]  # => list of up to 10 items
@@ -96,10 +96,10 @@ Use value-range queries to retrieve data within a time window:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "sensors", "temp:room-1")
+key = MyApp.Repo.key("test", "sensors", "temp:room-1")
 
 # Record temperature readings
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.append_items("readings", [
     [1_523_474_230_000, 39.04],
     [1_523_474_231_001, 39.78],
@@ -112,7 +112,7 @@ Aerospike.operate(:aero, key, [
 
 # Query readings in a time range
 # Uses Aerospike's list comparison: [start_ts, nil] <= [ts, val] < [end_ts, nil]
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.get_by_value_range("readings",
     [1_523_474_231_000, nil],
     [1_523_474_234_000, nil])
@@ -132,11 +132,11 @@ the most recent entries:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 max_entries = 100
 
 # Append a new entry and trim in one atomic operation
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.append("history", %{"page" => "/settings", "ts" => System.system_time(:second)}),
   List.trim("history", -max_entries, max_entries)
 ])
@@ -152,20 +152,20 @@ Manage a set of tags or memberships. Use value-based operations for lookups:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 
 # Add a tag
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.append("tags", "premium")
 ])
 
 # Remove a specific tag
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.remove_by_value("tags", "trial", return_type: List.return_none())
 ])
 
 # Remove multiple tags at once
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.remove_by_value_list("tags", ["expired", "legacy"],
     return_type: List.return_count())
 ])
@@ -179,10 +179,10 @@ set of unique values:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "data", "scores")
+key = MyApp.Repo.key("test", "data", "scores")
 
 # Sort and deduplicate (sort_flags: 2 = DROP_DUPLICATES)
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.append_items("scores", [95, 87, 95, 72, 87, 100]),
   List.sort("scores", 2)
 ])
@@ -202,15 +202,15 @@ Use rank-based operations to get the highest or lowest values:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "data", "measurements")
+key = MyApp.Repo.key("test", "data", "measurements")
 
 # Get the 3 highest values (rank -3 = third from highest, count 3)
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.get_by_rank_range("measurements", -3, 3)
 ])
 
 # Get the single lowest value
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.get_by_rank("measurements", 0)
 ])
 ```
@@ -225,13 +225,13 @@ alias Aerospike.Op.List
 # Given an ordered list [0, 4, 5, 9, 11, 15]
 
 # Get 2 items nearest to value 5, starting from its position
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.get_by_value_rel_rank_range_count("scores", 5, 0, 2)
 ])
 # => [5, 9]
 
 # Get items starting from one rank below value 5
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.get_by_value_rel_rank_range_count("scores", 5, -1, 3)
 ])
 # => [4, 5, 9]

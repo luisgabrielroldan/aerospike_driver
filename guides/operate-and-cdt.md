@@ -12,10 +12,10 @@ a record lock. Operations run in the order you specify.
 ```elixir
 import Aerospike.Op
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 
 {:ok, record} =
-  Aerospike.operate(:aero, key, [
+  MyApp.Repo.operate(key, [
     put("status", "active"),
     add("login_count", 1),
     get("login_count"),
@@ -43,7 +43,7 @@ record.bins["status"]       # => "active"
 import Aerospike.Op
 
 # Atomic counter increment + read
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   add("views", 1),
   get("views")
 ])
@@ -58,7 +58,7 @@ The operate command groups results by bin name. This is important to understand:
 
 ```elixir
 # Single read per bin — direct values
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   get("name"),
   get("age")
 ])
@@ -66,7 +66,7 @@ rec.bins["name"]  # => "Ada"
 rec.bins["age"]   # => 36
 
 # Multiple results for same bin — becomes a list
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   add("counter", 1),       # returns new value
   add("counter", 5),       # returns new value again
   get("counter")           # returns current value
@@ -96,7 +96,7 @@ alias Aerospike.Op.Map
 alias Aerospike.Op.List
 
 {:ok, rec} =
-  Aerospike.operate(:aero, key, [
+  MyApp.Repo.operate(key, [
     Map.put("profile", "email", "ada@example.com"),
     List.append("roles", "admin"),
     List.size("roles")
@@ -113,7 +113,7 @@ alias Aerospike.Op.Map
 import Aerospike.Op
 
 {:ok, rec} =
-  Aerospike.operate(:aero, key, [
+  MyApp.Repo.operate(key, [
     put("updated_at", System.system_time(:second)),
     add("version", 1),
     Map.put("settings", "theme", "dark"),
@@ -149,12 +149,12 @@ returns. Each module provides helper functions:
 alias Aerospike.Op.List
 
 # Remove items but don't return them (faster)
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.remove_by_value("tags", "expired", return_type: List.return_none())
 ])
 
 # Remove and return the count of removed items
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   List.remove_by_value("tags", "expired", return_type: List.return_count())
 ])
 ```

@@ -35,7 +35,7 @@ path ending in `.lua` or the raw Lua source as a string:
 
 ```elixir
 # From a file path
-{:ok, task} = Aerospike.register_udf(:aero, "/path/to/multiply.lua", "multiply.lua")
+{:ok, task} = MyApp.Repo.register_udf("/path/to/multiply.lua", "multiply.lua")
 
 # From a string
 lua = ~S"""
@@ -43,7 +43,7 @@ function echo(rec, arg)
   return arg
 end
 """
-{:ok, task} = Aerospike.register_udf(:aero, lua, "echo.lua")
+{:ok, task} = MyApp.Repo.register_udf(lua, "echo.lua")
 ```
 
 `server_name` (the third argument) is the package name as stored on the server. Use the
@@ -84,10 +84,10 @@ end
 [`Aerospike.apply_udf/5`](Aerospike.html#apply_udf/5) executes a Lua function on a single record:
 
 ```elixir
-key = Aerospike.key("test", "items", "item:1")
-:ok = Aerospike.put(:aero, key, %{"n" => 10})
+key = MyApp.Repo.key("test", "items", "item:1")
+:ok = MyApp.Repo.put(key, %{"n" => 10})
 
-{:ok, result} = Aerospike.apply_udf(:aero, key, "multiply", "multiply", [3])
+{:ok, result} = MyApp.Repo.apply_udf(key, "multiply", "multiply", [3])
 # result => 30
 ```
 
@@ -95,7 +95,6 @@ Arguments:
 
 | Argument | Description |
 |----------|-------------|
-| `conn` | Connection name atom |
 | `key` | [`Aerospike.Key`](Aerospike.Key.html) for the record to operate on |
 | `package` | Lua module name **without** the `.lua` extension |
 | `function` | Lua function name |
@@ -118,7 +117,7 @@ encoding maps Lua types to Elixir terms:
 
 ```elixir
 {:ok, result} =
-  Aerospike.apply_udf(:aero, key, "multiply", "multiply", [3],
+  MyApp.Repo.apply_udf(key, "multiply", "multiply", [3],
     timeout: 500,
     replica: :master
   )
@@ -143,19 +142,19 @@ end
 """
 
 # 2. Register and wait
-{:ok, task} = Aerospike.register_udf(:aero, lua, "transform.lua")
+{:ok, task} = MyApp.Repo.register_udf(lua, "transform.lua")
 :ok = RegisterTask.wait(task, timeout: 15_000)
 
 # 3. Prepare test data
-key = Aerospike.key("test", "demo", "k1")
-:ok = Aerospike.put(:aero, key, %{"value" => 5})
+key = MyApp.Repo.key("test", "demo", "k1")
+:ok = MyApp.Repo.put(key, %{"value" => 5})
 
 # 4. Apply the UDF
-{:ok, result} = Aerospike.apply_udf(:aero, key, "transform", "transform", [6])
+{:ok, result} = MyApp.Repo.apply_udf(key, "transform", "transform", [6])
 IO.puts("result: #{result}")   # => "result: 30"
 
 # 5. Remove the package when done
-:ok = Aerospike.remove_udf(:aero, "transform.lua")
+:ok = MyApp.Repo.remove_udf("transform.lua")
 ```
 
 ## Removing a UDF
@@ -164,7 +163,7 @@ IO.puts("result: #{result}")   # => "result: 30"
 the package was registered:
 
 ```elixir
-:ok = Aerospike.remove_udf(:aero, "multiply.lua")
+:ok = MyApp.Repo.remove_udf("multiply.lua")
 ```
 
 ## Error Handling
@@ -174,7 +173,7 @@ the package was registered:
 When the Lua function raises an error, [`apply_udf/5`](Aerospike.html#apply_udf/5) returns `{:error, %Aerospike.Error{code: :udf_bad_response}}`. The `message` field contains the Lua error string:
 
 ```elixir
-case Aerospike.apply_udf(:aero, key, "mymodule", "risky_fn", [arg]) do
+case MyApp.Repo.apply_udf(key, "mymodule", "risky_fn", [arg]) do
   {:ok, result} ->
     process(result)
 
@@ -203,9 +202,9 @@ end
 Or guard in Elixir:
 
 ```elixir
-case Aerospike.exists(:aero, key) do
+case MyApp.Repo.exists(key) do
   {:ok, true} ->
-    Aerospike.apply_udf(:aero, key, "module", "fn", [])
+    MyApp.Repo.apply_udf(key, "module", "fn", [])
 
   {:ok, false} ->
     {:error, :not_found}

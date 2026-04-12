@@ -33,18 +33,18 @@ callback, and commits or aborts automatically:
 
 ```elixir
 {:ok, _} =
-  Aerospike.transaction(:aero, fn txn ->
-    key1 = Aerospike.key("inventory", "items", "widget-A")
-    key2 = Aerospike.key("accounts", "users", "user-42")
+  MyApp.Repo.transaction(fn txn ->
+    key1 = MyApp.Repo.key("inventory", "items", "widget-A")
+    key2 = MyApp.Repo.key("accounts", "users", "user-42")
 
-    {:ok, item} = Aerospike.get(:aero, key1, txn: txn)
+    {:ok, item} = MyApp.Repo.get(key1, txn: txn)
 
     if item.bins["stock"] < 1 do
       raise Aerospike.Error.from_result_code(:parameter_error, message: "out of stock")
     end
 
-    :ok = Aerospike.put(:aero, key1, %{"stock" => item.bins["stock"] - 1}, txn: txn)
-    :ok = Aerospike.put(:aero, key2, %{"last_order" => "widget-A"}, txn: txn)
+    :ok = MyApp.Repo.put(key1, %{"stock" => item.bins["stock"] - 1}, txn: txn)
+    :ok = MyApp.Repo.put(key2, %{"last_order" => "widget-A"}, txn: txn)
   end)
 ```
 
@@ -57,8 +57,8 @@ the exception is re-raised — server-side write locks are always released immed
 
 ```elixir
 {:ok, _} =
-  Aerospike.transaction(:aero, [timeout: 10_000], fn txn ->
-    Aerospike.put(:aero, key, %{"x" => 1}, txn: txn)
+  MyApp.Repo.transaction([timeout: 10_000], fn txn ->
+    MyApp.Repo.put(key, %{"x" => 1}, txn: txn)
   end)
 ```
 
@@ -68,8 +68,8 @@ The return value of the callback is wrapped in `{:ok, value}`:
 
 ```elixir
 {:ok, balance} =
-  Aerospike.transaction(:aero, fn txn ->
-    {:ok, rec} = Aerospike.get(:aero, account_key, txn: txn)
+  MyApp.Repo.transaction(fn txn ->
+    {:ok, rec} = MyApp.Repo.get(account_key, txn: txn)
     rec.bins["balance"]
   end)
 ```
@@ -83,11 +83,11 @@ transaction must touch the **same namespace**:
 txn = Txn.new()
 
 # Reads — tracked for version verification at commit time
-{:ok, rec} = Aerospike.get(:aero, key1, txn: txn)
+{:ok, rec} = MyApp.Repo.get(key1, txn: txn)
 
 # Writes — registered with the server-side monitor record
-:ok = Aerospike.put(:aero, key2, %{"score" => 99}, txn: txn)
-:ok = Aerospike.delete(:aero, key3, txn: txn)
+:ok = MyApp.Repo.put(key2, %{"score" => 99}, txn: txn)
+:ok = MyApp.Repo.delete(key3, txn: txn)
 ```
 
 Supported operations: `get`, `exists`, `put`, `delete`, `touch`, `append`, `prepend`, `add`,
@@ -102,12 +102,12 @@ directly. You must also initialize ETS tracking explicitly via `TxnOps.init_trac
 alias Aerospike.{Txn, TxnOps}
 
 txn = Txn.new()
-TxnOps.init_tracking(:aero, txn)
+TxnOps.init_tracking(MyApp.Repo.conn(), txn)
 
-:ok = Aerospike.put(:aero, key1, %{"a" => 1}, txn: txn)
-:ok = Aerospike.put(:aero, key2, %{"b" => 2}, txn: txn)
+:ok = MyApp.Repo.put(key1, %{"a" => 1}, txn: txn)
+:ok = MyApp.Repo.put(key2, %{"b" => 2}, txn: txn)
 
-case Aerospike.commit(:aero, txn) do
+case MyApp.Repo.commit(txn) do
   {:ok, :committed} ->
     IO.puts("committed")
 
@@ -115,10 +115,10 @@ case Aerospike.commit(:aero, txn) do
     # Mark-roll-forward timed out — may or may not have committed.
     # Safe to retry commit/2; the server returns :mrt_committed if already done.
     IO.puts("in-doubt, retrying: #{err.message}")
-    Aerospike.commit(:aero, txn)
+    MyApp.Repo.commit(txn)
 
   {:error, err} ->
-    Aerospike.abort(:aero, txn)
+    MyApp.Repo.abort(txn)
     IO.puts("commit failed, rolled back: #{err.message}")
 end
 ```
@@ -126,7 +126,7 @@ end
 ### Aborting
 
 ```elixir
-{:ok, :aborted} = Aerospike.abort(:aero, txn)
+{:ok, :aborted} = MyApp.Repo.abort(txn)
 ```
 
 [`abort/2`](Aerospike.html#abort/2) rolls back all tracked writes and deletes the server-side monitor record.
@@ -151,7 +151,7 @@ Understanding the commit phases helps diagnose errors:
 A read was invalidated by a concurrent external write between your read and commit:
 
 ```elixir
-case Aerospike.commit(:aero, txn) do
+case MyApp.Repo.commit(txn) do
   {:ok, :committed} ->
     :ok
 
@@ -168,18 +168,18 @@ The mark-roll-forward message timed out before the server responded. The transac
 **may or may not** have committed server-side:
 
 ```elixir
-case Aerospike.commit(:aero, txn) do
+case MyApp.Repo.commit(txn) do
   {:ok, :committed} ->
     :ok
 
   {:error, %Aerospike.Error{in_doubt: true}} ->
     # Retry commit — the server returns :mrt_committed if it already committed,
     # which is accepted as success. Do NOT call abort here.
-    Aerospike.commit(:aero, txn)
+    MyApp.Repo.commit(txn)
 
   {:error, err} ->
     # Definitive failure — safe to abort and retry from scratch.
-    Aerospike.abort(:aero, txn)
+    MyApp.Repo.abort(txn)
     {:error, err}
 end
 ```
@@ -189,7 +189,7 @@ end
 The server aborted the transaction (MRT timeout expired while it was open):
 
 ```elixir
-case Aerospike.commit(:aero, txn) do
+case MyApp.Repo.commit(txn) do
   {:error, %Aerospike.Error{code: :mrt_aborted}} ->
     # The server timed out the transaction. Retry from scratch.
     :retry
@@ -218,9 +218,9 @@ end
 Inside a [`transaction/2`](Aerospike.html#transaction/2) callback you can inspect the current state:
 
 ```elixir
-Aerospike.transaction(:aero, fn txn ->
-  {:ok, :open} = Aerospike.txn_status(:aero, txn)
-  Aerospike.put(:aero, key, %{"x" => 1}, txn: txn)
+MyApp.Repo.transaction(fn txn ->
+  {:ok, :open} = MyApp.Repo.txn_status(txn)
+  MyApp.Repo.put(key, %{"x" => 1}, txn: txn)
 end)
 ```
 

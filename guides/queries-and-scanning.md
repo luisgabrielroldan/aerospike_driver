@@ -92,7 +92,7 @@ alias Aerospike.{Filter, Geo, Query}
   Query.new("test", "locations")
   |> Query.where(Filter.geo_within("coords", Geo.circle(-122.5, 45.5, 5_000)))
   |> Query.max_records(100)
-  |> then(&Aerospike.all(:aero, &1))
+  |> then(&MyApp.Repo.all(&1))
 ```
 
 Use them directly with [`Filter.geo_within/2`](Aerospike.Filter.html#geo_within/2) and
@@ -139,7 +139,10 @@ The SI predicate does **not** bound memory use by itself: a wide range can still
 
 ## Execution
 
-All execution functions take `conn` (the `:name` from [`Aerospike.start_link/1`](Aerospike.html#start_link/1)), the scan or query struct, and optional keywords: `:timeout`, `:pool_checkout_timeout`, `:replica` (merged with `defaults: [scan: ...]` or `defaults: [query: ...]` where configured).
+For application code, execute the scan or query through `MyApp.Repo` and pass
+optional keywords such as `:timeout`, `:pool_checkout_timeout`, and `:replica`
+(merged with `defaults: [scan: ...]` or `defaults: [query: ...]` where
+configured).
 
 ### `Aerospike.all/3` and `all!/3`
 
@@ -147,9 +150,9 @@ All execution functions take `conn` (the `:name` from [`Aerospike.start_link/1`]
 
 ```elixir
 {:ok, records} =
-  Aerospike.all(:aero, Scan.new("test", "users") |> Scan.max_records(10_000))
+  MyApp.Repo.all(Scan.new("test", "users") |> Scan.max_records(10_000))
 
-records = Aerospike.all!(:aero, Scan.new("test", "users") |> Scan.max_records(10_000))
+records = MyApp.Repo.all!(Scan.new("test", "users") |> Scan.max_records(10_000))
 ```
 
 ### `Aerospike.stream!/3`
@@ -162,7 +165,7 @@ By default, `stream!/3` fans out across all nodes concurrently. Use
 larger positive bound to cap concurrent node streams.
 
 ```elixir
-Aerospike.stream!(:aero, Scan.new("test", "users"))
+MyApp.Repo.stream!(Scan.new("test", "users"))
 |> Stream.filter(fn r -> r.bins["age"] > 21 end)
 |> Enum.take(100)
 ```
@@ -172,8 +175,8 @@ Aerospike.stream!(:aero, Scan.new("test", "users"))
 [`count/3`](Aerospike.html#count/3) issues a server-side scan/query that omits bin payloads and returns a total count. Prefer it over [`all/3`](Aerospike.html#all/3) or streaming when you only need cardinality.
 
 ```elixir
-{:ok, n} = Aerospike.count(:aero, Scan.new("test", "users"))
-n = Aerospike.count!(:aero, Query.new("test", "users") |> Query.where(Filter.equal("active", 1)))
+{:ok, n} = MyApp.Repo.count(Scan.new("test", "users"))
+n = MyApp.Repo.count!(Query.new("test", "users") |> Query.where(Filter.equal("active", 1)))
 ```
 
 ### Bang variants
@@ -195,7 +198,7 @@ Wrap consumption in `try/rescue` if you need to recover or log mid-stream failur
 
 ```elixir
 try do
-  Aerospike.stream!(:aero, Scan.new("test", "users"))
+  MyApp.Repo.stream!(Scan.new("test", "users"))
   |> Enum.to_list()
 rescue
   e in Aerospike.Error ->
@@ -232,8 +235,8 @@ Recommendations:
 [`page/3`](Aerospike.html#page/3) requires `max_records` on the scan or query ([`Scan.max_records/2`](Aerospike.Scan.html#max_records/2) or [`Query.max_records/2`](Aerospike.Query.html#max_records/2)), the same as [`all/3`](Aerospike.html#all/3). Pass the previous page’s cursor:
 
 ```elixir
-{:ok, page} = Aerospike.page(:aero, scan)
-{:ok, page2} = Aerospike.page(:aero, scan, cursor: page.cursor)
+{:ok, page} = MyApp.Repo.page(scan)
+{:ok, page2} = MyApp.Repo.page(scan, cursor: page.cursor)
 ```
 
 `cursor:` may be a `%Aerospike.Cursor{}` or the Base64 string produced by [`Cursor.encode/1`](Aerospike.Cursor.html#encode/1) (the client decodes binary cursor tokens internally).
@@ -249,21 +252,21 @@ defmodule UserScanPages do
   @doc """
   Fetches all records from \"test\"/\"users\" using fixed-size pages.
   """
-  def fetch_all(conn) do
+  def fetch_all do
     scan =
       Scan.new("test", "users")
       |> Scan.partition_filter(PartitionFilter.all())
       |> Scan.max_records(500)
 
-    collect_pages(conn, scan, nil, [])
+    collect_pages(scan, nil, [])
   end
 
-  defp collect_pages(conn, scan, cursor, acc) do
+  defp collect_pages(scan, cursor, acc) do
     {:ok, page} =
       if cursor do
-        Aerospike.page(conn, scan, cursor: cursor)
+        MyApp.Repo.page(scan, cursor: cursor)
       else
-        Aerospike.page(conn, scan)
+        MyApp.Repo.page(scan)
       end
 
     acc2 = acc ++ page.records
@@ -271,7 +274,7 @@ defmodule UserScanPages do
     cond do
       page.done? -> {:ok, acc2}
       page.cursor == nil -> {:ok, acc2}
-      true -> collect_pages(conn, scan, page.cursor, acc2)
+      true -> collect_pages(scan, page.cursor, acc2)
     end
   end
 end
@@ -284,12 +287,12 @@ Serialize cursors for query strings or JSON with [`Aerospike.Cursor.encode/1`](A
 ```elixir
 alias Aerospike.Cursor
 
-{:ok, page} = Aerospike.page(:aero, scan)
+{:ok, page} = MyApp.Repo.page(scan)
 token = Cursor.encode(page.cursor)
 
 # On a later request, after validating user input:
 {:ok, _cursor} = Cursor.decode(token)
-{:ok, next} = Aerospike.page(:aero, scan, cursor: token)
+{:ok, next} = MyApp.Repo.page(scan, cursor: token)
 ```
 
 Treat cursor strings as opaque capability tokens: verify authorization before resuming a scan or query on behalf of a client.

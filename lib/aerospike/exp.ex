@@ -1,6 +1,7 @@
 defmodule Aerospike.Exp do
   @moduledoc """
-  Server-side filter expressions for policies (`:filter` on reads, batches, scans, queries).
+  Server-side filter expressions for policies (`:filter` on reads, batches,
+  scans, queries).
 
   Expressions are built as composable typed values using the builder functions in this module.
   Each function returns an `%Aerospike.Exp{}` struct containing the expression's pre-encoded
@@ -30,7 +31,7 @@ defmodule Aerospike.Exp do
       expr = Exp.gt(Exp.ttl(), Exp.int(3600))
 
       # Use as a filter on a CRUD operation
-      Aerospike.get(client, key, filter: expr)
+      MyApp.Repo.get(key, filter: expr)
 
   ## `Exp.val/1` — type-inferring convenience
 
@@ -49,7 +50,10 @@ defmodule Aerospike.Exp do
   ## Related
 
   - `Aerospike.Op.Exp` — expression operations inside `operate/4`
-  - `Aerospike.get/3`, `Aerospike.stream!/3`, `Aerospike.all/3` — `:filter` option
+  - `MyApp.Repo.get/2`, `MyApp.Repo.stream!/2`, `MyApp.Repo.all/2` — recommended
+    application-facing `:filter` usage
+  - `Aerospike.get/3`, `Aerospike.stream!/3`, `Aerospike.all/3` — low-level
+    facade for the same `:filter` option
   """
 
   @enforce_keys [:wire]

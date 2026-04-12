@@ -16,7 +16,7 @@ defmodule Aerospike.Ctx do
 
       ctx = [Aerospike.Ctx.map_key("profile"), Aerospike.Ctx.map_key("geo")]
 
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         MapOp.put("nested", "lat", 45.52, ctx: ctx)
       ])
 
@@ -24,7 +24,8 @@ defmodule Aerospike.Ctx do
 
   - `Aerospike.Op.List` — list CDT operations
   - `Aerospike.Op.Map` — map CDT operations
-  - `Aerospike.operate/4` — runs operations atomically on one record
+  - `MyApp.Repo.operate/2,3` — recommended application-facing execution path
+  - `Aerospike.operate/4` — low-level atomic execution on one record
   """
 
   @typedoc "A single nested-CDT navigation step: `{wire_context_id, key_or_index_value}`."

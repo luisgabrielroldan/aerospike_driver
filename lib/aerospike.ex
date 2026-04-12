@@ -2,8 +2,13 @@ defmodule Aerospike do
   @moduledoc """
   Public API for the Aerospike Elixir client.
 
-  Start a named connection (supervision tree) with `start_link/1`, then pass the
-  same `name` atom as the first argument to CRUD functions.
+  For application-facing code, prefer defining `MyApp.Repo` with
+  `use Aerospike.Repo` so day-to-day calls do not pass a connection handle
+  explicitly. This module remains the canonical low-level facade when you need
+  direct connection startup, routing, or the literal `conn`-first API.
+
+  Start a named connection (supervision tree) with `start_link/1`, then pass
+  the same `name` atom as the first argument to CRUD functions.
 
   ## Example
 

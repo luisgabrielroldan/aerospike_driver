@@ -1,6 +1,6 @@
 defmodule Aerospike.Repo do
   @moduledoc """
-  Optional Repo-style convenience wrapper for `Aerospike`.
+  Recommended application-facing wrapper for `Aerospike`.
 
   `use Aerospike.Repo` generates a module that binds one connection name and
   exposes the same operations as `Aerospike`, but without the leading `conn`
@@ -36,7 +36,8 @@ defmodule Aerospike.Repo do
       :ok = MyApp.Repo.Admin.create_user("ada", "secret", ["read-write"])
       {:ok, roles} = MyApp.Repo.Admin.query_roles()
 
-  Repo is optional sugar. `Aerospike` remains the canonical API.
+  Use this wrapper for normal application code. `Aerospike` remains the
+  canonical low-level API when you need explicit connection control.
   """
 
   @type t :: module()
