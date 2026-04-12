@@ -87,6 +87,7 @@ defmodule Aerospike.Repo do
     {:nodes, []},
     {:node_names, []},
     {:create_index, [:namespace, :set, :opts]},
+    {:create_expression_index, [:namespace, :set, :expression, :opts]},
     {:drop_index, [:namespace, :index_name]},
     {:list_udfs, [{:opts, []}]},
     {:list_udfs!, [{:opts, []}]},

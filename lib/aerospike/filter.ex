@@ -4,8 +4,26 @@ defmodule Aerospike.Filter do
 
   Use `range/3`, `equal/2`, `contains/3`, `geo_within/2`, or `geo_contains/2` to build
   a predicate, then pass it to `Aerospike.Query.where/2`.
+
+  For advanced secondary indexes, keep the predicate shape and annotate it with:
+
+  * `using_index/2` to target a specific named index, including expression-backed indexes
+  * `with_ctx/2` to carry nested CDT context for context-aware query filters
+
+  Example:
+
+      alias Aerospike.Filter
+
+      filter =
+        Filter.equal("age", 21)
+        |> Filter.using_index("adults_expr_idx")
+
+      nested =
+        Filter.contains("profile", :mapvalues, "admin")
+        |> Filter.with_ctx([Aerospike.Ctx.map_key("roles")])
   """
 
+  alias Aerospike.Ctx
   alias Aerospike.Geo
   alias Aerospike.Key
 
@@ -39,7 +57,7 @@ defmodule Aerospike.Filter do
           begin: term(),
           end: term(),
           index_name: String.t() | nil,
-          ctx: term() | nil
+          ctx: [Ctx.step()] | nil
         }
 
   @type geo_geometry :: String.t() | Geo.Point.t() | Geo.Polygon.t() | Geo.Circle.t()
@@ -215,6 +233,36 @@ defmodule Aerospike.Filter do
   def geo_contains_point(bin_name, lng, lat)
       when is_binary(bin_name) and is_number(lng) and is_number(lat) do
     geo_contains(bin_name, Geo.point(lng, lat))
+  end
+
+  @doc """
+  Targets a named secondary index without mutating `%Aerospike.Filter{}` directly.
+
+  This is the public query path for expression-backed indexes and for callers who
+  want to query a specific named scalar or collection index.
+  """
+  @spec using_index(t(), String.t()) :: t()
+  def using_index(%__MODULE__{} = filter, index_name) when is_binary(index_name) do
+    if index_name == "" do
+      raise ArgumentError, "index name must be a non-empty string"
+    end
+
+    %{filter | index_name: index_name}
+  end
+
+  @doc """
+  Attaches nested CDT context to a secondary-index filter.
+
+  Query encoding support for `ctx` is wired separately from this public builder,
+  but callers should use this function instead of mutating `%Aerospike.Filter{}` by hand.
+  """
+  @spec with_ctx(t(), [Ctx.step()]) :: t()
+  def with_ctx(%__MODULE__{} = filter, ctx) when is_list(ctx) do
+    if ctx == [] do
+      raise ArgumentError, "ctx must be a non-empty list of Aerospike.Ctx steps"
+    end
+
+    %{filter | ctx: ctx}
   end
 
   defp validate_bin_name!(name) do
