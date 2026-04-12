@@ -140,20 +140,20 @@ Attach an expression to any operation using the `filter:` option. The server eva
 ```elixir
 alias Aerospike.{Exp, Key}
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 only_adults = Exp.gte(Exp.int_bin("age"), Exp.int(18))
 
 # Filtered get — returns {:error, %Aerospike.Error{code: :filtered_out}} if age < 18
-{:ok, record} = Aerospike.get(:aero, key, filter: only_adults)
+{:ok, record} = MyApp.Repo.get(key, filter: only_adults)
 
 # Filtered exists check
-{:ok, true} = Aerospike.exists(:aero, key, filter: only_adults)
+{:ok, true} = MyApp.Repo.exists(key, filter: only_adults)
 
 # Filtered delete — only delete if the record matches the expression
-{:ok, _} = Aerospike.delete(:aero, key, filter: only_adults)
+{:ok, _} = MyApp.Repo.delete(key, filter: only_adults)
 
 # Filtered put — only write if the expression matches
-{:ok, _} = Aerospike.put(:aero, key, %{"score" => 99}, filter: only_adults)
+{:ok, _} = MyApp.Repo.put(key, %{"score" => 99}, filter: only_adults)
 ```
 
 ### Scans
@@ -173,7 +173,7 @@ active_adults =
   Scan.new("test", "users")
   |> Scan.filter(active_adults)
   |> Scan.max_records(10_000)
-  |> then(&Aerospike.all(:aero, &1))
+  |> then(&MyApp.Repo.all(&1))
 ```
 
 Multiple separate filter calls compose with AND:
@@ -196,7 +196,7 @@ result =
   Query.new("test", "users")
   |> Query.where(Filter.range("age", 18, 65))
   |> Query.filter(Exp.eq(Exp.str_bin("country"), Exp.val("US")))
-  |> then(&Aerospike.stream!(:aero, &1))
+  |> then(&MyApp.Repo.stream!(&1))
   |> Enum.to_list()
 ```
 
@@ -222,10 +222,10 @@ Use [`Aerospike.Op.Exp`](Aerospike.Op.Exp.html):
 ```elixir
 alias Aerospike.{Exp, Op}
 
-key = Aerospike.key("test", "stats", "user:42")
+key = MyApp.Repo.key("test", "stats", "user:42")
 
 {:ok, record} =
-  Aerospike.operate(:aero, key, [
+  MyApp.Repo.operate(key, [
     # Read: compute a value and return it as a synthetic bin
     Op.Exp.read("is_adult", Exp.gte(Exp.int_bin("age"), Exp.int(18))),
 
@@ -296,7 +296,7 @@ end
 
 # At the call site
 scan = build_user_scan(%{min_age: 21, city: "Portland"})
-{:ok, records} = Aerospike.all(:aero, Scan.max_records(scan, 5_000))
+{:ok, records} = MyApp.Repo.all(Scan.max_records(scan, 5_000))
 ```
 
 Since each expression builder returns a plain struct, you can also store partial expressions in module attributes, pass them as function arguments, or accumulate them in a `for` comprehension — no macro restrictions apply.

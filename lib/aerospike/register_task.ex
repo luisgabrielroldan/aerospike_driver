@@ -11,7 +11,7 @@ defmodule Aerospike.RegisterTask do
 
   ## Usage
 
-      {:ok, task} = Aerospike.register_udf(:aero, "/path/to/my_module.lua", "my_module.lua")
+      {:ok, task} = MyApp.Repo.register_udf("/path/to/my_module.lua", "my_module.lua")
 
       # Poll manually
       {:ok, status} = Aerospike.RegisterTask.status(task)
@@ -20,7 +20,7 @@ defmodule Aerospike.RegisterTask do
       :ok = Aerospike.RegisterTask.wait(task, timeout: 30_000)
 
       # Remove the UDF when no longer needed
-      :ok = Aerospike.remove_udf(:aero, "my_module.lua")
+      :ok = MyApp.Repo.remove_udf("my_module.lua")
 
   """
 

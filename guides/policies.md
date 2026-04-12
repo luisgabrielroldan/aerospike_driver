@@ -11,24 +11,21 @@ instead of dedicated `WritePolicy`/`ReadPolicy` structs. You can set defaults on
 
 For each command, the client merges policy options in this order:
 
-1. Connection defaults from [`start_link/1`](Aerospike.html#start_link/1) (`defaults: [...]`)
+1. Repo defaults from config (`defaults: [...]`)
 2. Per-call options passed to the command
 
 Per-call values always win on key conflicts.
 
 ```elixir
-{:ok, _pid} =
-  Aerospike.start_link(
-    name: :aero,
-    hosts: ["127.0.0.1:3000"],
-    defaults: [
-      write: [timeout: 2_000, ttl: 3_600],
-      read: [timeout: 1_500]
-    ]
-  )
+config :my_app, MyApp.Repo,
+  hosts: ["127.0.0.1:3000"],
+  defaults: [
+    write: [timeout: 2_000, ttl: 3_600],
+    read: [timeout: 1_500]
+  ]
 
 # timeout is overridden to 500 ms for this call only.
-:ok = Aerospike.put(:aero, key, %{"name" => "Ada"}, timeout: 500)
+:ok = MyApp.Repo.put(key, %{"name" => "Ada"}, timeout: 500)
 ```
 
 ## Write Policies
@@ -53,16 +50,16 @@ Used by [`put/4`](Aerospike.html#put/4), [`add/4`](Aerospike.html#add/4), [`appe
 
 ```elixir
 # Create only if missing.
-:ok = Aerospike.put(:aero, key, bins, exists: :create_only)
+:ok = MyApp.Repo.put(key, bins, exists: :create_only)
 
 # Update only if present.
-:ok = Aerospike.put(:aero, key, bins, exists: :update_only)
+:ok = MyApp.Repo.put(key, bins, exists: :update_only)
 
 # Replace existing record bins only (no merge).
-:ok = Aerospike.put(:aero, key, bins, exists: :replace_only)
+:ok = MyApp.Repo.put(key, bins, exists: :replace_only)
 
 # Create if absent, replace if present.
-:ok = Aerospike.put(:aero, key, bins, exists: :create_or_replace)
+:ok = MyApp.Repo.put(key, bins, exists: :create_or_replace)
 ```
 
 ### Generation Policy (CAS)
@@ -71,9 +68,9 @@ When `:generation` is provided and `:gen_policy` is omitted, the client defaults
 `gen_policy: :expect_gen_equal`.
 
 ```elixir
-{:ok, rec} = Aerospike.get(:aero, key)
+{:ok, rec} = MyApp.Repo.get(key)
 
-case Aerospike.put(:aero, key, %{"counter" => 1}, generation: rec.generation) do
+case MyApp.Repo.put(key, %{"counter" => 1}, generation: rec.generation) do
   :ok ->
     :updated
 
@@ -163,23 +160,20 @@ Supported options:
 
 ## Defaults at Startup
 
-Set per-command defaults when starting the client:
+Set per-command defaults in Repo config:
 
 ```elixir
-{:ok, _pid} =
-  Aerospike.start_link(
-    name: :aero,
-    hosts: ["127.0.0.1:3000"],
-    defaults: [
-      write: [timeout: 2_000, ttl: 3_600],
-      read: [timeout: 1_500],
-      delete: [timeout: 1_500, durable_delete: true],
-      operate: [timeout: 2_000],
-      batch: [timeout: 4_000, respond_all_keys: true],
-      scan: [timeout: 30_000],
-      query: [timeout: 30_000]
-    ]
-  )
+config :my_app, MyApp.Repo,
+  hosts: ["127.0.0.1:3000"],
+  defaults: [
+    write: [timeout: 2_000, ttl: 3_600],
+    read: [timeout: 1_500],
+    delete: [timeout: 1_500, durable_delete: true],
+    operate: [timeout: 2_000],
+    batch: [timeout: 4_000, respond_all_keys: true],
+    scan: [timeout: 30_000],
+    query: [timeout: 30_000]
+  ]
 ```
 
 If a command has no configured defaults, it runs with only explicit per-call options.

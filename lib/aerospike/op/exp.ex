@@ -12,7 +12,7 @@ defmodule Aerospike.Op.Exp do
       alias Aerospike.Op
 
       {:ok, record} =
-        Aerospike.operate(conn, key, [
+        MyApp.Repo.operate(key, [
           Op.Exp.read("age_plus_ten", Exp.add(Exp.int_bin("age"), Exp.int(10))),
           Op.Exp.write("doubled", Exp.mul(Exp.int_bin("count"), Exp.int(2)))
         ])
@@ -20,7 +20,8 @@ defmodule Aerospike.Op.Exp do
   ## Related
 
   - `Aerospike.Exp` — expression builder
-  - `Aerospike.operate/4` — execute operations on one record
+  - `MyApp.Repo.operate/2,3` — recommended application-facing execution path
+  - `Aerospike.operate/4` — low-level atomic execution on one record
   """
 
   alias Aerospike.Exp

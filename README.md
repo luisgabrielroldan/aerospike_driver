@@ -12,7 +12,7 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 
 - **OTP-native** — starts under a supervisor, pools connections automatically via NimblePool
 - **Cluster-aware** — discovers nodes, maintains partition maps, routes operations to the correct node
-- **Repo wrapper** — optional `use Aerospike.Repo` convenience API bound to one connection
+- **Repo wrapper** — recommended application-facing API via `use Aerospike.Repo`
 - **Single-record CRUD** — `put`, `get`, `delete`, `exists`, `touch` with bang variants
 - **Operate** — atomic multi-operation per record (`add`, `append`, `prepend`, custom op lists)
 - **Batch operations** — `batch_get`, `batch_exists`, `batch_operate` for multi-key round-trips
@@ -50,52 +50,77 @@ end
 ## Quick Start
 
 ```elixir
-# Start the client (connects to a local Aerospike instance)
-{:ok, _pid} = Aerospike.start_link(name: :aero, hosts: ["localhost:3000"])
+defmodule MyApp.Repo do
+  use Aerospike.Repo,
+    otp_app: :my_app,
+    name: :aero
+end
+
+# config/runtime.exs
+config :my_app, MyApp.Repo,
+  hosts: ["localhost:3000"]
+
+# Start under your application supervisor
+children = [
+  MyApp.Repo
+]
 
 # Build a key (namespace, set, user key)
-key = Aerospike.key("test", "users", "user:1001")
+key = MyApp.Repo.key("test", "users", "user:1001")
 
 # Write bins (columns) to the record
-:ok = Aerospike.put!(:aero, key, %{"name" => "Ada", "lang" => "Elixir", "score" => 42})
+:ok = MyApp.Repo.put!(key, %{"name" => "Ada", "lang" => "Elixir", "score" => 42})
 
 # Read the record back
-{:ok, record} = Aerospike.get(:aero, key)
+{:ok, record} = MyApp.Repo.get(key)
 record.bins["name"]
 #=> "Ada"
 
 # Clean up
-:ok = Aerospike.delete!(:aero, key)
+:ok = MyApp.Repo.delete!(key)
 ```
 
 ## Usage
 
-### Starting the Client
+### Recommended Application Setup
 
-The client starts a supervision tree that manages cluster discovery and connection pools.
-Add it to your application supervisor or start it directly:
+For application code, define a Repo module once and call `MyApp.Repo.*` for
+day-to-day operations. The generated module starts the same Aerospike client
+supervision tree, but binds one configured connection so the rest of the app
+does not pass a connection handle around.
 
 ```elixir
+defmodule MyApp.Repo do
+  use Aerospike.Repo,
+    otp_app: :my_app,
+    name: :aero
+end
+
+# config/runtime.exs
+config :my_app, MyApp.Repo,
+  hosts: ["node1:3000", "node2:3000"],
+  pool_size: 8,
+  defaults: [
+    write: [timeout: 2_000],
+    read: [timeout: 1_500]
+  ]
+
 # In your application supervisor
 children = [
-  {Aerospike,
-   name: :aero,
-   hosts: ["node1:3000", "node2:3000"],
-   pool_size: 8,
-   defaults: [
-     write: [timeout: 2_000],
-     read: [timeout: 1_500]
-   ]}
+  MyApp.Repo
 ]
 
 Supervisor.start_link(children, strategy: :one_for_one)
 ```
 
-#### Connection Options
+Use `MyApp.Repo.key/3` to build keys and `MyApp.Repo.put/2`, `get/1`, `delete/1`,
+`exists/1`, and `touch/2` for the common single-record flow.
+
+#### Repo Config Options
 
 | Option                   | Type             | Default | Description                                        |
 |--------------------------|------------------|---------|----------------------------------------------------|
-| `:name`                  | atom             | —       | **Required.** Registered name for this connection.  |
+| `:name`                  | atom             | repo module | Registered connection name. Generated repos usually set this in `use Aerospike.Repo`. |
 | `:hosts`                 | list of strings  | —       | **Required.** Seed hosts (`"host:port"` or `"host"` for port 3000). |
 | `:pool_size`             | pos_integer      | `10`    | Connections per discovered node.                    |
 | `:pool_checkout_timeout` | non_neg_integer  | `5000`  | Pool checkout timeout in ms.                        |
@@ -107,31 +132,49 @@ Supervisor.start_link(children, strategy: :one_for_one)
 | `:tls_opts`              | keyword list     | `[]`    | Options for `:ssl.connect/3` (certs, verify, SNI, etc.). |
 | `:defaults`              | keyword list     | `[]`    | Per-command policy defaults (see below).            |
 
+### Direct Connection API
+
+`Aerospike.start_link/1` and direct `Aerospike.*` calls are still available when
+you want explicit connection lifecycle control or need to work without a Repo
+wrapper. That lower-level form remains the canonical facade API:
+
+```elixir
+{:ok, _pid} = Aerospike.start_link(name: :aero, hosts: ["localhost:3000"])
+
+key = Aerospike.key("test", "users", "user:1001")
+:ok = Aerospike.put!(:aero, key, %{"name" => "Ada"})
+{:ok, record} = Aerospike.get(:aero, key)
+```
+
 ### Security Administration
 
 Security administration is available on secured Aerospike Enterprise clusters.
-Authenticate the client with a hashed admin credential in `:auth_opts`:
+For application code, configure the Repo and use the generated
+`MyApp.Repo.Admin` submodule:
 
 ```elixir
 alias Aerospike.Admin.PasswordHash
 
-{:ok, _pid} =
-  Aerospike.start_link(
-    name: :aero_admin,
-    hosts: ["127.0.0.1:3200"],
-    auth_opts: [
-      user: "admin",
-      credential: PasswordHash.hash("admin")
-    ]
-  )
+defmodule MyApp.Repo do
+  use Aerospike.Repo,
+    otp_app: :my_app,
+    name: :aero_admin
+end
+
+config :my_app, MyApp.Repo,
+  hosts: ["127.0.0.1:3200"],
+  auth_opts: [
+    user: "admin",
+    credential: PasswordHash.hash("admin")
+  ]
 ```
 
 Create and inspect a user:
 
 ```elixir
-:ok = Aerospike.create_user(:aero_admin, "ops-reader", "secret-pass", ["read"])
+:ok = MyApp.Repo.Admin.create_user("ops-reader", "secret-pass", ["read"])
 {:ok, %Aerospike.User{name: "ops-reader", roles: ["read"]}} =
-  Aerospike.query_user(:aero_admin, "ops-reader")
+  MyApp.Repo.Admin.query_user("ops-reader")
 ```
 
 Create and manage a role with scoped privileges:
@@ -144,8 +187,7 @@ role_privileges = [
 ]
 
 :ok =
-  Aerospike.create_role(
-    :aero_admin,
+  MyApp.Repo.Admin.create_role(
     "report_reader",
     role_privileges,
     whitelist: ["10.0.0.0/24"],
@@ -153,8 +195,7 @@ role_privileges = [
   )
 
 :ok =
-  Aerospike.grant_privileges(
-    :aero_admin,
+  MyApp.Repo.Admin.grant_privileges(
     "report_reader",
     [%Privilege{code: :read_write, namespace: "test", set: "scratch"}]
   )
@@ -172,33 +213,33 @@ and test-environment requirements.
 ### Writing Records
 
 ```elixir
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 
 # Simple put — merges bins into the record
-:ok = Aerospike.put!(:aero, key, %{"name" => "Grace", "age" => 36})
+:ok = MyApp.Repo.put!(key, %{"name" => "Grace", "age" => 36})
 
 # Atom keys are accepted and normalized to strings
-:ok = Aerospike.put!(:aero, key, %{name: "Grace", age: 36})
+:ok = MyApp.Repo.put!(key, %{name: "Grace", age: 36})
 
 # Set a TTL of 1 hour (in seconds)
-:ok = Aerospike.put!(:aero, key, %{"name" => "Grace"}, ttl: 3600)
+:ok = MyApp.Repo.put!(key, %{"name" => "Grace"}, ttl: 3600)
 ```
 
 ### Reading Records
 
 ```elixir
 # Read all bins
-{:ok, record} = Aerospike.get(:aero, key)
+{:ok, record} = MyApp.Repo.get(key)
 record.bins       #=> %{"name" => "Grace", "age" => 36}
 record.generation #=> 1
 record.ttl        #=> server-reported TTL
 
 # Read specific bins only
-{:ok, record} = Aerospike.get(:aero, key, bins: ["name"])
+{:ok, record} = MyApp.Repo.get(key, bins: ["name"])
 record.bins #=> %{"name" => "Grace"}
 
 # Read header only (generation + TTL, no bin data)
-{:ok, record} = Aerospike.get(:aero, key, header_only: true)
+{:ok, record} = MyApp.Repo.get(key, header_only: true)
 record.bins #=> %{}
 ```
 
@@ -206,27 +247,27 @@ record.bins #=> %{}
 
 ```elixir
 # Returns whether the record existed before deletion
-{:ok, true} = Aerospike.delete(:aero, key)
+{:ok, true} = MyApp.Repo.delete(key)
 
 # Deleting a non-existent key is not an error
-{:ok, false} = Aerospike.delete(:aero, key)
+{:ok, false} = MyApp.Repo.delete(key)
 ```
 
 ### Checking Existence
 
 ```elixir
-{:ok, true} = Aerospike.exists(:aero, key)
-{:ok, false} = Aerospike.exists(:aero, missing_key)
+{:ok, true} = MyApp.Repo.exists(key)
+{:ok, false} = MyApp.Repo.exists(missing_key)
 ```
 
 ### Refreshing TTL (Touch)
 
 ```elixir
 # Reset TTL to the namespace default
-:ok = Aerospike.touch!(:aero, key)
+:ok = MyApp.Repo.touch!(key)
 
 # Set a specific TTL (10 minutes)
-:ok = Aerospike.touch!(:aero, key, ttl: 600)
+:ok = MyApp.Repo.touch!(key, ttl: 600)
 ```
 
 ### Write Policies
@@ -235,16 +276,16 @@ Control write behavior with per-call options:
 
 ```elixir
 # Create only — fails if the record already exists
-:ok = Aerospike.put!(:aero, key, bins, exists: :create_only)
+:ok = MyApp.Repo.put!(key, bins, exists: :create_only)
 
 # Update only — fails if the record does not exist
-:ok = Aerospike.put!(:aero, key, bins, exists: :update_only)
+:ok = MyApp.Repo.put!(key, bins, exists: :update_only)
 
 # Replace — like update, but wipes all existing bins first
-:ok = Aerospike.put!(:aero, key, bins, exists: :replace_only)
+:ok = MyApp.Repo.put!(key, bins, exists: :replace_only)
 
 # Create or replace — upsert that wipes old bins on update
-:ok = Aerospike.put!(:aero, key, bins, exists: :create_or_replace)
+:ok = MyApp.Repo.put!(key, bins, exists: :create_or_replace)
 ```
 
 ### Optimistic Concurrency (CAS)
@@ -253,11 +294,11 @@ Use generation checks for compare-and-swap semantics:
 
 ```elixir
 # Read current state
-{:ok, record} = Aerospike.get(:aero, key)
+{:ok, record} = MyApp.Repo.get(key)
 gen = record.generation
 
 # Write only if no one else has modified the record
-case Aerospike.put(:aero, key, %{"counter" => 1},
+case MyApp.Repo.put(key, %{"counter" => 1},
        generation: gen,
        gen_policy: :expect_gen_equal) do
   :ok -> :updated
@@ -280,18 +321,18 @@ If you already have the 20-byte RIPEMD-160 digest (e.g., from a secondary index 
 another client), construct a key directly:
 
 ```elixir
-digest_key = Aerospike.key_digest("test", "users", <<digest::binary-20>>)
-{:ok, record} = Aerospike.get(:aero, digest_key)
+digest_key = MyApp.Repo.key_digest("test", "users", <<digest::binary-20>>)
+{:ok, record} = MyApp.Repo.get(digest_key)
 ```
 
 ## Error Handling
 
 All operations return `{:ok, result}` or `{:error, %Aerospike.Error{}}`. Bang variants
-(`put!`, `get!`, `delete!`, `exists!`, `touch!`) unwrap success and raise on error:
+on both `MyApp.Repo` and `Aerospike` unwrap success and raise on error:
 
 ```elixir
 # Pattern matching on errors
-case Aerospike.get(:aero, key) do
+case MyApp.Repo.get(key) do
   {:ok, record} ->
     process(record)
 
@@ -303,7 +344,7 @@ case Aerospike.get(:aero, key) do
 end
 
 # Bang variant raises Aerospike.Error
-record = Aerospike.get!(:aero, key)
+record = MyApp.Repo.get!(key)
 ```
 
 Error codes are atoms for pattern matching: `:key_not_found`, `:key_exists`,

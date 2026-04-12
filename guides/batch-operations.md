@@ -10,10 +10,10 @@ Use [`Aerospike.batch_get/3`](Aerospike.html#batch_get/3) when every operation i
 - Pass read options such as `:bins` or `:header_only` alongside batch options (`:timeout`, `:replica`, etc.). Batch options are validated separately from read options.
 
 ```elixir
-keys = Enum.map(1..100, &Aerospike.key("test", "users", "user:#{&1}"))
+keys = Enum.map(1..100, &MyApp.Repo.key("test", "users", "user:#{&1}"))
 
 {:ok, records} =
-  Aerospike.batch_get(:aero, keys, timeout: 500, bins: ["name", "score"])
+  MyApp.Repo.batch_get(keys, timeout: 500, bins: ["name", "score"])
 
 # records[i] corresponds to keys[i]; missing keys are nil
 Enum.zip(keys, records)
@@ -26,7 +26,7 @@ Enum.zip(keys, records)
 When you only need generation and TTL (no bin data):
 
 ```elixir
-{:ok, records} = Aerospike.batch_get(:aero, keys, header_only: true)
+{:ok, records} = MyApp.Repo.batch_get(keys, header_only: true)
 
 Enum.each(records, fn
   nil -> :skip
@@ -40,7 +40,7 @@ end)
 
 ```elixir
 keys = [key1, key2, key3]
-{:ok, exists?} = Aerospike.batch_exists(:aero, keys)
+{:ok, exists?} = MyApp.Repo.batch_exists(keys)
 # exists?: [true, false, true]
 
 # Filter to only existing keys
@@ -58,7 +58,7 @@ Use [`Aerospike.batch_operate/3`](Aerospike.html#batch_operate/3) when each key 
 alias Aerospike.Batch
 
 {:ok, results} =
-  Aerospike.batch_operate(:aero, [
+  MyApp.Repo.batch_operate([
     Batch.read(key1, bins: ["a"]),
     Batch.put(key2, %{"x" => 1}),
     Batch.delete(key3),
@@ -82,7 +82,7 @@ atomic increments, list/map CDT ops, or mixed read+write on a single key within 
 import Aerospike.Op
 
 {:ok, [result]} =
-  Aerospike.batch_operate(:aero, [
+  MyApp.Repo.batch_operate([
     Batch.operate(counter_key, [add("hits", 1), get("hits")])
   ])
 
@@ -96,7 +96,7 @@ operations in the same batch:
 
 ```elixir
 {:ok, results} =
-  Aerospike.batch_operate(:aero, [
+  MyApp.Repo.batch_operate([
     Batch.udf(key1, "mymodule", "transform", [1, "x"]),
     Batch.read(key2, bins: ["result"]),
     Batch.udf(key3, "aggregate", "sum", ["score"])
@@ -116,7 +116,7 @@ operations in the same batch:
 ```elixir
 alias Aerospike.BatchResult
 
-{:ok, results} = Aerospike.batch_operate(:aero, ops)
+{:ok, results} = MyApp.Repo.batch_operate(ops)
 
 Enum.each(results, fn
   %BatchResult{status: :ok, record: %Aerospike.Record{} = rec} ->
@@ -159,7 +159,7 @@ Batch functions return `{:error, %Aerospike.Error{}}` for top-level failures (co
 issues, invalid options). Per-key errors only appear in [`batch_operate/3`](Aerospike.html#batch_operate/3) results:
 
 ```elixir
-case Aerospike.batch_get(:aero, keys) do
+case MyApp.Repo.batch_get(keys) do
   {:ok, records} ->
     process_records(records)
 
@@ -175,7 +175,7 @@ Bang variants ([`batch_get!/3`](Aerospike.html#batch_get!/3), [`batch_exists!/3`
 [`Aerospike.Error`](Aerospike.Error.html) on top-level failures:
 
 ```elixir
-records = Aerospike.batch_get!(:aero, keys, bins: ["name"])
+records = MyApp.Repo.batch_get!(keys, bins: ["name"])
 ```
 
 ## Chunked bulk ingest
@@ -185,11 +185,11 @@ The library does not auto-chunk. For very large writes, split your list (for exa
 ```elixir
 records
 |> Stream.map(fn {id, data} ->
-  Batch.put(Aerospike.key("test", "events", id), data)
+  Batch.put(MyApp.Repo.key("test", "events", id), data)
 end)
 |> Stream.chunk_every(500)
 |> Task.async_stream(
-  fn batch -> Aerospike.batch_operate(:aero, batch) end,
+  fn batch -> MyApp.Repo.batch_operate(batch) end,
   max_concurrency: 10,
   ordered: false
 )
@@ -209,17 +209,20 @@ end)
 
 ## Policies and defaults
 
-Batch options (`:timeout`, `:pool_checkout_timeout`, `:replica`, `:respond_all_keys`, `:filter`) can be set in `defaults: [batch: ...]` at [`Aerospike.start_link/1`](Aerospike.html#start_link/1). **Per-call options win:** keywords passed to [`batch_get/3`](Aerospike.html#batch_get/3) (and other batch functions) are merged on top of those defaults, so a call-level `:timeout` overrides the default.
+Batch options (`:timeout`, `:pool_checkout_timeout`, `:replica`,
+`:respond_all_keys`, `:filter`) can be set in Repo config under
+`defaults: [batch: ...]`. **Per-call options win:** keywords passed to
+[`batch_get/3`](Aerospike.html#batch_get/3) (and other batch functions) are
+merged on top of those defaults, so a call-level `:timeout` overrides the
+default.
 
 ```elixir
-Aerospike.start_link(
-  name: :aero,
+config :my_app, MyApp.Repo,
   hosts: ["127.0.0.1:3000"],
   defaults: [batch: [timeout: 2_000], read: [bins: ["name"]]]
-)
 
 # Effective batch timeout is 500; read still uses default bins unless overridden.
-Aerospike.batch_get(:aero, keys, timeout: 500)
+MyApp.Repo.batch_get(keys, timeout: 500)
 ```
 
 [`batch_get/3`](Aerospike.html#batch_get/3) also merges `defaults: [read: ...]` for read-specific options (`:bins`, `:header_only`, `:read_touch_ttl_percent`). **Replica** can be an atom (`:master`, `:sequence`, `:any`) or a non-negative integer replica index. **Filter** uses [`Aerospike.Exp.from_wire/1`](Aerospike.Exp.html#from_wire/1) with pre-encoded expression bytes until the expression builder API ships.

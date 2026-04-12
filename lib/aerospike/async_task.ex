@@ -19,9 +19,12 @@ defmodule Aerospike.AsyncTask do
 
   ## Usage
 
-      task = Aerospike.create_index(:my_conn, "test", "demo",
-        bin: "age", name: "age_idx", type: :numeric
-      )
+      {:ok, task} =
+        MyApp.Repo.create_index("test", "demo",
+          bin: "age",
+          name: "age_idx",
+          type: :numeric
+        )
 
       # Poll manually
       {:ok, :complete} = Aerospike.IndexTask.status(task)

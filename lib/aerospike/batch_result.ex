@@ -15,7 +15,7 @@ defmodule Aerospike.BatchResult do
 
   ## Pattern matching
 
-      {:ok, results} = Aerospike.batch_operate(:aero, ops)
+      {:ok, results} = MyApp.Repo.batch_operate(ops)
 
       Enum.each(results, fn
         %BatchResult{status: :ok, record: %Aerospike.Record{} = rec} ->
@@ -34,7 +34,8 @@ defmodule Aerospike.BatchResult do
   ## Related
 
   - `Aerospike.Batch` — constructors for batch operations
-  - `Aerospike.batch_operate/3` — executes the batch and returns these results
+  - `MyApp.Repo.batch_operate/1,2` — recommended application-facing batch execution
+  - `Aerospike.batch_operate/3` — low-level facade that returns these results
   """
 
   alias Aerospike.Error

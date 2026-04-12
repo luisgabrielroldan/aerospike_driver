@@ -14,7 +14,7 @@ asynchronously in the background:
 
 ```elixir
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "users",
+  MyApp.Repo.create_index("test", "users",
     bin: "age",
     name: "users_age_idx",
     type: :numeric
@@ -63,7 +63,7 @@ Index integer or float bins. Use with [`Filter.range/3`](Aerospike.Filter.html#r
 
 ```elixir
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "metrics",
+  MyApp.Repo.create_index("test", "metrics",
     bin: "score",
     name: "metrics_score_idx",
     type: :numeric
@@ -78,7 +78,7 @@ Index string bins. Use with [`Filter.equal/2`](Aerospike.Filter.html#equal/2):
 
 ```elixir
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "users",
+  MyApp.Repo.create_index("test", "users",
     bin: "email",
     name: "users_email_idx",
     type: :string
@@ -93,7 +93,7 @@ Index GeoJSON point or region bins for geospatial queries:
 
 ```elixir
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "locations",
+  MyApp.Repo.create_index("test", "locations",
     bin: "coords",
     name: "locations_coords_idx",
     type: :geo2dsphere
@@ -115,13 +115,13 @@ region = Geo.circle(-122.5, 45.5, 5_000)
   Query.new("test", "locations")
   |> Query.where(Filter.geo_within("coords", region))
   |> Query.max_records(10_000)
-  |> then(&Aerospike.all(:aero, &1))
+  |> then(&MyApp.Repo.all(&1))
 
 {:ok, containing_regions} =
   Query.new("test", "regions")
   |> Query.where(Filter.geo_contains("shape", point))
   |> Query.max_records(10_000)
-  |> then(&Aerospike.all(:aero, &1))
+  |> then(&MyApp.Repo.all(&1))
 ```
 
 Raw GeoJSON strings remain supported for backward compatibility:
@@ -142,7 +142,7 @@ inner values rather than the bin container itself:
 ```elixir
 # Index every integer in a list bin named "tags"
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "articles",
+  MyApp.Repo.create_index("test", "articles",
     bin: "tags",
     name: "articles_tags_idx",
     type: :numeric,
@@ -151,7 +151,7 @@ inner values rather than the bin container itself:
 
 # Index map keys (strings)
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "profiles",
+  MyApp.Repo.create_index("test", "profiles",
     bin: "preferences",
     name: "profiles_prefs_keys_idx",
     type: :string,
@@ -160,7 +160,7 @@ inner values rather than the bin container itself:
 
 # Index map values (integers)
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "scores",
+  MyApp.Repo.create_index("test", "scores",
     bin: "game_scores",
     name: "scores_game_idx",
     type: :numeric,
@@ -186,14 +186,14 @@ alias Aerospike.{Filter, Query}
   Query.new("test", "users")
   |> Query.where(Filter.range("age", 18, 65))
   |> Query.max_records(10_000)
-  |> then(&Aerospike.all(:aero, &1))
+  |> then(&MyApp.Repo.all(&1))
 
 # Equality query on a string index
 {:ok, records} =
   Query.new("test", "users")
   |> Query.where(Filter.equal("email", "user@example.com"))
   |> Query.max_records(10_000)
-  |> then(&Aerospike.all(:aero, &1))
+  |> then(&MyApp.Repo.all(&1))
 ```
 
 ### Combining Index Filters with Expression Filters
@@ -210,7 +210,7 @@ query =
   |> Query.filter(Exp.eq(Exp.str_bin("status"), Exp.val("active")))
   |> Query.max_records(10_000)
 
-{:ok, records} = Aerospike.all(:aero, query)
+{:ok, records} = MyApp.Repo.all(query)
 ```
 
 The index filter runs server-side first (fast path), then the expression filter applies to
@@ -219,7 +219,7 @@ the smaller result set.
 ## Dropping an Index
 
 ```elixir
-:ok = Aerospike.drop_index(:aero, "test", "users_age_idx")
+:ok = MyApp.Repo.drop_index("test", "users_age_idx")
 ```
 
 [`drop_index/3`](Aerospike.html#drop_index/3) returns `:ok` whether or not the index existed.
@@ -231,13 +231,13 @@ alias Aerospike.{Filter, IndexTask, Query}
 
 # Insert test data
 for i <- 1..1000 do
-  key = Aerospike.key("test", "users", "user:#{i}")
-  Aerospike.put(:aero, key, %{"age" => i, "name" => "user#{i}"})
+  key = MyApp.Repo.key("test", "users", "user:#{i}")
+  MyApp.Repo.put(key, %{"age" => i, "name" => "user#{i}"})
 end
 
 # Create and wait for index
 {:ok, task} =
-  Aerospike.create_index(:aero, "test", "users",
+  MyApp.Repo.create_index("test", "users",
     bin: "age",
     name: "users_age_idx",
     type: :numeric
@@ -250,18 +250,18 @@ end
   Query.new("test", "users")
   |> Query.where(Filter.range("age", 18, 30))
   |> Query.max_records(10_000)
-  |> then(&Aerospike.all(:aero, &1))
+  |> then(&MyApp.Repo.all(&1))
 
 IO.puts("Found #{length(records)} users aged 18–30")
 
 # Tear down the index
-:ok = Aerospike.drop_index(:aero, "test", "users_age_idx")
+:ok = MyApp.Repo.drop_index("test", "users_age_idx")
 ```
 
 ## Error Handling
 
 ```elixir
-case Aerospike.create_index(:aero, "test", "users", bin: "age", name: "age_idx", type: :numeric) do
+case MyApp.Repo.create_index("test", "users", bin: "age", name: "age_idx", type: :numeric) do
   {:ok, task} ->
     case IndexTask.wait(task, timeout: 30_000) do
       :ok ->

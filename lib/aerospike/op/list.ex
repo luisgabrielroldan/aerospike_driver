@@ -62,31 +62,31 @@ defmodule Aerospike.Op.List do
       alias Aerospike.Op.List
 
       # Tag management
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         List.append("tags", "vip"),
         List.remove_by_value("tags", "trial", return_type: List.return_none()),
         List.size("tags")
       ])
 
       # Queue: atomic enqueue + dequeue
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         List.append("queue", %{"job" => "send_email"}),
         List.pop("queue", 0)
       ])
 
       # Bounded list: append then keep last 100 entries
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         List.append("history", new_entry),
         List.trim("history", -100, 100)
       ])
 
       # Top-3 values by rank
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         List.get_by_rank_range("scores", -3, 3)
       ])
 
       # Time-range query on [timestamp, value] pairs
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         List.get_by_value_range("readings",
           [1_523_474_231_000, nil],
           [1_523_474_234_000, nil])

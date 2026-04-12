@@ -101,7 +101,7 @@ defmodule Aerospike.Op.Map do
   the 7-op rank pattern works in practice:
 
       # Two ops on "stock" → record.bins["stock"] == [max_val, max_idx]
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         Map.get_by_rank("stock", -1, return_type: Map.return_value()),
         Map.get_by_rank("stock", -1, return_type: Map.return_index())
       ], respond_per_each_op: true)
@@ -119,27 +119,27 @@ defmodule Aerospike.Op.Map do
       alias Aerospike.Op.Map
 
       # Basic CRUD on a map bin
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         Map.put("prefs", "theme", "dark"),
         Map.get_by_key("prefs", "theme"),
         Map.remove_by_key("prefs", "legacy", return_type: Map.return_key())
       ])
 
       # Leaderboard: get top 3 scores by rank
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         Map.get_by_rank_range("scores", -3, 3,
           return_type: Map.return_key_value())
       ])
 
       # Atomic counter increment per category
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         Map.increment("stats", "views", 1),
         Map.increment("stats", "clicks", 1)
       ])
 
       # Trim old events by key range (timestamps as keys)
       cutoff = System.system_time(:millisecond) - 86_400_000
-      Aerospike.operate(conn, key, [
+      MyApp.Repo.operate(key, [
         Map.remove_by_key_range("events", nil, cutoff,
           return_type: Map.return_none())
       ])
@@ -578,7 +578,7 @@ defmodule Aerospike.Op.Map do
   them in insertion order, sort by key before iterating:
 
       {:ok, record} =
-        Aerospike.operate(conn, key, [
+        MyApp.Repo.operate(key, [
           Map.get_by_index_range("stock", -60, 60)
         ])
 

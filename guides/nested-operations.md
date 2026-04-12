@@ -39,10 +39,10 @@ maps for sub-documents:
 ```elixir
 alias Aerospike.Op.Map
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 
 # Create nested structure
-Aerospike.put(:aero, key, %{
+MyApp.Repo.put(key, %{
   "profile" => %{
     "geo" => %{"lat" => 40.7128, "lng" => -74.0060},
     "prefs" => %{"theme" => "dark", "lang" => "en"}
@@ -50,13 +50,13 @@ Aerospike.put(:aero, key, %{
 })
 
 # Update latitude inside the nested "geo" map
-{:ok, _} = Aerospike.operate(:aero, key, [
+{:ok, _} = MyApp.Repo.operate(key, [
   Map.put("profile", "lat", 45.5231,
     ctx: [Aerospike.Ctx.map_key("geo")])
 ])
 
 # Read a value from the nested "geo" map
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   Map.get_by_key("profile", "lat",
     ctx: [Aerospike.Ctx.map_key("geo")])
 ])
@@ -71,7 +71,7 @@ Chain context elements for deeper nesting:
 # Data: %{"config" => %{"ui" => %{"sidebar" => %{"width" => 250}}}}
 
 # Navigate: config → ui → sidebar, then operate on "width"
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.put("config", "width", 300,
     ctx: [
       Aerospike.Ctx.map_key("ui"),
@@ -87,10 +87,10 @@ A map value that contains a list:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "sightings", 5001)
+key = MyApp.Repo.key("test", "sightings", 5001)
 
 # Data: %{"report" => %{"shape" => ["circle", "flash", "disc"], "city" => "Ann Arbor"}}
-Aerospike.put(:aero, key, %{
+MyApp.Repo.put(key, %{
   "report" => %{
     "shape" => ["circle", "flash", "disc"],
     "city" => "Ann Arbor"
@@ -98,13 +98,13 @@ Aerospike.put(:aero, key, %{
 })
 
 # Append to the "shape" list inside the "report" map
-{:ok, _} = Aerospike.operate(:aero, key, [
+{:ok, _} = MyApp.Repo.operate(key, [
   List.append("report", "oval",
     ctx: [Aerospike.Ctx.map_key("shape")])
 ])
 
 # Read the size of the "shape" list
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.size("report",
     ctx: [Aerospike.Ctx.map_key("shape")])
 ])
@@ -118,10 +118,10 @@ A list where each element is a map:
 ```elixir
 alias Aerospike.Op.Map
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 
 # Data: %{"addresses" => [%{"city" => "NYC", "zip" => "10001"}, %{"city" => "LA", "zip" => "90001"}]}
-Aerospike.put(:aero, key, %{
+MyApp.Repo.put(key, %{
   "addresses" => [
     %{"city" => "NYC", "zip" => "10001"},
     %{"city" => "LA", "zip" => "90001"}
@@ -129,13 +129,13 @@ Aerospike.put(:aero, key, %{
 })
 
 # Update the city in the second address (list index 1)
-{:ok, _} = Aerospike.operate(:aero, key, [
+{:ok, _} = MyApp.Repo.operate(key, [
   Map.put("addresses", "city", "San Francisco",
     ctx: [Aerospike.Ctx.list_index(1)])
 ])
 
 # Read from the last address (negative index)
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   Map.get_by_key("addresses", "city",
     ctx: [Aerospike.Ctx.list_index(-1)])
 ])
@@ -149,22 +149,22 @@ Lists within lists:
 ```elixir
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "data", "matrix")
+key = MyApp.Repo.key("test", "data", "matrix")
 
 # Data: %{"grid" => [[7, 9, 5], [1, 2, 3], [6, 5, 4, 1]]}
-Aerospike.put(:aero, key, %{
+MyApp.Repo.put(key, %{
   "grid" => [[7, 9, 5], [1, 2, 3], [6, 5, 4, 1]]
 })
 
 # Append 11 to the last nested list
-{:ok, _} = Aerospike.operate(:aero, key, [
+{:ok, _} = MyApp.Repo.operate(key, [
   List.append("grid", 11,
     ctx: [Aerospike.Ctx.list_index(-1)])
 ])
 # grid = [[7, 9, 5], [1, 2, 3], [6, 5, 4, 1, 11]]
 
 # Get the size of the first nested list
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.size("grid",
     ctx: [Aerospike.Ctx.list_index(0)])
 ])
@@ -180,9 +180,9 @@ even targeting different paths within the same bin:
 alias Aerospike.Op.Map
 alias Aerospike.Op.List
 
-key = Aerospike.key("test", "orders", "order:1001")
+key = MyApp.Repo.key("test", "orders", "order:1001")
 
-Aerospike.put(:aero, key, %{
+MyApp.Repo.put(key, %{
   "order" => %{
     "items" => [
       %{"sku" => "A1", "qty" => 2},
@@ -193,7 +193,7 @@ Aerospike.put(:aero, key, %{
 })
 
 # Atomically: add an item, update meta, read item count
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   List.append("order", %{"sku" => "C3", "qty" => 3},
     ctx: [Aerospike.Ctx.map_key("items")]),
   Map.put("order", "updated", true,

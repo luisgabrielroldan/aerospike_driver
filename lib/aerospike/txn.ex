@@ -9,9 +9,9 @@ defmodule Aerospike.Txn do
   ## Creating a transaction
 
       txn = Aerospike.Txn.new()
-      Aerospike.put(:conn, key1, %{"score" => 10}, txn: txn)
-      Aerospike.put(:conn, key2, %{"score" => 20}, txn: txn)
-      Aerospike.commit(:conn, txn)
+      MyApp.Repo.put(key1, %{"score" => 10}, txn: txn)
+      MyApp.Repo.put(key2, %{"score" => 20}, txn: txn)
+      MyApp.Repo.commit(txn)
 
   You can set a timeout (in milliseconds). A timeout of `0` means the server applies
   its default transaction timeout:

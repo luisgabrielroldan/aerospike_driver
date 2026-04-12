@@ -3,15 +3,17 @@ defmodule Aerospike.Batch do
   Constructors for heterogeneous `Aerospike.batch_operate/3` requests.
 
   Each function returns an opaque batch operation struct. Combine them in a list and
-  pass to `Aerospike.batch_operate/3`. Results come back as `Aerospike.BatchResult`
-  structs in the same order.
+  execute them with `MyApp.Repo.batch_operate/1,2` in application code or
+  `Aerospike.batch_operate/3` when working against the low-level facade
+  directly. Results come back as `Aerospike.BatchResult` structs in the same
+  order.
 
   ## Example
 
       alias Aerospike.Batch
 
       {:ok, results} =
-        Aerospike.batch_operate(:aero, [
+        MyApp.Repo.batch_operate([
           Batch.read({"test", "users", "user:1"}, bins: ["name"]),
           Batch.put(key2, %{"x" => 1}),
           Batch.delete(key3)
@@ -21,7 +23,8 @@ defmodule Aerospike.Batch do
 
   ## Related
 
-  - `Aerospike.batch_operate/3` — execute a list of batch operations
+  - `MyApp.Repo.batch_operate/1,2` — recommended application-facing execution path
+  - `Aerospike.batch_operate/3` — low-level facade for executing batch operations
   - `Aerospike.BatchResult` — per-key result struct
   """
 

@@ -11,9 +11,9 @@ Create a map by writing entries with [`put/4`](Aerospike.Op.Map.html#put/4) or [
 ```elixir
 alias Aerospike.Op.Map
 
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 
-{:ok, _} = Aerospike.operate(:aero, key, [
+{:ok, _} = MyApp.Repo.operate(key, [
   Map.put_items("profile", %{
     "name" => "Ada Lovelace",
     "email" => "ada@example.com",
@@ -25,7 +25,7 @@ key = Aerospike.key("test", "users", "user:42")
 Read entries back by key with [`get_by_key/3`](Aerospike.Op.Map.html#get_by_key/3):
 
 ```elixir
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   Map.get_by_key("profile", "email")
 ])
 rec.bins["profile"]  # => "ada@example.com"
@@ -81,10 +81,10 @@ Each event's value is a list tuple `[event_type, attributes]`:
 ```elixir
 alias Aerospike.Op.Map
 
-key = Aerospike.key("test", "activity", "user:42")
+key = MyApp.Repo.key("test", "activity", "user:42")
 
 # Record events
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.put("events", 1_523_474_230_000, ["fav", %{"sku" => 1}]),
   Map.put("events", 1_523_474_231_001, ["comment", %{"sku" => 2, "body" => "Great!"}]),
   Map.put("events", 1_523_474_233_003, ["viewed", %{"sku" => 3}]),
@@ -100,7 +100,7 @@ Use [`get_by_key_range/4`](Aerospike.Op.Map.html#get_by_key_range/4) to retrieve
 
 ```elixir
 # Get events between two timestamps (inclusive start, exclusive end)
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   Map.get_by_key_range("events", 1_523_474_231_000, 1_523_474_235_000)
 ])
 ```
@@ -110,7 +110,7 @@ Use [`get_by_key_range/4`](Aerospike.Op.Map.html#get_by_key_range/4) to retrieve
 Return just the count instead of the full data:
 
 ```elixir
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   Map.size("events")
 ])
 rec.bins["events"]  # => 6
@@ -123,7 +123,7 @@ remove everything except the most recent entries:
 
 ```elixir
 # Keep only the last 1000 events (remove indexes 0 through -1001)
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.remove_by_index_range("events", 0, max(0, total - 1000),
     return_type: Map.return_none())
 ])
@@ -134,7 +134,7 @@ Alternatively, remove events older than a threshold with [`remove_by_key_range/4
 ```elixir
 # Remove events before a cutoff timestamp
 cutoff = System.system_time(:millisecond) - 86_400_000  # 24 hours ago
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.remove_by_key_range("events", nil, cutoff,
     return_type: Map.return_none())
 ])
@@ -145,9 +145,9 @@ Aerospike.operate(:aero, key, [
 Use [`Aerospike.put/4`](Aerospike.html#put/4) with nested maps to store semi-structured documents:
 
 ```elixir
-key = Aerospike.key("test", "sightings", 5001)
+key = MyApp.Repo.key("test", "sightings", 5001)
 
-Aerospike.put(:aero, key, %{
+MyApp.Repo.put(key, %{
   "occurred" => 20_220_531,
   "report" => %{
     "shape" => ["circle", "flash", "disc"],
@@ -165,7 +165,7 @@ Atomically update a field inside the document and read another. The example uses
 alias Aerospike.Op.Map
 import Aerospike.Op
 
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   put("occurred", 20_220_601),
   Map.put("report", "city", "Ypsilanti"),
   get("report")
@@ -180,10 +180,10 @@ values are scores:
 ```elixir
 alias Aerospike.Op.Map
 
-key = Aerospike.key("test", "games", "leaderboard:daily")
+key = MyApp.Repo.key("test", "games", "leaderboard:daily")
 
 # Record scores
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.put("scores", "player:1", 2500),
   Map.put("scores", "player:2", 4200),
   Map.put("scores", "player:3", 1800),
@@ -192,13 +192,13 @@ Aerospike.operate(:aero, key, [
 ])
 
 # Get the top 3 scores (highest rank = highest value)
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   Map.get_by_rank_range("scores", -3, 3,
     return_type: Map.return_key_value())
 ])
 
 # Increment a player's score
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.increment("scores", "player:1", 500)
 ])
 ```
@@ -210,17 +210,17 @@ Track counts by category using map increment:
 ```elixir
 alias Aerospike.Op.Map
 
-key = Aerospike.key("test", "metrics", "page:home")
+key = MyApp.Repo.key("test", "metrics", "page:home")
 
 # Increment multiple counters atomically
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.increment("stats", "views", 1),
   Map.increment("stats", "clicks", 1),
   Map.increment("stats", "shares", 0)
 ])
 
 # Read all counters
-{:ok, rec} = Aerospike.operate(:aero, key, [
+{:ok, rec} = MyApp.Repo.operate(key, [
   Map.get_by_index_range_from("stats", 0)
 ])
 ```
@@ -234,7 +234,7 @@ alias Aerospike.Op.Map
 import Bitwise
 
 # Initialize defaults — won't overwrite if user already set them
-Aerospike.operate(:aero, key, [
+MyApp.Repo.operate(key, [
   Map.put_items("prefs", %{
     "theme" => "light",
     "notifications" => true,

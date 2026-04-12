@@ -9,7 +9,7 @@ defmodule Aerospike.Op do
   import Aerospike.Op
 
   {:ok, record} =
-    Aerospike.operate(conn, key, [
+    MyApp.Repo.operate(key, [
       put("status", "premium"),
       add("login_count", 1),
       get("login_count")
@@ -22,7 +22,8 @@ defmodule Aerospike.Op do
 
   ## Related
 
-  - `Aerospike.operate/4` — execute operations on one record
+  - `MyApp.Repo.operate/2,3` — recommended application-facing execution path
+  - `Aerospike.operate/4` — low-level atomic execution on one record
   - `Aerospike.Record` — result type containing `bins`, `generation`, and `ttl`
   """
 

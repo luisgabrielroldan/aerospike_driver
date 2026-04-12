@@ -3,6 +3,11 @@
 This guide walks you through connecting to Aerospike, performing basic CRUD operations,
 and understanding key concepts in the Elixir client.
 
+For application code, the recommended entry point is a Repo module built with
+[`use Aerospike.Repo`](Aerospike.Repo.html). The direct
+[`Aerospike`](Aerospike.html) facade is still available when you want explicit
+connection lifecycle control.
+
 ## Prerequisites
 
 - An Aerospike server running on `localhost:3000` (see [Docker setup](#docker-setup) below)
@@ -15,7 +20,7 @@ Add `aerospike_driver` to your `mix.exs` dependencies:
 ```elixir
 def deps do
   [
-    {:aerospike_driver, "~> 0.1.0"}
+    {:aerospike_driver, "~> 0.2.0"}
   ]
 end
 ```
@@ -28,32 +33,37 @@ The quickest way to get a local Aerospike instance:
 docker run -d --name aerospike -p 3000:3000 aerospike/aerospike-server
 ```
 
-## Connecting
+## Defining a Repo
 
-Start a named client supervision tree with [`Aerospike.start_link/1`](Aerospike.html#start_link/1). The `:name` atom
-becomes your connection handle for all subsequent calls:
+Define a Repo module once, then use `MyApp.Repo.*` for normal operations:
 
 ```elixir
-{:ok, _pid} =
-  Aerospike.start_link(
+defmodule MyApp.Repo do
+  use Aerospike.Repo,
+    otp_app: :my_app,
     name: :aero,
-    hosts: ["127.0.0.1:3000"],
     pool_size: 4
-  )
+end
+
+# config/runtime.exs
+config :my_app, MyApp.Repo,
+  hosts: ["127.0.0.1:3000"]
 ```
 
-In a supervised application, add it to your supervision tree:
+Add the Repo to your application supervision tree:
 
 ```elixir
 children = [
-  {Aerospike,
-   name: :aero,
-   hosts: ["127.0.0.1:3000"],
-   pool_size: 4}
+  MyApp.Repo
 ]
 
 Supervisor.start_link(children, strategy: :one_for_one)
 ```
+
+If you need lower-level control, you can still start the raw client with
+[`Aerospike.start_link/1`](Aerospike.html#start_link/1) and pass the connection
+name into direct `Aerospike.*` calls. The rest of this guide uses `MyApp.Repo`
+because that is the recommended application-facing shape.
 
 ## Keys and Records
 
@@ -63,10 +73,10 @@ Every record in Aerospike is identified by a **key** composed of three parts:
 - **Set** — a grouping within the namespace (like a table)
 - **User key** — a string or integer that uniquely identifies the record
 
-Build a key with [`Aerospike.key/3`](Aerospike.html#key/3):
+Build a key with [`MyApp.Repo.key/3`](Aerospike.Repo.html):
 
 ```elixir
-key = Aerospike.key("test", "users", "user:42")
+key = MyApp.Repo.key("test", "users", "user:42")
 ```
 
 The client computes a 20-byte RIPEMD-160 **digest** from these components. The server
@@ -78,7 +88,7 @@ pass `send_key: true`.
 Records contain named **bins** (like columns). Pass a map of bin names to values:
 
 ```elixir
-:ok = Aerospike.put(:aero, key, %{
+:ok = MyApp.Repo.put(key, %{
   "name" => "Ada Lovelace",
   "age" => 36,
   "active" => true
@@ -90,7 +100,7 @@ Aerospike bins support integers, floats, strings, booleans, lists, maps, and bin
 ## Reading Records
 
 ```elixir
-{:ok, record} = Aerospike.get(:aero, key)
+{:ok, record} = MyApp.Repo.get(key)
 record.bins["name"]    # => "Ada Lovelace"
 record.generation      # => 1 (increments on each write)
 record.ttl             # => time-to-live in seconds
@@ -99,13 +109,13 @@ record.ttl             # => time-to-live in seconds
 ## Checking Existence
 
 ```elixir
-{:ok, true} = Aerospike.exists(:aero, key)
+{:ok, true} = MyApp.Repo.exists(key)
 ```
 
 ## Deleting Records
 
 ```elixir
-{:ok, true} = Aerospike.delete(:aero, key)
+{:ok, true} = MyApp.Repo.delete(key)
 ```
 
 Returns `{:ok, true}` if a record was removed, `{:ok, false}` if the key was already absent.
@@ -115,27 +125,27 @@ Returns `{:ok, true}` if a record was removed, `{:ok, false}` if the key was alr
 Touch a record to reset its time-to-live without modifying bins:
 
 ```elixir
-:ok = Aerospike.touch(:aero, key, ttl: 3600)
+:ok = MyApp.Repo.touch(key, ttl: 3600)
 ```
 
 ## Error Handling
 
 All functions return `{:ok, result}` or `{:error, %Aerospike.Error{}}` (see [`Aerospike.Error`](Aerospike.Error.html)).
-Bang variants ([`put!/4`](Aerospike.html#put!/4), [`get!/3`](Aerospike.html#get!/3), etc.) unwrap the success or raise:
+Bang variants on either `MyApp.Repo` or `Aerospike` unwrap success or raise:
 
 ```elixir
 # Pattern matching
-case Aerospike.get(:aero, key) do
+case MyApp.Repo.get(key) do
   {:ok, record} -> process(record)
   {:error, %Aerospike.Error{code: :key_not_found}} -> handle_missing()
   {:error, error} -> handle_error(error)
 end
 
 # Bang variant — raises on error
-record = Aerospike.get!(:aero, key)
+record = MyApp.Repo.get!(key)
 ```
 
-Error codes are atoms: `:key_not_found`, `:timeout`, `:generation_mismatch`, etc.
+Error codes are atoms: `:key_not_found`, `:timeout`, `:generation_error`, etc.
 
 ## Policy Options
 
@@ -143,14 +153,14 @@ Every CRUD function accepts keyword options to control behavior per call:
 
 ```elixir
 # Write with a 2-second timeout and generation check
-:ok = Aerospike.put(:aero, key, bins,
+:ok = MyApp.Repo.put(key, bins,
   timeout: 2_000,
   generation: 3,
   gen_policy: :expect_gen_equal
 )
 
 # Read from a replica node
-{:ok, record} = Aerospike.get(:aero, key, replica: :any)
+{:ok, record} = MyApp.Repo.get(key, replica: :any)
 ```
 
 Common options:
@@ -169,7 +179,7 @@ Common options:
 ## Shutting Down
 
 ```elixir
-:ok = Aerospike.close(:aero)
+:ok = MyApp.Repo.close()
 ```
 
 ## Next Steps
