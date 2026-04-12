@@ -418,6 +418,9 @@ defmodule Aerospike.Router do
       [{_, true}] -> :ok
       _ -> {:error, Error.from_result_code(:cluster_not_ready)}
     end
+  rescue
+    ArgumentError ->
+      {:error, Error.from_result_code(:cluster_not_ready)}
   end
 
   # Looks up which node owns {namespace, partition_id, replica_index} in the

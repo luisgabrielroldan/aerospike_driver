@@ -123,6 +123,16 @@ defmodule Aerospike.AdminTest do
       {:ok, name: name}
     end
 
+    test "returns cluster_not_ready when connection ETS tables do not exist" do
+      missing_name = :"admin_missing_#{System.unique_integer([:positive, :monotonic])}"
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Admin.list_udfs(missing_name, [])
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Aerospike.list_udfs(missing_name)
+    end
+
     test "returns an empty list for an empty udf-list response", %{name: name} do
       {:ok, pool_pid, server} =
         start_pool_with_server(name, fn client ->
