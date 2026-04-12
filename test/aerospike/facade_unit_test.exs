@@ -414,18 +414,21 @@ defmodule Aerospike.FacadeUnitTest do
       assert {:error, %Aerospike.Error{code: :parameter_error}} =
                Aerospike.query_execute(:nonexistent, query, [])
 
-      assert {:error, %Aerospike.Error{code: :unsupported_feature}} =
-               Aerospike.query_execute(:nonexistent, query, [:write_op])
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_execute(conn, query, [get("name")])
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Aerospike.query_execute(conn, query, [put("visits", 1)])
 
       assert_raise Aerospike.Error, fn ->
-        Aerospike.query_execute!(:nonexistent, query, [:write_op])
+        Aerospike.query_execute!(conn, query, [put("visits", 1)])
       end
 
-      assert {:error, %Aerospike.Error{code: :unsupported_feature}} =
-               Aerospike.query_udf(:nonexistent, query, "pkg", "fn", [])
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Aerospike.query_udf(conn, query, "pkg", "fn", [])
 
       assert_raise Aerospike.Error, fn ->
-        Aerospike.query_udf!(:nonexistent, query, "pkg", "fn", [])
+        Aerospike.query_udf!(conn, query, "pkg", "fn", [])
       end
 
       assert {:error, %Aerospike.Error{code: :unsupported_feature}} =

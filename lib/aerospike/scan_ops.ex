@@ -7,10 +7,13 @@ defmodule Aerospike.ScanOps do
   alias Aerospike.Connection
   alias Aerospike.Cursor
   alias Aerospike.Error
+  alias Aerospike.ExecuteTask
   alias Aerospike.Key
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
   alias Aerospike.Policy
+  alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
@@ -29,6 +32,9 @@ defmodule Aerospike.ScanOps do
            node_wires: [{String.t(), pid(), iodata(), ScanQuery.node_partitions()}],
            replica_index: non_neg_integer()
          }
+
+  @typep background_builder ::
+           (Query.t(), ScanQuery.node_partitions(), keyword() -> iodata())
 
   @doc false
   @spec distribute_record_max(pos_integer(), pos_integer()) :: [pos_integer()]
@@ -174,6 +180,49 @@ defmodule Aerospike.ScanOps do
       &next_stream/1,
       &cleanup_stream/1
     )
+  end
+
+  @spec query_execute(atom(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_execute(conn_name, %Query{} = query, ops, opts \\ [])
+      when is_atom(conn_name) and is_list(ops) and is_list(opts) do
+    merged = Policy.merge_defaults(conn_name, :query, opts)
+    task_id = background_task_id()
+
+    with_scan_telemetry(:query_execute, conn_name, query, fn ->
+      run_background_query(
+        conn_name,
+        query,
+        Keyword.put(merged, :task_id, task_id),
+        task_id,
+        :query_execute,
+        fn q, node_partitions, run_opts ->
+          ScanQuery.build_query_execute(q, node_partitions, ops, run_opts)
+        end
+      )
+    end)
+  end
+
+  @spec query_udf(atom(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_udf(conn_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_atom(conn_name) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    merged = Policy.merge_defaults(conn_name, :query, opts)
+    task_id = background_task_id()
+
+    with_scan_telemetry(:query_udf, conn_name, query, fn ->
+      run_background_query(
+        conn_name,
+        query,
+        Keyword.put(merged, :task_id, task_id),
+        task_id,
+        :query_udf,
+        fn q, node_partitions, run_opts ->
+          ScanQuery.build_query_udf(q, node_partitions, package, function, args, run_opts)
+        end
+      )
+    end)
   end
 
   defp init_stream_state(conn_name, scannable, opts) do
@@ -583,9 +632,10 @@ defmodule Aerospike.ScanOps do
           atom(),
           Scan.t() | Query.t(),
           keyword(),
-          (term(), pos_integer() -> [pos_integer()])
+          (term(), pos_integer() -> [pos_integer()]),
+          nil | background_builder()
         ) :: {:ok, fanout_prepared()} | {:error, Error.t()}
-  defp prepare_fanout(conn_name, scannable, opts, distribute_fn) do
+  defp prepare_fanout(conn_name, scannable, opts, distribute_fn, wire_builder \\ nil) do
     replica_index = replica_index_from_opts(opts)
     {full_ids, partials} = Router.expand_partition_filter(scannable.partition_filter)
     set = scannable_set(scannable)
@@ -621,7 +671,7 @@ defmodule Aerospike.ScanOps do
             record_max: node_max
           }
 
-          wire = build_wire(scannable, page_meta, opts)
+          wire = build_wire(scannable, page_meta, opts, wire_builder)
           {node_name, group.pool_pid, wire, page_meta}
         end)
 
@@ -949,11 +999,19 @@ defmodule Aerospike.ScanOps do
   defp namespace_set(%Scan{namespace: ns, set: set}), do: {ns, set}
   defp namespace_set(%Query{namespace: ns, set: set}), do: {ns, set}
 
-  @spec build_wire(Scan.t(), ScanQuery.node_partitions(), keyword()) :: iodata()
-  defp build_wire(%Scan{} = s, np, opts), do: ScanQuery.build_scan(s, np, opts)
+  @spec build_wire(
+          Scan.t() | Query.t(),
+          ScanQuery.node_partitions(),
+          keyword(),
+          nil | background_builder()
+        ) :: iodata()
+  defp build_wire(%Query{} = q, np, opts, builder) when is_function(builder, 3) do
+    builder.(q, np, opts)
+  end
 
-  @spec build_wire(Query.t(), ScanQuery.node_partitions(), keyword()) :: iodata()
-  defp build_wire(%Query{} = q, np, opts), do: ScanQuery.build_query(q, np, opts)
+  defp build_wire(%Scan{} = s, np, opts, nil), do: ScanQuery.build_scan(s, np, opts)
+
+  defp build_wire(%Query{} = q, np, opts, nil), do: ScanQuery.build_query(q, np, opts)
 
   defp replica_index_from_opts(opts) do
     case Keyword.get(opts, :replica_index) do
@@ -1026,4 +1084,105 @@ defmodule Aerospike.ScanOps do
   end
 
   defp maybe_record_device_overload(_conn_name, _node_name, _result), do: :ok
+
+  defp run_background_query(conn_name, query, opts, task_id, kind, wire_builder)
+       when is_function(wire_builder, 3) do
+    distribute_fn = fn total, n ->
+      case total do
+        t when is_integer(t) and t > 0 -> distribute_record_max(t, n)
+        _ -> List.duplicate(0, n)
+      end
+    end
+
+    with {:ok, prepared} <-
+           prepare_fanout(conn_name, query, opts, distribute_fn, wire_builder),
+         :ok <- run_background_node_writes(conn_name, prepared.node_wires, opts) do
+      {:ok,
+       %ExecuteTask{
+         conn: conn_name,
+         namespace: query.namespace,
+         set: query.set,
+         task_id: task_id,
+         kind: kind
+       }}
+    end
+  end
+
+  defp run_background_node_writes(conn_name, node_wires, opts) do
+    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
+
+    {ok_nodes, error_nodes} =
+      Enum.reduce(node_wires, {[], []}, fn {node_name, pool_pid, wire, _meta}, {oks, errs} ->
+        case run_background_node_write(conn_name, node_name, pool_pid, wire, checkout_timeout) do
+          :ok -> {[node_name | oks], errs}
+          {:error, %Error{} = err} -> {oks, [{node_name, err} | errs]}
+        end
+      end)
+
+    finalize_background_node_writes(ok_nodes, error_nodes)
+  end
+
+  defp run_background_node_write(conn_name, node_name, pool_pid, wire, checkout_timeout) do
+    with {:ok, body} <-
+           Router.checkout_and_request(
+             pool_pid,
+             wire,
+             checkout_timeout,
+             {conn_name, node_name}
+           ),
+         {:ok, msg} <- decode_background_response(body),
+         result <- Response.parse_write_response(msg) do
+      maybe_record_device_overload(conn_name, node_name, normalize_background_result(result))
+      normalize_background_result(result, node_name)
+    end
+  end
+
+  defp normalize_background_result(:ok), do: :ok
+  defp normalize_background_result({:error, %Error{} = err}), do: {:error, err}
+
+  defp normalize_background_result(:ok, _node_name), do: :ok
+
+  defp normalize_background_result({:error, %Error{} = err}, node_name) do
+    {:error, ensure_error_node(err, node_name)}
+  end
+
+  defp finalize_background_node_writes(_ok_nodes, []), do: :ok
+
+  defp finalize_background_node_writes([], [{_node_name, %Error{} = err} | _rest]),
+    do: {:error, err}
+
+  defp finalize_background_node_writes(ok_nodes, [{failed_node, %Error{} = err} | rest]) do
+    failed_count = 1 + length(rest)
+    started_count = length(ok_nodes)
+    err = ensure_error_node(err, failed_node)
+
+    {:error,
+     %{
+       err
+       | in_doubt: true,
+         message:
+           "background query started on #{started_count} node(s) but failed on #{failed_count} node(s): #{err.message}"
+     }}
+  end
+
+  defp decode_background_response(body) when is_binary(body) do
+    case AsmMsg.decode(body) do
+      {:ok, msg} ->
+        {:ok, msg}
+
+      {:error, reason} ->
+        {:error,
+         Error.from_result_code(:parse_error,
+           message: "invalid background query response: #{inspect(reason)}"
+         )}
+    end
+  end
+
+  defp ensure_error_node(%Error{node: nil} = err, node_name), do: %{err | node: node_name}
+  defp ensure_error_node(%Error{} = err, _node_name), do: err
+
+  defp background_task_id do
+    <<task_id::64-unsigned-big>> = :crypto.strong_rand_bytes(8)
+    task_id
+  end
 end

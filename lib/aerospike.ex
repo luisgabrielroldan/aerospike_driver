@@ -58,6 +58,7 @@ defmodule Aerospike do
   alias Aerospike.Page
   alias Aerospike.Policy
   alias Aerospike.Privilege
+  alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Query
   alias Aerospike.RegisterTask
   alias Aerospike.Role
@@ -905,14 +906,21 @@ defmodule Aerospike do
   Starts a background query that applies write operations to matching records.
 
   Returns an `%Aerospike.ExecuteTask{}` that can later be polled or awaited.
-  Runtime support is added in a later Phase 2 task.
   """
   @spec query_execute(conn(), Query.t(), list(), keyword()) ::
           {:ok, execute_task()} | {:error, Error.t()}
-  def query_execute(conn, %Query{} = _query, ops, opts \\ [])
+  def query_execute(conn, %Query{} = query, ops, opts \\ [])
       when is_atom(conn) and is_list(ops) and is_list(opts) do
-    with :ok <- validate_query_ops(ops) do
-      unsupported_phase_2_operation(:query_execute)
+    with :ok <- validate_query_ops(ops),
+         {:ok, call_opts} <- Policy.validate_query(opts) do
+      ScanOps.query_execute(conn, query, ops, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
     end
   end
 
@@ -932,14 +940,20 @@ defmodule Aerospike do
   Starts a background query that applies a record UDF to matching records.
 
   Returns an `%Aerospike.ExecuteTask{}` that can later be polled or awaited.
-  Runtime support is added in a later Phase 2 task.
   """
   @spec query_udf(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, execute_task()} | {:error, Error.t()}
-  def query_udf(conn, %Query{} = _query, package, function, args, opts \\ [])
+  def query_udf(conn, %Query{} = query, package, function, args, opts \\ [])
       when is_atom(conn) and is_binary(package) and is_binary(function) and is_list(args) and
              is_list(opts) do
-    unsupported_phase_2_operation(:query_udf)
+    case Policy.validate_query(opts) do
+      {:ok, call_opts} ->
+        ScanOps.query_udf(conn, query, package, function, args, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
   end
 
   @doc """
@@ -1972,7 +1986,38 @@ defmodule Aerospike do
      Error.from_result_code(:parameter_error, message: "query operations cannot be empty")}
   end
 
-  defp validate_query_ops(_ops), do: :ok
+  defp validate_query_ops(ops) when is_list(ops) do
+    case Enum.find(ops, &(not query_background_write_op?(&1))) do
+      nil ->
+        :ok
+
+      invalid ->
+        {:error,
+         Error.from_result_code(:parameter_error,
+           message:
+             "background query operations must all be write operations, got: #{inspect(invalid)}"
+         )}
+    end
+  end
+
+  defp query_background_write_op?(%Operation{read_header: true}), do: false
+
+  defp query_background_write_op?(%Operation{op_type: op_type}) do
+    op_type in [
+      Operation.op_write(),
+      Operation.op_cdt_modify(),
+      Operation.op_add(),
+      Operation.op_exp_modify(),
+      Operation.op_append(),
+      Operation.op_prepend(),
+      Operation.op_touch(),
+      Operation.op_bit_modify(),
+      Operation.op_delete(),
+      Operation.op_hll_modify()
+    ]
+  end
+
+  defp query_background_write_op?(_), do: false
 
   @spec unsupported_phase_2_operation(atom()) :: {:ok, term()} | {:error, Error.t()}
   defp unsupported_phase_2_operation(op_name) do
