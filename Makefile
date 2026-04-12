@@ -40,7 +40,7 @@ test.tls: tls-fixtures
 # Single-node dependencies (unit/property/basic integration).
 deps-up:
 	@docker compose up -d aerospike
-	@$(MAKE) wait-service SERVICE=aerospike
+	@$(MAKE) wait-service SERVICE=aerospike1
 	@echo "Dependencies ready: localhost:3000"
 
 # Multi-node cluster dependencies (cluster integration tests).
@@ -145,7 +145,7 @@ test-integration-ci:
 	@AEROSPIKE_HOST=$(AEROSPIKE_HOST) AEROSPIKE_PORT=$(AEROSPIKE_PORT) \
 		mix test --include integration
 
-test-enterprise-ci: tls-fixtures
+test-enterprise-ci:
 	@AEROSPIKE_EE_HOST=$(AEROSPIKE_EE_HOST) AEROSPIKE_EE_PORT=$(AEROSPIKE_EE_PORT) \
 	AEROSPIKE_SECURITY_EE_HOST=$(AEROSPIKE_SECURITY_EE_HOST) AEROSPIKE_SECURITY_EE_PORT=$(AEROSPIKE_SECURITY_EE_PORT) \
 	AEROSPIKE_SECURITY_EE_USER=$(AEROSPIKE_SECURITY_EE_USER) AEROSPIKE_SECURITY_EE_PASSWORD=$(AEROSPIKE_SECURITY_EE_PASSWORD) \
