@@ -116,6 +116,80 @@ defmodule Aerospike.AdminTest do
     end
   end
 
+  describe "list_udfs/2" do
+    setup do
+      name = :"admin_udf_list_#{:erlang.unique_integer([:positive])}"
+      start_ets(name)
+      {:ok, name: name}
+    end
+
+    test "returns cluster_not_ready when connection ETS tables do not exist" do
+      missing_name = :"admin_missing_#{System.unique_integer([:positive, :monotonic])}"
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Admin.list_udfs(missing_name, [])
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Aerospike.list_udfs(missing_name)
+    end
+
+    test "returns an empty list for an empty udf-list response", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "udf-list\n"
+          MockTcpServer.send_info_response(client, "udf-list\t\n")
+        end)
+
+      register_node(name, pool_pid, 3_020)
+
+      assert {:ok, []} = Admin.list_udfs(name, [])
+      Task.await(server)
+    end
+
+    test "parses multiple udf inventory entries and skips blank fragments", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "udf-list\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "udf-list\tfilename=alpha.lua,hash=abc123,type=LUA; ;filename=beta.lua,hash=def456,type=LUA;\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_021)
+
+      assert {:ok,
+              [
+                %Aerospike.UDF{filename: "alpha.lua", hash: "abc123", language: "LUA"},
+                %Aerospike.UDF{filename: "beta.lua", hash: "def456", language: "LUA"}
+              ]} = Admin.list_udfs(name, [])
+
+      Task.await(server)
+    end
+
+    test "returns server_error for malformed udf inventory fragments", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "udf-list\n"
+          MockTcpServer.send_info_response(client, "udf-list\tfilename=broken.lua,hash=abc123;\n")
+        end)
+
+      register_node(name, pool_pid, 3_022)
+
+      assert {:error, %Aerospike.Error{code: :server_error, message: message}} =
+               Admin.list_udfs(name, [])
+
+      assert message ==
+               "invalid udf-list entry (missing type): \"filename=broken.lua,hash=abc123\""
+
+      Task.await(server)
+    end
+  end
+
   describe "PasswordHash.hash/1" do
     test "matches the Go client for known inputs" do
       assert PasswordHash.hash("secret") ==

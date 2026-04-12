@@ -5,6 +5,7 @@ defmodule Aerospike.FacadeUnitTest do
 
   alias Aerospike.Batch
   alias Aerospike.Key
+  alias Aerospike.Query
   alias Aerospike.Scan
   alias Aerospike.TableOwner
   alias Aerospike.Tables
@@ -296,6 +297,38 @@ defmodule Aerospike.FacadeUnitTest do
       end
     end
 
+    test "query-specific read APIs map option validation errors and bang wrappers raise" do
+      query = Query.new("test", "users")
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_stream(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_stream!(:nonexistent, query, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_all(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_all!(:nonexistent, query, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_count(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_count!(:nonexistent, query, bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_page(:nonexistent, query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_page!(:nonexistent, query, bad_opt: true)
+      end
+    end
+
     test "admin wrappers map validation errors", %{} do
       assert {:error, %Aerospike.Error{code: :parameter_error}} =
                Aerospike.info(:nonexistent, "namespaces", bad_opt: true)
@@ -344,6 +377,70 @@ defmodule Aerospike.FacadeUnitTest do
 
       assert {:error, %Aerospike.Error{}} =
                Aerospike.apply_udf(conn, key, "pkg", "f", [], timeout: 1_000)
+    end
+
+    test "phase 2 query/UDF APIs expose explicit contracts" do
+      conn = :"facade_phase2_#{System.unique_integer([:positive, :monotonic])}"
+      meta = Tables.meta(conn)
+      nodes = Tables.nodes(conn)
+      parts = Tables.partitions(conn)
+
+      :ets.new(meta, [:set, :public, :named_table])
+      :ets.new(nodes, [:set, :public, :named_table, read_concurrency: true])
+      :ets.new(parts, [:set, :public, :named_table, read_concurrency: true])
+
+      on_exit(fn ->
+        for t <- [meta, nodes, parts] do
+          try do
+            :ets.delete(t)
+          catch
+            :error, :badarg -> :ok
+          end
+        end
+      end)
+
+      query = Query.new("test", "users")
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.list_udfs(:nonexistent, bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Aerospike.list_udfs(conn)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.list_udfs!(conn)
+      end
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_execute(:nonexistent, query, [])
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_execute(conn, query, [get("name")])
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Aerospike.query_execute(conn, query, [put("visits", 1)])
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_execute!(conn, query, [put("visits", 1)])
+      end
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+               Aerospike.query_udf(conn, query, "pkg", "fn", [])
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_udf!(conn, query, "pkg", "fn", [])
+      end
+
+      assert {:ok, aggregate_stream} =
+               Aerospike.query_aggregate(conn, query, "pkg", "fn", [])
+
+      assert_raise Aerospike.Error, fn ->
+        Enum.to_list(aggregate_stream)
+      end
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_aggregate!(conn, query, "pkg", "fn", []) |> Enum.to_list()
+      end
     end
 
     test "transaction wrappers delegate to TxnRoll variants" do

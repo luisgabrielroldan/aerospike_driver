@@ -96,6 +96,35 @@ defmodule Aerospike.Integration.UDFTest do
     end
   end
 
+  describe "udf inventory lifecycle" do
+    test "list_udfs/1 reflects registration and removal", %{conn: conn} do
+      assert {:ok, udfs} = Aerospike.list_udfs(conn)
+
+      assert %Aerospike.UDF{filename: @server_name, language: "LUA", hash: hash} =
+               Enum.find(udfs, &(&1.filename == @server_name))
+
+      assert is_binary(hash)
+      assert hash != ""
+
+      assert :ok = Aerospike.remove_udf(conn, @server_name)
+
+      assert_eventually(
+        fn ->
+          case Aerospike.list_udfs(conn) do
+            {:ok, udfs2} ->
+              removed? = Enum.all?(udfs2, &(&1.filename != @server_name))
+              {removed?, "udf #{inspect(@server_name)} still present: #{inspect(udfs2)}"}
+
+            {:error, err} ->
+              {false, "list_udfs failed after remove: #{inspect(err)}"}
+          end
+        end,
+        timeout: 10_000,
+        interval: 200
+      )
+    end
+  end
+
   describe "demo parity — lifecycle and batch UDF" do
     test "register inline package, mutate record, remove package", %{
       conn: conn,
@@ -144,6 +173,38 @@ defmodule Aerospike.Integration.UDFTest do
     end
 
     :ok
+  end
+
+  defp assert_eventually(fun, opts) when is_function(fun, 0) and is_list(opts) do
+    timeout = Keyword.fetch!(opts, :timeout)
+    interval = Keyword.get(opts, :interval, 200)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    assert_eventually_loop(fun, deadline, interval, nil)
+  end
+
+  defp assert_eventually_loop(fun, deadline, interval, last_message) do
+    case fun.() do
+      true ->
+        :ok
+
+      {true, _message} ->
+        :ok
+
+      false ->
+        await_or_flunk(fun, deadline, interval, last_message || "condition returned false")
+
+      {false, message} when is_binary(message) ->
+        await_or_flunk(fun, deadline, interval, message)
+    end
+  end
+
+  defp await_or_flunk(fun, deadline, interval, message) do
+    if System.monotonic_time(:millisecond) > deadline do
+      flunk("condition did not become true within timeout: #{message}")
+    else
+      Process.sleep(interval)
+      assert_eventually_loop(fun, deadline, interval, message)
+    end
   end
 
   defp await_cluster_ready(name, timeout \\ 5_000) do

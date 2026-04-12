@@ -31,6 +31,20 @@ defmodule Aerospike.RouterUnitTest do
     assert {:error, %{code: :cluster_not_ready}} = Router.run(name, key, <<>>)
   end
 
+  test "returns cluster_not_ready when connection ETS tables do not exist" do
+    missing_name = :"router_missing_#{System.unique_integer([:positive, :monotonic])}"
+    key = Key.new("test", "x", "y")
+
+    assert {:error, %{code: :cluster_not_ready}} = Router.run(missing_name, key, <<>>)
+    assert {:error, %{code: :cluster_not_ready}} = Router.group_by_node(missing_name, [key])
+
+    assert {:error, %{code: :cluster_not_ready}} =
+             Router.group_partitions_by_node(missing_name, "test", [0], 0)
+
+    assert {:error, %{code: :cluster_not_ready}} = Router.random_node_pool(missing_name)
+    assert {:error, %{code: :cluster_not_ready}} = Router.node_pool(missing_name, "node1")
+  end
+
   test "returns invalid_cluster_partition_map when partition missing", %{name: name} do
     :ets.insert(Tables.meta(name), {Tables.ready_key(), true})
     key = Key.new("test", "x", "y")

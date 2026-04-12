@@ -144,6 +144,43 @@ optional keywords such as `:timeout`, `:pool_checkout_timeout`, and `:replica`
 (merged with `defaults: [scan: ...]` or `defaults: [query: ...]` where
 configured).
 
+### Query execution modes
+
+Phase 2 keeps the builder model the same, but splits execution into three
+distinct query paths:
+
+- [`query_stream/3`](Aerospike.html#query_stream/3) reads matching records and
+  yields `%Aerospike.Record{}` structs.
+- [`query_execute/4`](Aerospike.html#query_execute/4) and
+  [`query_udf/6`](Aerospike.html#query_udf/6) run background server-side work
+  and return an [`Aerospike.ExecuteTask`](Aerospike.ExecuteTask.html).
+- [`query_aggregate/6`](Aerospike.html#query_aggregate/6) streams aggregate
+  values from a query-wide stream UDF instead of raw records.
+
+```elixir
+alias Aerospike.{ExecuteTask, Filter, Operation, Query}
+
+query =
+  Query.new("test", "users")
+  |> Query.where(Filter.range("score", 100, 1_000))
+
+records =
+  MyApp.Repo.query_stream(query)
+  |> Enum.take(10)
+
+{:ok, task} =
+  MyApp.Repo.query_execute(
+    query,
+    [Operation.put("tier", "gold")]
+  )
+
+:ok = ExecuteTask.wait(task, timeout: 15_000)
+
+aggregate_values =
+  MyApp.Repo.query_aggregate(query, "leaderboard", "sum_scores", ["score"])
+  |> Enum.to_list()
+```
+
 ### `Aerospike.all/3` and `all!/3`
 
 [`all/3`](Aerospike.html#all/3) eagerly collects matching records into a list. **`max_records` must be set** on the builder ([`Scan.max_records/2`](Aerospike.Scan.html#max_records/2) or [`Query.max_records/2`](Aerospike.Query.html#max_records/2)); otherwise you get `{:error, %Aerospike.Error{code: :max_records_required}}`.
@@ -336,6 +373,11 @@ Scans use the scan path; query-specific short-query hints apply to `Query` execu
 - **`count/3` still has to walk matching records.** It skips bin data, but
   the server still sends one lightweight result per record and the client
   tallies them.
+- **`query_aggregate/6` streams server aggregate values, not a client-finalized result.**
+  The current client does not execute a local Lua reduction step across partial
+  values from multiple nodes. For aggregate UDFs that naturally produce one
+  value per node, callers should expect multiple values and reduce them in
+  Elixir when they need a single final answer.
 - **For plain "how many records are in this set?" checks, use info stats when possible.**
   The raw info command (`sets/<ns>/<set>`) is usually faster because it
   returns pre-aggregated set metadata instead of streaming per-record results.

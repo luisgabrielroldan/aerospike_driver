@@ -5,6 +5,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
   alias Aerospike.Filter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
+  alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Query
@@ -162,6 +163,94 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert_raise ArgumentError, fn ->
       ScanQuery.build_query(q, %{parts_full: [], parts_partial: [], record_max: 0}, [])
     end
+  end
+
+  test "build_query_execute/4 writes background query header and operations" do
+    q =
+      Query.new("ns", "set1")
+      |> Query.where(Filter.equal("age", 42))
+
+    ops = [
+      %Operation{
+        op_type: Operation.op_write(),
+        particle_type: 1,
+        bin_name: "visits",
+        data: <<5::64-signed-big>>
+      }
+    ]
+
+    wire =
+      ScanQuery.build_query_execute(q, %{parts_full: [4], parts_partial: [], record_max: 9}, ops,
+        timeout: 9_000,
+        task_id: 77
+      )
+
+    msg = decode_as_msg(wire)
+
+    assert msg.info1 == 0
+    assert Bitwise.band(msg.info2, AsmMsg.info2_write()) != 0
+    assert msg.info3 == 0
+    assert msg.timeout == 9_000
+    assert msg.operations == ops
+    assert field_data(msg, Field.type_query_id()) == <<77::64-unsigned-big>>
+    assert field_data(msg, Field.type_max_records()) == <<9::64-signed-big>>
+    refute Field.type_udf_op() in field_types(msg)
+  end
+
+  test "build_query_udf/6 uses UDF_OP=2 and no record operations" do
+    q =
+      Query.new("ns", "set1")
+      |> Query.where(Filter.equal("city", "mtv"))
+      |> Query.records_per_second(321)
+
+    wire =
+      ScanQuery.build_query_udf(
+        q,
+        %{parts_full: [5], parts_partial: [], record_max: 0},
+        "pkg",
+        "fn",
+        ["value", 3],
+        task_id: 99
+      )
+
+    msg = decode_as_msg(wire)
+
+    assert Bitwise.band(msg.info2, AsmMsg.info2_write()) != 0
+    assert msg.operations == []
+    assert field_data(msg, Field.type_udf_op()) == <<2>>
+    assert field_data(msg, Field.type_udf_package_name()) == "pkg"
+    assert field_data(msg, Field.type_udf_function()) == "fn"
+    assert field_data(msg, Field.type_records_per_second()) == <<321::32-signed-big>>
+  end
+
+  test "build_query_aggregate/6 uses UDF_OP=1 and keeps query read flags" do
+    q =
+      Query.new("ns", "set1")
+      |> Query.where(Filter.equal("city", "mtv"))
+      |> Query.select(["score"])
+
+    wire =
+      ScanQuery.build_query_aggregate(
+        q,
+        %{parts_full: [5], parts_partial: [], record_max: 11},
+        "pkg",
+        "sum_scores",
+        ["score"],
+        task_id: 101
+      )
+
+    msg = decode_as_msg(wire)
+
+    assert Bitwise.band(msg.info1, AsmMsg.info1_read()) != 0
+    assert Bitwise.band(msg.info1, AsmMsg.info1_short_query()) != 0
+    assert Bitwise.band(msg.info2, AsmMsg.info2_relax_ap_long_query()) != 0
+    assert Bitwise.band(msg.info3, AsmMsg.info3_partition_done()) != 0
+    assert field_data(msg, Field.type_udf_op()) == <<1>>
+    assert field_data(msg, Field.type_udf_package_name()) == "pkg"
+    assert field_data(msg, Field.type_udf_function()) == "sum_scores"
+    assert field_data(msg, Field.type_query_id()) == <<101::64-unsigned-big>>
+    assert field_data(msg, Field.type_max_records()) == <<11::64-signed-big>>
+    assert Enum.map(msg.operations, & &1.bin_name) == ["score"]
   end
 
   test "scan attaches FILTER_EXP from expression filters" do

@@ -75,4 +75,12 @@ defmodule Aerospike.QueryTest do
       assert q.no_bins == true
     end
   end
+
+  test "query remains a pure selection builder" do
+    q = Query.new("ns", "users")
+
+    refute Map.has_key?(q, :ops)
+    refute Map.has_key?(q, :package)
+    refute Map.has_key?(q, :function)
+  end
 end

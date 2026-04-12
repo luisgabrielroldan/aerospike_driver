@@ -30,6 +30,12 @@ defmodule Aerospike.Protocol.ScanResponse do
           required(:last?) => boolean()
         }
 
+  @type aggregate_frame_result :: %{
+          required(:results) => [term()],
+          required(:partition_done) => [partition_done_info()] | nil,
+          required(:last?) => boolean()
+        }
+
   @doc """
   Parses a concatenated scan/query response body (multiple AS_MSG bodies, no 8-byte proto framing).
 
@@ -72,6 +78,25 @@ defmodule Aerospike.Protocol.ScanResponse do
 
     case do_parse(body, namespace, set, [], []) do
       {:ok, records, parts, done?} -> {:ok, records, parts, done?}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  Parses AS_MSG bodies from one aggregate-query protocol chunk while streaming.
+
+  Aggregate query frames must contain exactly one result operation whose bin name
+  is `SUCCESS`. A `FAILURE` bin is translated into `:query_generic`.
+  """
+  @spec parse_aggregate_stream_chunk(binary(), String.t(), String.t() | nil) ::
+          {:ok, [term()], [partition_done_info()], boolean()} | {:error, Error.t()}
+  def parse_aggregate_stream_chunk(body, namespace, set_name \\ nil)
+      when is_binary(body) and is_binary(namespace) and
+             (is_binary(set_name) or is_nil(set_name)) do
+    set = if is_nil(set_name), do: "", else: set_name
+
+    case do_parse_aggregate(body, namespace, set, [], []) do
+      {:ok, results, parts, done?} -> {:ok, results, parts, done?}
       {:error, _} = err -> err
     end
   end
@@ -133,6 +158,37 @@ defmodule Aerospike.Protocol.ScanResponse do
     end
   end
 
+  defp do_parse_aggregate(<<>>, _namespace, _set, results, parts) do
+    {:ok, Enum.reverse(results), Enum.reverse(parts), false}
+  end
+
+  defp do_parse_aggregate(data, namespace, set, results, parts) do
+    case read_header(data) do
+      {:error, reason} ->
+        {:error, Error.from_result_code(:parse_error, message: inspect(reason))}
+
+      {:ok, meta, rest} ->
+        case process_one_aggregate_frame(meta, rest, namespace, set) do
+          {:ok, result, tail} ->
+            continue_parse_aggregate(result, tail, namespace, set, results, parts)
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  defp continue_parse_aggregate(result, tail, namespace, set, results, parts) do
+    results2 = prepend_results(results, result.results)
+    parts2 = prepend_parts(parts, result.partition_done)
+
+    if result.last? do
+      finish_scan(results2, parts2, tail)
+    else
+      do_parse_aggregate(tail, namespace, set, results2, parts2)
+    end
+  end
+
   defp finish_scan(records, parts, <<>>) do
     {:ok, Enum.reverse(records), Enum.reverse(parts), true}
   end
@@ -144,6 +200,9 @@ defmodule Aerospike.Protocol.ScanResponse do
 
   defp prepend_records(acc, []), do: acc
   defp prepend_records(acc, [r | more]), do: prepend_records([r | acc], more)
+
+  defp prepend_results(acc, []), do: acc
+  defp prepend_results(acc, [result | more]), do: prepend_results([result | acc], more)
 
   defp prepend_parts(acc, nil), do: acc
   defp prepend_parts(acc, []), do: acc
@@ -193,6 +252,50 @@ defmodule Aerospike.Protocol.ScanResponse do
     end
   end
 
+  defp process_one_aggregate_frame(meta, rest, _namespace, _default_set) do
+    case decode_fields(rest, meta.field_count) do
+      {:error, reason} ->
+        {:error, Error.from_result_code(:parse_error, message: inspect(reason))}
+
+      {:ok, fields, after_fields} ->
+        dispatch_aggregate_frame(meta, fields, after_fields)
+    end
+  end
+
+  defp dispatch_aggregate_frame(meta, fields, after_fields) do
+    last? = meta.last?
+    partition_done? = partition_done_flag?(meta)
+
+    cond do
+      partition_done? ->
+        handle_aggregate_partition_done(meta, fields, after_fields)
+
+      last? and fatal_error_rc?(meta.rc) ->
+        skip_ops_then(after_fields, meta.op_count, fn _tail ->
+          {:fatal, code} = last_frame_rc(meta.rc)
+          {:error, Error.from_result_code(code)}
+        end)
+
+      last? ->
+        skip_ops_then(after_fields, meta.op_count, fn tail ->
+          {:ok, %{results: [], partition_done: nil, last?: true}, tail}
+        end)
+
+      stream_terminal_rc?(meta.rc) ->
+        skip_ops_then(after_fields, meta.op_count, fn tail ->
+          {:ok, %{results: [], partition_done: nil, last?: true}, tail}
+        end)
+
+      partition_skip_rc?(meta.rc) ->
+        skip_ops_then(after_fields, meta.op_count, fn tail ->
+          {:ok, %{results: [], partition_done: nil, last?: false}, tail}
+        end)
+
+      true ->
+        decode_aggregate_frame(meta, after_fields)
+    end
+  end
+
   defp partition_done_flag?(meta),
     do: (meta.info3 &&& AsmMsg.info3_partition_done()) != 0
 
@@ -204,6 +307,15 @@ defmodule Aerospike.Protocol.ScanResponse do
 
     skip_ops_then(after_fields, meta.op_count, fn tail ->
       {:ok, %{records: [], partition_done: [pinfo], last?: last?}, tail}
+    end)
+  end
+
+  defp handle_aggregate_partition_done(meta, fields, after_fields) do
+    last? = meta.last?
+    pinfo = partition_done_from_fields(meta.generation, fields)
+
+    skip_ops_then(after_fields, meta.op_count, fn tail ->
+      {:ok, %{results: [], partition_done: [pinfo], last?: last?}, tail}
     end)
   end
 
@@ -223,6 +335,17 @@ defmodule Aerospike.Protocol.ScanResponse do
 
       {:error, r} ->
         {:error, Error.from_result_code(:parse_error, message: inspect(r))}
+    end
+  end
+
+  defp decode_aggregate_frame(meta, after_fields) do
+    with :ok <- ensure_single_aggregate_op(meta.op_count),
+         {:ok, bins, tail} <- decode_aggregate_bins(after_fields, meta.op_count),
+         {:ok, result} <- extract_aggregate_result(bins) do
+      {:ok, %{results: [result], partition_done: nil, last?: false}, tail}
+    else
+      {:error, %Error{} = e} -> {:error, e}
+      {:error, reason} -> {:error, Error.from_result_code(:parse_error, message: inspect(reason))}
     end
   end
 
@@ -404,6 +527,36 @@ defmodule Aerospike.Protocol.ScanResponse do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  defp extract_aggregate_result(%{"SUCCESS" => result}), do: {:ok, result}
+
+  defp extract_aggregate_result(%{"FAILURE" => message}) do
+    {:error, Error.from_result_code(:query_generic, message: to_string(message))}
+  end
+
+  defp extract_aggregate_result(bins) do
+    {:error,
+     Error.from_result_code(:parse_error,
+       message: "query aggregate expected SUCCESS bin, got #{inspect(Map.keys(bins))}"
+     )}
+  end
+
+  defp ensure_single_aggregate_op(1), do: :ok
+
+  defp ensure_single_aggregate_op(op_count) do
+    {:error,
+     Error.from_result_code(:parse_error,
+       message: "query aggregate expects exactly one operation, got #{op_count}"
+     )}
+  end
+
+  defp decode_aggregate_bins(after_fields, op_count) do
+    case decode_operations_to_bins(after_fields, op_count) do
+      {:ok, bins, tail} -> {:ok, bins, tail}
+      {:error, %Error{} = e} -> {:error, e}
+      {:error, reason} -> {:error, reason}
     end
   end
 

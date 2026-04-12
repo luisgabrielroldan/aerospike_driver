@@ -30,6 +30,22 @@ defmodule Aerospike.RepoTest do
     def batch_get(conn, keys, opts), do: record(:batch_get, [conn, keys, opts], {:ok, []})
     def batch_operate(conn, ops, opts), do: record(:batch_operate, [conn, ops, opts], {:ok, []})
 
+    def query_stream(conn, query, opts),
+      do: record(:query_stream, [conn, query, opts], {:ok, :q_stream})
+
+    def query_stream!(conn, query, opts),
+      do: record(:query_stream!, [conn, query, opts], :q_stream)
+
+    def query_all(conn, query, opts), do: record(:query_all, [conn, query, opts], {:ok, []})
+    def query_all!(conn, query, opts), do: record(:query_all!, [conn, query, opts], [])
+    def query_count(conn, query, opts), do: record(:query_count, [conn, query, opts], {:ok, 0})
+    def query_count!(conn, query, opts), do: record(:query_count!, [conn, query, opts], 0)
+
+    def query_page(conn, query, opts),
+      do: record(:query_page, [conn, query, opts], {:ok, :q_page})
+
+    def query_page!(conn, query, opts), do: record(:query_page!, [conn, query, opts], :q_page)
+
     def stream!(conn, scannable, opts),
       do: record(:stream!, [conn, scannable, opts], :fake_stream)
 
@@ -37,6 +53,28 @@ defmodule Aerospike.RepoTest do
     def page(conn, scannable, opts), do: record(:page, [conn, scannable, opts], {:ok, :fake_page})
     def info(conn, command, opts), do: record(:info, [conn, command, opts], {:ok, "ok"})
     def nodes(conn), do: record(:nodes, [conn], {:ok, []})
+    def list_udfs(conn, opts \\ []), do: record(:list_udfs, [conn, opts], {:ok, []})
+    def list_udfs!(conn, opts \\ []), do: record(:list_udfs!, [conn, opts], [])
+
+    def query_execute(conn, query, ops, opts \\ []),
+      do: record(:query_execute, [conn, query, ops, opts], {:ok, :execute_task})
+
+    def query_execute!(conn, query, ops, opts \\ []),
+      do: record(:query_execute!, [conn, query, ops, opts], :execute_task)
+
+    def query_udf(conn, query, package, function, args, opts \\ []),
+      do: record(:query_udf, [conn, query, package, function, args, opts], {:ok, :execute_task})
+
+    def query_udf!(conn, query, package, function, args, opts \\ []),
+      do: record(:query_udf!, [conn, query, package, function, args, opts], :execute_task)
+
+    def query_aggregate(conn, query, package, function, args, opts \\ []),
+      do:
+        record(:query_aggregate, [conn, query, package, function, args, opts], {:ok, :agg_stream})
+
+    def query_aggregate!(conn, query, package, function, args, opts \\ []),
+      do: record(:query_aggregate!, [conn, query, package, function, args, opts], :agg_stream)
+
     def transaction(conn, fun), do: record(:transaction_2, [conn, fun], {:ok, :tx_ok})
 
     def transaction(conn, txn_or_opts, fun),
@@ -170,11 +208,33 @@ defmodule Aerospike.RepoTest do
       assert {:ok, true} = NamedRepo.delete(key, [])
       assert {:ok, []} = NamedRepo.batch_get([key], timeout: 1_000)
       assert {:ok, []} = NamedRepo.batch_operate([], timeout: 1_000)
+      assert {:ok, :q_stream} = NamedRepo.query_stream(scannable, timeout: 2_000)
+      assert :q_stream = NamedRepo.query_stream!(scannable, timeout: 2_000)
+      assert {:ok, []} = NamedRepo.query_all(scannable, timeout: 2_000)
+      assert [] = NamedRepo.query_all!(scannable, timeout: 2_000)
+      assert {:ok, 0} = NamedRepo.query_count(scannable, timeout: 2_000)
+      assert 0 = NamedRepo.query_count!(scannable, timeout: 2_000)
+      assert {:ok, :q_page} = NamedRepo.query_page(scannable, timeout: 2_000)
+      assert :q_page = NamedRepo.query_page!(scannable, timeout: 2_000)
       assert :fake_stream = NamedRepo.stream!(scannable, timeout: 2_000)
       assert {:ok, []} = NamedRepo.all(scannable, timeout: 2_000)
       assert {:ok, :fake_page} = NamedRepo.page(scannable, timeout: 2_000)
       assert {:ok, "ok"} = NamedRepo.info("namespaces", timeout: 2_000)
       assert {:ok, []} = NamedRepo.nodes()
+      assert {:ok, []} = NamedRepo.list_udfs(timeout: 2_000)
+      assert [] = NamedRepo.list_udfs!(timeout: 2_000)
+      assert {:ok, :execute_task} = NamedRepo.query_execute(scannable, [:op], timeout: 2_000)
+      assert :execute_task = NamedRepo.query_execute!(scannable, [:op], timeout: 2_000)
+
+      assert {:ok, :execute_task} =
+               NamedRepo.query_udf(scannable, "pkg", "fn", [], timeout: 2_000)
+
+      assert :execute_task = NamedRepo.query_udf!(scannable, "pkg", "fn", [], timeout: 2_000)
+
+      assert {:ok, :agg_stream} =
+               NamedRepo.query_aggregate(scannable, "pkg", "fn", [], timeout: 2_000)
+
+      assert :agg_stream = NamedRepo.query_aggregate!(scannable, "pkg", "fn", [], timeout: 2_000)
       assert {:ok, :tx_ok} = NamedRepo.transaction(fn _ -> :ok end)
       assert {:ok, :tx_ok} = NamedRepo.transaction([timeout: 5_000], fn _ -> :ok end)
       assert {:ok, :committed} = NamedRepo.commit(txn)
@@ -188,12 +248,15 @@ defmodule Aerospike.RepoTest do
       assert {:batch_get, [:repo_conn, [^key], [timeout: 1_000]]} =
                Enum.at(FakeAdapter.calls(), 3)
 
-      assert {:stream!, [:repo_conn, ^scannable, [timeout: 2_000]]} =
+      assert {:query_stream, [:repo_conn, ^scannable, [timeout: 2_000]]} =
                Enum.at(FakeAdapter.calls(), 5)
 
-      assert {:transaction_2, [:repo_conn, _fun]} = Enum.at(FakeAdapter.calls(), 10)
-      assert {:commit, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 12)
-      assert {:abort, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 13)
+      assert {:stream!, [:repo_conn, ^scannable, [timeout: 2_000]]} =
+               Enum.at(FakeAdapter.calls(), 13)
+
+      assert {:transaction_2, [:repo_conn, _fun]} = Enum.at(FakeAdapter.calls(), 26)
+      assert {:commit, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 28)
+      assert {:abort, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 29)
     end
   end
 

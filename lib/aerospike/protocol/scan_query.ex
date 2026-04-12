@@ -10,6 +10,7 @@ defmodule Aerospike.Protocol.ScanQuery do
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.MessagePack
   alias Aerospike.Query
   alias Aerospike.Scan
 
@@ -85,7 +86,73 @@ defmodule Aerospike.Protocol.ScanQuery do
     end
   end
 
-  defp build_query_with_filter(query, node_partitions, opts, index_filter) do
+  @doc """
+  Builds a background-query wire message for write operations over query matches.
+  """
+  @spec build_query_execute(Query.t(), node_partitions(), [Operation.t()], keyword()) :: iodata()
+  def build_query_execute(%Query{} = query, node_partitions, operations, opts \\ [])
+      when is_list(operations) and is_list(opts) do
+    case query.index_filter do
+      nil ->
+        raise ArgumentError,
+              "build_query_execute/4 requires query.index_filter set via Query.where/2"
+
+      %Filter{} = index_filter ->
+        build_background_query(query, node_partitions, opts, index_filter, operations: operations)
+    end
+  end
+
+  @doc """
+  Builds a background-query wire message for record-UDF execution over query matches.
+  """
+  @spec build_query_udf(Query.t(), node_partitions(), String.t(), String.t(), list(), keyword()) ::
+          iodata()
+  def build_query_udf(%Query{} = query, node_partitions, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    case query.index_filter do
+      nil ->
+        raise ArgumentError, "build_query_udf/6 requires query.index_filter set via Query.where/2"
+
+      %Filter{} = index_filter ->
+        build_background_query(query, node_partitions, opts, index_filter,
+          udf: {package, function, args}
+        )
+    end
+  end
+
+  @doc """
+  Builds a query wire message for aggregate UDF execution over query matches.
+  """
+  @spec build_query_aggregate(
+          Query.t(),
+          node_partitions(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: iodata()
+  def build_query_aggregate(
+        %Query{} = query,
+        node_partitions,
+        package,
+        function,
+        args,
+        opts \\ []
+      )
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    case query.index_filter do
+      nil ->
+        raise ArgumentError,
+              "build_query_aggregate/6 requires query.index_filter set via Query.where/2"
+
+      %Filter{} = index_filter ->
+        build_query_with_filter(query, node_partitions, opts, index_filter,
+          udf: {1, package, function, args}
+        )
+    end
+  end
+
+  defp build_query_with_filter(query, node_partitions, opts, index_filter, extra_fields \\ []) do
     sock_ms = Keyword.get(opts, :timeout, 30_000)
     query_id = task_id_u64(opts)
 
@@ -120,6 +187,7 @@ defmodule Aerospike.Protocol.ScanQuery do
       ])
       |> Enum.reject(&is_nil/1)
       |> Kernel.++(filter_exp_fields(exp_bin))
+      |> Kernel.++(query_udf_fields(extra_fields))
 
     ops = query_operations(query)
 
@@ -131,6 +199,51 @@ defmodule Aerospike.Protocol.ScanQuery do
       timeout: sock_ms,
       fields: fields,
       operations: ops
+    }
+    |> AsmMsg.encode()
+    |> Message.encode_as_msg_iodata()
+  end
+
+  defp build_background_query(query, node_partitions, opts, index_filter, background)
+       when is_list(opts) do
+    sock_ms = Keyword.get(opts, :timeout, 30_000)
+    query_id = task_id_u64(opts)
+    exp_bin = merge_exp_filters(query.filters)
+
+    fields =
+      [
+        Field.namespace(query.namespace),
+        Field.set(query.set),
+        query_id_field(query_id)
+      ]
+      |> Kernel.++(index_type_fields(index_filter))
+      |> Kernel.++([
+        %Field{
+          type: Field.type_index_range(),
+          data: Aerospike.Protocol.Filter.encode(index_filter)
+        }
+      ])
+      |> Kernel.++(index_name_fields(index_filter))
+      |> Kernel.++(pid_array_fields(node_partitions.parts_full))
+      |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
+      |> Kernel.++(bval_array_fields(index_filter, node_partitions.parts_partial))
+      |> Kernel.++(max_records_fields(:query, node_partitions.record_max))
+      |> Kernel.++([
+        socket_timeout_field(sock_ms),
+        records_per_second_field(query.records_per_second)
+      ])
+      |> Enum.reject(&is_nil/1)
+      |> Kernel.++(filter_exp_fields(exp_bin))
+      |> Kernel.++(background_query_fields(background))
+
+    %AsmMsg{
+      info1: 0,
+      info2: AsmMsg.info2_write(),
+      info3: 0,
+      info4: 0,
+      timeout: sock_ms,
+      fields: fields,
+      operations: background_query_operations(background)
     }
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
@@ -194,6 +307,28 @@ defmodule Aerospike.Protocol.ScanQuery do
 
   defp query_operations(%Query{bin_names: bins}) do
     Enum.map(bins, &Operation.read/1)
+  end
+
+  defp background_query_fields(operations: _operations), do: []
+
+  defp background_query_fields(udf: {package, function, args}) do
+    query_udf_fields(udf: {2, package, function, args})
+  end
+
+  defp background_query_operations(operations: operations), do: operations
+  defp background_query_operations(udf: _udf), do: []
+
+  defp query_udf_fields([]), do: []
+
+  defp query_udf_fields(udf: {mode, package, function, args}) do
+    arglist = MessagePack.pack!(Enum.map(args, &pack_udf_arg/1))
+
+    [
+      Field.udf_op(mode),
+      Field.udf_package_name(package),
+      Field.udf_function(function),
+      Field.udf_arglist(arglist)
+    ]
   end
 
   defp maybe_append_table(fields, nil), do: fields
@@ -295,6 +430,19 @@ defmodule Aerospike.Protocol.ScanQuery do
 
   defp filter_exp_fields(wire) when is_binary(wire) and wire != <<>> do
     [%Field{type: Field.type_filter_exp(), data: wire}]
+  end
+
+  defp pack_udf_arg(s) when is_binary(s), do: {:particle_string, s}
+  defp pack_udf_arg({:bytes, b}) when is_binary(b), do: {:bytes, b}
+  defp pack_udf_arg(nil), do: nil
+  defp pack_udf_arg(true), do: true
+  defp pack_udf_arg(false), do: false
+  defp pack_udf_arg(n) when is_integer(n), do: n
+  defp pack_udf_arg(f) when is_float(f), do: f
+  defp pack_udf_arg(list) when is_list(list), do: Enum.map(list, &pack_udf_arg/1)
+
+  defp pack_udf_arg(%{} = map) do
+    Map.new(map, fn {k, v} -> {pack_udf_arg(k), pack_udf_arg(v)} end)
   end
 
   defp merge_exp_filters([]), do: nil
