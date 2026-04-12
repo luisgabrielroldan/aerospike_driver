@@ -51,13 +51,16 @@ defmodule Aerospike do
   alias Aerospike.Key
   alias Aerospike.Page
   alias Aerospike.Policy
+  alias Aerospike.Privilege
   alias Aerospike.Query
   alias Aerospike.RegisterTask
+  alias Aerospike.Role
   alias Aerospike.Scan
   alias Aerospike.ScanOps
   alias Aerospike.Supervisor, as: AeroSupervisor
   alias Aerospike.Txn
   alias Aerospike.TxnRoll
+  alias Aerospike.User
 
   @typedoc """
   Named connection handle: currently an atom (`:name` from `start_link/1`).
@@ -71,6 +74,15 @@ defmodule Aerospike do
   One cluster node as returned by `nodes/1`: display `name`, TCP `host`, and `port`.
   """
   @type node_info :: %{name: String.t(), host: String.t(), port: non_neg_integer()}
+
+  @typedoc "Security user metadata returned by `query_user/3` and `query_users/2`."
+  @type user_info :: User.t()
+
+  @typedoc "Security role metadata returned by `query_role/3` and `query_roles/2`."
+  @type role_info :: Role.t()
+
+  @typedoc "Security privilege descriptor used in role operations."
+  @type privilege :: Privilege.t()
 
   @doc """
   Returns a child specification for supervision trees.
@@ -969,6 +981,330 @@ defmodule Aerospike do
   def node_names(conn) when is_atom(conn), do: Admin.node_names(conn)
 
   @doc """
+  Creates a password-authenticated security user.
+
+  `password` is accepted as cleartext at the facade boundary and hashed before
+  the wire command is sent.
+
+  ## Options
+
+  * `:timeout` — socket timeout in milliseconds.
+  * `:pool_checkout_timeout` — pool checkout timeout in milliseconds.
+
+  """
+  @spec create_user(conn(), String.t(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def create_user(conn, user_name, password, roles, opts \\ [])
+      when is_atom(conn) and is_binary(user_name) and is_binary(password) and is_list(roles) and
+             is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_security_admin(opts),
+         {:ok, role_names} <- validate_role_names(roles) do
+      Admin.create_user(conn, user_name, password, role_names, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Creates a PKI-authenticated security user.
+
+  Supported by Aerospike Enterprise on server versions that support PKI users.
+
+  ## Options
+
+  * `:timeout` — socket timeout in milliseconds.
+  * `:pool_checkout_timeout` — pool checkout timeout in milliseconds.
+
+  """
+  @spec create_pki_user(conn(), String.t(), [String.t()], keyword()) :: :ok | {:error, Error.t()}
+  def create_pki_user(conn, user_name, roles, opts \\ [])
+      when is_atom(conn) and is_binary(user_name) and is_list(roles) and is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_security_admin(opts),
+         {:ok, role_names} <- validate_role_names(roles) do
+      Admin.create_pki_user(conn, user_name, role_names, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Drops a security user.
+  """
+  @spec drop_user(conn(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def drop_user(conn, user_name, opts \\ [])
+      when is_atom(conn) and is_binary(user_name) and is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.drop_user(conn, user_name, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Changes a security user's password.
+
+  When `user_name` matches the authenticated connection user, the client uses
+  the server change-password command and rotates the running client's in-memory
+  credential source for future reconnects. Otherwise it uses the user-admin
+  password-set path.
+
+  Restarted clients still authenticate with the credentials supplied at startup
+  in `:auth_opts`; the library does not persist rotated passwords.
+  """
+  @spec change_password(conn(), String.t(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def change_password(conn, user_name, password, opts \\ [])
+      when is_atom(conn) and is_binary(user_name) and is_binary(password) and is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.change_password(conn, user_name, password, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Grants roles to a security user.
+  """
+  @spec grant_roles(conn(), String.t(), [String.t()], keyword()) :: :ok | {:error, Error.t()}
+  def grant_roles(conn, user_name, roles, opts \\ [])
+      when is_atom(conn) and is_binary(user_name) and is_list(roles) and is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_security_admin(opts),
+         {:ok, role_names} <- validate_role_names(roles) do
+      Admin.grant_roles(conn, user_name, role_names, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Revokes roles from a security user.
+  """
+  @spec revoke_roles(conn(), String.t(), [String.t()], keyword()) :: :ok | {:error, Error.t()}
+  def revoke_roles(conn, user_name, roles, opts \\ [])
+      when is_atom(conn) and is_binary(user_name) and is_list(roles) and is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_security_admin(opts),
+         {:ok, role_names} <- validate_role_names(roles) do
+      Admin.revoke_roles(conn, user_name, role_names, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Queries metadata for one security user.
+  """
+  @spec query_user(conn(), String.t(), keyword()) ::
+          {:ok, user_info() | nil} | {:error, Error.t()}
+  def query_user(conn, user_name, opts \\ [])
+      when is_atom(conn) and is_binary(user_name) and is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.query_user(conn, user_name, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Queries metadata for all security users.
+  """
+  @spec query_users(conn(), keyword()) :: {:ok, [user_info()]} | {:error, Error.t()}
+  def query_users(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.query_users(conn, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Creates a user-defined security role.
+
+  ## Options
+
+  * `:whitelist` — list of allowed client IPs or CIDR ranges.
+  * `:read_quota` — max reads per second. `0` means unlimited.
+  * `:write_quota` — max writes per second. `0` means unlimited.
+  * `:timeout` — socket timeout in milliseconds.
+  * `:pool_checkout_timeout` — pool checkout timeout in milliseconds.
+
+  """
+  @spec create_role(conn(), String.t(), [privilege()], keyword()) :: :ok | {:error, Error.t()}
+  def create_role(conn, role_name, privileges, opts \\ [])
+      when is_atom(conn) and is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_role_create(opts),
+         {:ok, validated_privileges} <- validate_privileges(privileges) do
+      Admin.create_role(conn, role_name, validated_privileges, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Drops a user-defined security role.
+  """
+  @spec drop_role(conn(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def drop_role(conn, role_name, opts \\ [])
+      when is_atom(conn) and is_binary(role_name) and is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.drop_role(conn, role_name, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Grants privileges to a user-defined security role.
+  """
+  @spec grant_privileges(conn(), String.t(), [privilege()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def grant_privileges(conn, role_name, privileges, opts \\ [])
+      when is_atom(conn) and is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_security_admin(opts),
+         {:ok, validated_privileges} <- validate_privileges(privileges) do
+      Admin.grant_privileges(conn, role_name, validated_privileges, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Revokes privileges from a user-defined security role.
+  """
+  @spec revoke_privileges(conn(), String.t(), [privilege()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def revoke_privileges(conn, role_name, privileges, opts \\ [])
+      when is_atom(conn) and is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_security_admin(opts),
+         {:ok, validated_privileges} <- validate_privileges(privileges) do
+      Admin.revoke_privileges(conn, role_name, validated_privileges, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Sets or clears the whitelist for a security role.
+  """
+  @spec set_whitelist(conn(), String.t(), Role.whitelist(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def set_whitelist(conn, role_name, whitelist, opts \\ [])
+      when is_atom(conn) and is_binary(role_name) and is_list(whitelist) and is_list(opts) do
+    with {:ok, call_opts} <- Policy.validate_security_admin(opts),
+         {:ok, validated_whitelist} <- validate_whitelist(whitelist) do
+      Admin.set_whitelist(conn, role_name, validated_whitelist, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Sets read and write quotas for a security role.
+
+  `0` removes the corresponding limit.
+  """
+  @spec set_quotas(conn(), String.t(), Role.quota(), Role.quota(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def set_quotas(conn, role_name, read_quota, write_quota, opts \\ [])
+      when is_atom(conn) and is_binary(role_name) and is_integer(read_quota) and
+             read_quota >= 0 and is_integer(write_quota) and write_quota >= 0 and
+             is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.set_quotas(conn, role_name, read_quota, write_quota, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Queries metadata for one security role.
+  """
+  @spec query_role(conn(), String.t(), keyword()) ::
+          {:ok, role_info() | nil} | {:error, Error.t()}
+  def query_role(conn, role_name, opts \\ [])
+      when is_atom(conn) and is_binary(role_name) and is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.query_role(conn, role_name, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Queries metadata for all security roles.
+  """
+  @spec query_roles(conn(), keyword()) :: {:ok, [role_info()]} | {:error, Error.t()}
+  def query_roles(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case Policy.validate_security_admin(opts) do
+      {:ok, call_opts} ->
+        Admin.query_roles(conn, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
   Truncates all records in `namespace`, optionally only those written before `before:`.
 
   ## Options
@@ -1382,4 +1718,37 @@ defmodule Aerospike do
 
   defp validate_scan_query_opts(%Query{} = _scannable, opts) when is_list(opts),
     do: Policy.validate_query(opts)
+
+  defp validate_role_names(roles) when is_list(roles) do
+    if Enum.all?(roles, &is_binary/1) do
+      {:ok, roles}
+    else
+      {:error,
+       Error.from_result_code(:parameter_error,
+         message: "roles must be a list of strings"
+       )}
+    end
+  end
+
+  defp validate_privileges(privileges) when is_list(privileges) do
+    if Enum.all?(privileges, &match?(%Privilege{}, &1)) do
+      {:ok, privileges}
+    else
+      {:error,
+       Error.from_result_code(:parameter_error,
+         message: "privileges must be a list of %Aerospike.Privilege{} structs"
+       )}
+    end
+  end
+
+  defp validate_whitelist(whitelist) when is_list(whitelist) do
+    if Enum.all?(whitelist, &is_binary/1) do
+      {:ok, whitelist}
+    else
+      {:error,
+       Error.from_result_code(:parameter_error,
+         message: "whitelist must be a list of strings"
+       )}
+    end
+  end
 end

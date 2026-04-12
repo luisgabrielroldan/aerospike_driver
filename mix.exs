@@ -99,7 +99,7 @@ defmodule Aerospike.MixProject do
       "coveralls.lcov": "coveralls.lcov --include integration",
       "test.coverage": "coveralls.html --include integration",
       "test.all":
-        "test --include integration --include property --include cluster --include enterprise --include tls_stack",
+        "test --include integration --include property --include cluster --include enterprise --include tls_stack --include security",
       "test.enterprise": "test --include enterprise"
     ]
   end
@@ -264,6 +264,7 @@ defmodule Aerospike.MixProject do
         "guides/queries-and-scanning.md",
         "guides/expressions.md",
         "guides/policies.md",
+        "guides/security-administration.md",
         "guides/transactions.md",
         "guides/secondary-indexes.md",
         "guides/udfs.md"
@@ -285,7 +286,10 @@ defmodule Aerospike.MixProject do
           Aerospike.Record,
           Aerospike.Error,
           Aerospike.Page,
-          Aerospike.Cursor
+          Aerospike.Cursor,
+          Aerospike.Privilege,
+          Aerospike.Role,
+          Aerospike.User
         ],
         "Scan & Query": [
           Aerospike.PartitionFilter,

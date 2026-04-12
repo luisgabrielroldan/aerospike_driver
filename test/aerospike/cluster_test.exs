@@ -139,6 +139,51 @@ defmodule Aerospike.ClusterTest do
 
       assert log =~ "seed connection failed"
     end
+
+    test "rotate_auth_credential updates cluster state and restarted pools use the new credential",
+         %{name: name} do
+      test_pid = self()
+
+      seed =
+        start_info_server("SEED_A",
+          notify_login_to: test_pid
+        )
+
+      on_exit(fn -> stop_info_server(seed) end)
+
+      opts =
+        base_opts(name, seed.port)
+        |> Keyword.put(:auth_opts, user: "alice", credential: "old-credential")
+
+      {:ok, _sup} = start_supervised({Supervisor, opts})
+      await_cluster_ready(name)
+
+      assert_receive {:login_credential, "old-credential"}, 1_000
+
+      [{"SEED_A", %{pool_pid: old_pool_pid}}] = :ets.lookup(Tables.nodes(name), "SEED_A")
+
+      assert :ok = Cluster.rotate_auth_credential(name, "alice", "new-credential")
+
+      assert_receive {:login_credential, "new-credential"}, 1_000
+
+      assert [{:auth_opts, auth_opts}] = :ets.lookup(Tables.meta(name), :auth_opts)
+      assert Keyword.fetch!(auth_opts, :credential) == "new-credential"
+
+      cluster_state =
+        name
+        |> Cluster.cluster_name()
+        |> Process.whereis()
+        |> :sys.get_state()
+
+      assert Keyword.fetch!(cluster_state.auth_opts, :credential) == "new-credential"
+
+      assert_await(fn ->
+        case :ets.lookup(Tables.nodes(name), "SEED_A") do
+          [{"SEED_A", %{pool_pid: new_pool_pid}}] -> new_pool_pid != old_pool_pid
+          _ -> false
+        end
+      end)
+    end
   end
 
   defp base_opts(name, port) do
@@ -208,6 +253,7 @@ defmodule Aerospike.ClusterTest do
         partition_generation: Keyword.get(opts, :partition_generation, 1),
         partitions: Keyword.get(opts, :partitions, [0]),
         delay_first_node_ms: Keyword.get(opts, :delay_first_node_ms, 0),
+        notify_login_to: Keyword.get(opts, :notify_login_to),
         delay_done?: false
       }
 
@@ -267,7 +313,8 @@ defmodule Aerospike.ClusterTest do
     :gen_tcp.close(client)
   end
 
-  defp respond_to_wire_message(client, _state_pid, <<_version::8, 2::8, _::binary>>, _body) do
+  defp respond_to_wire_message(client, state_pid, <<_version::8, 2::8, _::binary>>, body) do
+    maybe_notify_login_credential(state_pid, body)
     MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
   end
 
@@ -297,6 +344,24 @@ defmodule Aerospike.ClusterTest do
     if Enum.member?(commands, "node"), do: maybe_sleep(state_pid)
   end
 
+  defp maybe_notify_login_credential(state_pid, body) do
+    with {:ok, pid} <- fetch_login_notifier(state_pid),
+         20 <- command_id(body),
+         fields <- decode_admin_fields(body),
+         credential when is_binary(credential) <- Map.get(fields, 3) do
+      send(pid, {:login_credential, credential})
+    else
+      _ -> :ok
+    end
+  end
+
+  defp fetch_login_notifier(state_pid) do
+    case Agent.get(state_pid, & &1.notify_login_to) do
+      pid when is_pid(pid) -> {:ok, pid}
+      _ -> :error
+    end
+  end
+
   defp maybe_sleep(state_pid) do
     case Agent.get_and_update(state_pid, &consume_delay/1) do
       delay_ms when delay_ms > 0 -> Process.sleep(delay_ms)
@@ -322,6 +387,22 @@ defmodule Aerospike.ClusterTest do
     do: Agent.get(state_pid, &replicas_for_partitions("test", &1.partitions))
 
   defp lookup_info_value(_state_pid, _), do: ""
+
+  defp command_id(<<_status::8, _result::8, command::8, _field_count::8, _rest::binary>>),
+    do: command
+
+  defp decode_admin_fields(<<_admin::binary-size(16), rest::binary>>) do
+    decode_admin_fields(rest, %{})
+  end
+
+  defp decode_admin_fields(<<>>, acc), do: acc
+
+  defp decode_admin_fields(
+         <<len::32-big, id::8, value::binary-size(len - 1), rest::binary>>,
+         acc
+       ) do
+    decode_admin_fields(rest, Map.put(acc, id, value))
+  end
 
   defp peers_payload(generation, peers) do
     entries =

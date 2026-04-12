@@ -6,6 +6,11 @@ defmodule Aerospike.Repo do
   exposes the same operations as `Aerospike`, but without the leading `conn`
   argument.
 
+  Security administration (users, roles, quotas, etc.) lives on the generated
+  `YourApp.Repo.Admin` sub-module so the main Repo stays focused on data-plane
+  calls. Do not define your own `YourApp.Repo.Admin` module in the same app;
+  it would collide with the generated one.
+
   ## Example
 
       defmodule MyApp.Repo do
@@ -27,12 +32,16 @@ defmodule Aerospike.Repo do
       :ok = MyApp.Repo.put({"test", "users", "user:1"}, %{"name" => "Ada"})
       {:ok, record} = MyApp.Repo.get({"test", "users", "user:1"})
 
+      # Security administration via the generated sub-module:
+      :ok = MyApp.Repo.Admin.create_user("ada", "secret", ["read-write"])
+      {:ok, roles} = MyApp.Repo.Admin.query_roles()
+
   Repo is optional sugar. `Aerospike` remains the canonical API.
   """
 
   @type t :: module()
 
-  @conn_delegates [
+  @data_delegates [
     {:put, [:key, :bins, {:opts, []}]},
     {:put!, [:key, :bins, {:opts, []}]},
     {:get, [:key, {:opts, []}]},
@@ -75,22 +84,44 @@ defmodule Aerospike.Repo do
     {:txn_status, [:txn]}
   ]
 
+  @admin_delegates [
+    {:create_user, [:user_name, :password, :roles, {:opts, []}]},
+    {:create_pki_user, [:user_name, :roles, {:opts, []}]},
+    {:drop_user, [:user_name, {:opts, []}]},
+    {:change_password, [:user_name, :password, {:opts, []}]},
+    {:grant_roles, [:user_name, :roles, {:opts, []}]},
+    {:revoke_roles, [:user_name, :roles, {:opts, []}]},
+    {:query_user, [:user_name, {:opts, []}]},
+    {:query_users, [{:opts, []}]},
+    {:create_role, [:role_name, :privileges, {:opts, []}]},
+    {:drop_role, [:role_name, {:opts, []}]},
+    {:grant_privileges, [:role_name, :privileges, {:opts, []}]},
+    {:revoke_privileges, [:role_name, :privileges, {:opts, []}]},
+    {:set_whitelist, [:role_name, :whitelist, {:opts, []}]},
+    {:set_quotas, [:role_name, :read_quota, :write_quota, {:opts, []}]},
+    {:query_role, [:role_name, {:opts, []}]},
+    {:query_roles, [{:opts, []}]}
+  ]
+
   @doc false
   defmacro __using__(opts) do
     otp_app = Keyword.fetch!(opts, :otp_app)
     repo_name = Keyword.get(opts, :name)
     adapter = Keyword.get(opts, :adapter, Aerospike)
-    conn_wrappers = conn_wrapper_defs()
+    parent_module = __CALLER__.module
 
-    conn_def =
+    admin_moduledoc =
+      "Security administration operations using the same connection as " <>
+        "`#{inspect(parent_module)}` (see `conn/0`)."
+
+    conn_wrappers = conn_wrapper_defs(adapter)
+    admin_wrappers = admin_wrapper_defs(adapter)
+
+    conn_value =
       if repo_name do
-        quote do
-          def conn, do: unquote(repo_name)
-        end
+        repo_name
       else
-        quote do
-          def conn, do: __MODULE__
-        end
+        quote(do: __MODULE__)
       end
 
     quote do
@@ -98,7 +129,7 @@ defmodule Aerospike.Repo do
       @repo_name unquote(repo_name)
       @repo_adapter unquote(adapter)
 
-      unquote(conn_def)
+      def conn, do: unquote(conn_value)
 
       def config do
         @repo_otp_app
@@ -169,22 +200,36 @@ defmodule Aerospike.Repo do
       def transaction(txn_or_opts, fun) when is_function(fun, 1) do
         @repo_adapter.transaction(conn(), txn_or_opts, fun)
       end
+
+      defmodule Module.concat(__MODULE__, Admin) do
+        @moduledoc unquote(admin_moduledoc)
+
+        def conn, do: unquote(conn_value)
+
+        unquote_splicing(admin_wrappers)
+      end
     end
   end
 
-  defp conn_wrapper_defs do
-    Enum.map(@conn_delegates, fn {fun_name, args} ->
-      build_conn_wrapper(fun_name, args)
+  defp conn_wrapper_defs(adapter) do
+    Enum.map(@data_delegates, fn {fun_name, args} ->
+      build_conn_wrapper(adapter, fun_name, args)
     end)
   end
 
-  defp build_conn_wrapper(fun_name, args) do
+  defp admin_wrapper_defs(adapter) do
+    Enum.map(@admin_delegates, fn {fun_name, args} ->
+      build_conn_wrapper(adapter, fun_name, args)
+    end)
+  end
+
+  defp build_conn_wrapper(adapter, fun_name, args) do
     arg_defs = Enum.map(args, &arg_definition/1)
     arg_values = Enum.map(args, &arg_value/1)
 
     quote do
       def unquote(fun_name)(unquote_splicing(arg_defs)) do
-        @repo_adapter.unquote(fun_name)(conn(), unquote_splicing(arg_values))
+        unquote(adapter).unquote(fun_name)(conn(), unquote_splicing(arg_values))
       end
     end
   end

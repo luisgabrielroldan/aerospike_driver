@@ -12,21 +12,26 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 
 - **OTP-native** — starts under a supervisor, pools connections automatically via NimblePool
 - **Cluster-aware** — discovers nodes, maintains partition maps, routes operations to the correct node
+- **Repo wrapper** — optional `use Aerospike.Repo` convenience API bound to one connection
 - **Single-record CRUD** — `put`, `get`, `delete`, `exists`, `touch` with bang variants
 - **Operate** — atomic multi-operation per record (`add`, `append`, `prepend`, custom op lists)
 - **Batch operations** — `batch_get`, `batch_exists`, `batch_operate` for multi-key round-trips
-- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`
-- **CDT operations** — List, Map, Bit, and HLL operations with nested context (`Ctx`)
+- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`, with cursor paging and partition filters
+- **CDT operations** — List, Map, Bit, HLL, and expression ops with nested context (`Ctx`)
 - **Server-side expressions** — filter results with `Aerospike.Exp` expressions
+- **Geospatial support** — typed geo helpers plus geo query filters
 - **Secondary indexes** — `create_index` / `drop_index` with async `IndexTask` polling
 - **UDF management** — `register_udf`, `remove_udf`, `apply_udf` for Lua user-defined functions
 - **Transactions** — multi-record transactions (`transaction/2`, `commit/2`, `abort/2`) on Enterprise Edition
 - **Write policies** — TTL, generation checks (CAS), create/update/replace semantics, durable delete
 - **Read policies** — selective bin projection, header-only reads
-- **Policy defaults** — set read/write timeouts and options once at connection time; override per call
+- **Policy defaults** — configure defaults for read, write, delete, exists, touch, operate, batch, scan, and query; override per call
+- **Admin & info operations** — raw `info`, per-node `info_node`, node listing, and `truncate`
+- **Security administration** — manage users, PKI users, roles, privileges, whitelists, and quotas on secured Enterprise clusters
 - **TLS support** — optional TLS and mTLS for node connections
+- **Circuit breaker** — per-node error-rate rejection with telemetry
 - **Telemetry** — emits `[:aerospike, :command, :start | :stop | :exception]` events
-- **Pure Elixir** — only runtime dependencies are `nimble_options`, `nimble_pool`, and `telemetry`; crypto uses Erlang's `:crypto` (RIPEMD-160 digests)
+- **Pure Elixir** — no NIFs; runtime deps stay small (`jason`, `nimble_options`, `nimble_pool`, `telemetry`) and crypto uses Erlang's `:crypto` (RIPEMD-160 digests)
 
 See the [CHANGELOG](CHANGELOG.md) for what shipped in each version.
 
@@ -37,7 +42,7 @@ Add `aerospike_driver` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:aerospike_driver, "~> 0.1.0"}
+    {:aerospike_driver, "~> 0.2.0"}
   ]
 end
 ```
@@ -101,6 +106,68 @@ Supervisor.start_link(children, strategy: :one_for_one)
 | `:tls`                   | boolean          | `false` | When `true`, upgrades TCP with TLS (`:ssl.connect/3`). |
 | `:tls_opts`              | keyword list     | `[]`    | Options for `:ssl.connect/3` (certs, verify, SNI, etc.). |
 | `:defaults`              | keyword list     | `[]`    | Per-command policy defaults (see below).            |
+
+### Security Administration
+
+Security administration is available on secured Aerospike Enterprise clusters.
+Authenticate the client with a hashed admin credential in `:auth_opts`:
+
+```elixir
+alias Aerospike.Admin.PasswordHash
+
+{:ok, _pid} =
+  Aerospike.start_link(
+    name: :aero_admin,
+    hosts: ["127.0.0.1:3200"],
+    auth_opts: [
+      user: "admin",
+      credential: PasswordHash.hash("admin")
+    ]
+  )
+```
+
+Create and inspect a user:
+
+```elixir
+:ok = Aerospike.create_user(:aero_admin, "ops-reader", "secret-pass", ["read"])
+{:ok, %Aerospike.User{name: "ops-reader", roles: ["read"]}} =
+  Aerospike.query_user(:aero_admin, "ops-reader")
+```
+
+Create and manage a role with scoped privileges:
+
+```elixir
+alias Aerospike.Privilege
+
+role_privileges = [
+  %Privilege{code: :read, namespace: "test", set: "reports"}
+]
+
+:ok =
+  Aerospike.create_role(
+    :aero_admin,
+    "report_reader",
+    role_privileges,
+    whitelist: ["10.0.0.0/24"],
+    read_quota: 100
+  )
+
+:ok =
+  Aerospike.grant_privileges(
+    :aero_admin,
+    "report_reader",
+    [%Privilege{code: :read_write, namespace: "test", set: "scratch"}]
+  )
+```
+
+The full surface includes `create_pki_user/4`, `drop_user/3`, `change_password/4`,
+`grant_roles/4`, `revoke_roles/4`, `query_users/2`, `drop_role/3`,
+`revoke_privileges/4`, `set_whitelist/4`, `set_quotas/5`, and `query_roles/2`.
+After a successful self-password change, the running client rotates its
+in-memory credential source for future reconnects, but a restarted client still
+depends on the credentials supplied in `:auth_opts`.
+See [Security Administration](guides/security-administration.md) for the complete flow
+and test-environment requirements.
 
 ### Writing Records
 
@@ -296,7 +363,7 @@ docker compose up -d
 # 3-node cluster — adds multi-node, partition routing, and peer discovery tests
 docker compose --profile cluster up -d
 
-# All services — adds enterprise-only feature tests (durable delete, etc.)
+# All services — adds enterprise-only feature tests (durable delete, security admin, etc.)
 docker compose --profile cluster --profile enterprise up -d
 ```
 

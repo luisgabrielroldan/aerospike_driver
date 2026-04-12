@@ -122,6 +122,19 @@ defmodule Aerospike.Policy do
     pool_checkout_timeout: [type: :non_neg_integer]
   ]
 
+  @security_admin_keys [
+    timeout: [type: :non_neg_integer],
+    pool_checkout_timeout: [type: :non_neg_integer]
+  ]
+
+  @role_create_keys [
+    whitelist: [type: {:list, :string}, default: []],
+    read_quota: [type: :non_neg_integer, default: 0],
+    write_quota: [type: :non_neg_integer, default: 0],
+    timeout: [type: :non_neg_integer],
+    pool_checkout_timeout: [type: :non_neg_integer]
+  ]
+
   @index_create_keys [
     bin: [type: :string, required: true, doc: "Bin name to index"],
     name: [type: :string, required: true, doc: "Index name"],
@@ -226,6 +239,8 @@ defmodule Aerospike.Policy do
   @exists_schema NimbleOptions.new!(@exists_keys)
   @index_create_schema NimbleOptions.new!(@index_create_keys)
   @info_schema NimbleOptions.new!(@info_keys)
+  @security_admin_schema NimbleOptions.new!(@security_admin_keys)
+  @role_create_schema NimbleOptions.new!(@role_create_keys)
   @touch_schema NimbleOptions.new!(@touch_keys)
   @operate_schema NimbleOptions.new!(@operate_keys)
   @batch_schema NimbleOptions.new!(@batch_keys)
@@ -283,6 +298,12 @@ defmodule Aerospike.Policy do
 
   @doc false
   def validate_info(opts), do: NimbleOptions.validate(opts, @info_schema)
+
+  @doc false
+  def validate_security_admin(opts), do: NimbleOptions.validate(opts, @security_admin_schema)
+
+  @doc false
+  def validate_role_create(opts), do: NimbleOptions.validate(opts, @role_create_schema)
 
   @doc false
   def validate_touch(opts), do: NimbleOptions.validate(opts, @touch_schema)
