@@ -176,6 +176,7 @@ defmodule Aerospike.Protocol.ScanQuery do
           data: Aerospike.Protocol.Filter.encode(index_filter)
         }
       ])
+      |> Kernel.++(index_context_fields(index_filter))
       |> Kernel.++(index_name_fields(index_filter))
       |> Kernel.++(pid_array_fields(node_partitions.parts_full))
       |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
@@ -223,6 +224,7 @@ defmodule Aerospike.Protocol.ScanQuery do
           data: Aerospike.Protocol.Filter.encode(index_filter)
         }
       ])
+      |> Kernel.++(index_context_fields(index_filter))
       |> Kernel.++(index_name_fields(index_filter))
       |> Kernel.++(pid_array_fields(node_partitions.parts_full))
       |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
@@ -393,6 +395,12 @@ defmodule Aerospike.Protocol.ScanQuery do
   end
 
   defp index_name_fields(%Filter{}), do: []
+
+  defp index_context_fields(%Filter{ctx: ctx}) when is_list(ctx) and ctx != [] do
+    [%Field{type: Field.type_index_context(), data: Aerospike.Protocol.Filter.encode_ctx(ctx)}]
+  end
+
+  defp index_context_fields(%Filter{}), do: []
 
   defp socket_timeout_field(ms) when is_integer(ms) do
     %Field{type: Field.type_socket_timeout(), data: <<ms::32-signed-big>>}

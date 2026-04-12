@@ -53,6 +53,7 @@ defmodule Aerospike do
   alias Aerospike.CRUD
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
+  alias Aerospike.Exp
   alias Aerospike.IndexTask
   alias Aerospike.Key
   alias Aerospike.Page
@@ -100,6 +101,12 @@ defmodule Aerospike do
 
   @typedoc "One aggregate result emitted by `query_aggregate/6`."
   @type aggregate_value :: term()
+
+  @typedoc "Secondary-index data type used when creating an index."
+  @type index_data_type :: :numeric | :string | :geo2dsphere
+
+  @typedoc "Top-level collection selector for list/map secondary indexes."
+  @type index_collection :: :list | :mapkeys | :mapvalues
 
   @doc """
   Returns a child specification for supervision trees.
@@ -1658,6 +1665,7 @@ defmodule Aerospike do
   * `:name` — required string; the index name.
   * `:type` — required atom; `:numeric`, `:string`, or `:geo2dsphere`.
   * `:collection` — optional atom; `:list`, `:mapkeys`, or `:mapvalues` for CDT bins.
+  * `:ctx` — optional `t:Aerospike.Ctx.step/0` list for nested CDT indexes.
   * `:pool_checkout_timeout` — pool checkout timeout in ms.
 
   ## Example
@@ -1675,6 +1683,52 @@ defmodule Aerospike do
     case Policy.validate_index_create(opts) do
       {:ok, call_opts} ->
         Admin.create_index(conn, namespace, set, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Creates a secondary index backed by a server expression instead of a bin name.
+
+  This is the explicit public entry point for expression-backed secondary indexes.
+  Expression-backed indexes are distinct from bin-backed indexes because they omit
+  `:bin` entirely and use `expression` as the source definition.
+
+  ## Options
+
+  * `:name` — required string; the index name.
+  * `:type` — required atom; `:numeric`, `:string`, or `:geo2dsphere`.
+  * `:collection` — optional atom; `:list`, `:mapkeys`, or `:mapvalues` when the
+    expression evaluates to a collection.
+  * `:pool_checkout_timeout` — pool checkout timeout in ms.
+
+  Expression-backed secondary indexes require Aerospike server `8.1.0` or newer.
+
+  ## Example
+
+      expression =
+        Aerospike.Exp.int_bin("age")
+        |> Aerospike.Exp.gt(Aerospike.Exp.val(17))
+
+      {:ok, task} =
+        Aerospike.create_expression_index(:aero, "test", "users", expression,
+          name: "adult_users_idx",
+          type: :numeric
+        )
+
+      :ok = Aerospike.IndexTask.wait(task, timeout: 30_000)
+
+  """
+  @spec create_expression_index(conn(), String.t(), String.t(), Exp.t(), keyword()) ::
+          {:ok, IndexTask.t()} | {:error, Error.t()}
+  def create_expression_index(conn, namespace, set, %Exp{} = expression, opts)
+      when is_atom(conn) and is_binary(namespace) and is_binary(set) and is_list(opts) do
+    case Policy.validate_expression_index_create(expression, opts) do
+      {:ok, call_opts} ->
+        Admin.create_expression_index(conn, namespace, set, expression, call_opts)
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,

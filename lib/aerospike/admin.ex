@@ -5,9 +5,11 @@ defmodule Aerospike.Admin do
   alias Aerospike.Cluster
   alias Aerospike.Connection
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.IndexTask
   alias Aerospike.Privilege
   alias Aerospike.Protocol.Admin, as: AdminProtocol
+  alias Aerospike.Protocol.MessagePack
   alias Aerospike.RegisterTask
   alias Aerospike.Role
   alias Aerospike.Router
@@ -17,6 +19,7 @@ defmodule Aerospike.Admin do
 
   @admin_message_type 2
   @default_checkout_timeout 5_000
+  @sindex_modern_min {8, 1, 0, 0}
 
   @doc false
   @spec info(atom(), String.t(), keyword()) :: {:ok, String.t()} | {:error, Error.t()}
@@ -355,19 +358,74 @@ defmodule Aerospike.Admin do
           {:ok, IndexTask.t()} | {:error, Error.t()}
   def create_index(conn_name, namespace, set, opts)
       when is_atom(conn_name) and is_binary(namespace) and is_binary(set) and is_list(opts) do
-    bin = Keyword.fetch!(opts, :bin)
-    name = Keyword.fetch!(opts, :name)
-    type = Keyword.fetch!(opts, :type)
-    collection = Keyword.get(opts, :collection)
-    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
-
-    command = build_create_index_command(namespace, set, name, bin, type, collection)
-
     with_telemetry(:create_index, conn_name, fn ->
       with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, server_version} <- fetch_server_version(pool_pid, opts),
+           {:ok, command} <-
+             build_create_index_command(server_version, namespace, set, opts, nil),
+           {:ok, map} <-
+             Router.checkout_and_info(
+               pool_pid,
+               [command],
+               Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
+             ) do
+        {parse_create_index_response(
+           map,
+           command,
+           conn_name,
+           namespace,
+           Keyword.fetch!(opts, :name)
+         ), node_name}
+      else
+        {:error, %Error{} = e} -> {{:error, e}, nil}
+      end
+    end)
+  end
+
+  @doc false
+  @spec create_expression_index(atom(), String.t(), String.t(), Exp.t(), keyword()) ::
+          {:ok, IndexTask.t()} | {:error, Error.t()}
+  def create_expression_index(conn_name, namespace, set, %Exp{} = expression, opts)
+      when is_atom(conn_name) and is_binary(namespace) and is_binary(set) and is_list(opts) do
+    with_telemetry(:create_expression_index, conn_name, fn ->
+      with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, server_version} <- fetch_server_version(pool_pid, opts),
+           :ok <- ensure_expression_index_supported(server_version),
+           {:ok, command} <-
+             build_create_index_command(server_version, namespace, set, opts, expression),
+           {:ok, map} <-
+             Router.checkout_and_info(
+               pool_pid,
+               [command],
+               Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
+             ) do
+        {parse_create_index_response(
+           map,
+           command,
+           conn_name,
+           namespace,
+           Keyword.fetch!(opts, :name)
+         ), node_name}
+      else
+        {:error, %Error{} = e} -> {{:error, e}, nil}
+      end
+    end)
+  end
+
+  @doc false
+  @spec index_status(atom(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Error.t()}
+  def index_status(conn_name, namespace, index_name, opts)
+      when is_atom(conn_name) and is_binary(namespace) and is_binary(index_name) and
+             is_list(opts) do
+    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
+
+    with_telemetry(:index_status, conn_name, fn ->
+      with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, server_version} <- fetch_server_version(pool_pid, opts),
+           command = build_index_status_command(server_version, namespace, index_name),
            {:ok, map} <- Router.checkout_and_info(pool_pid, [command], checkout_timeout) do
-        result = parse_create_index_response(map, command, conn_name, namespace, name)
-        {result, node_name}
+        {{:ok, Map.get(map, command, "")}, node_name}
       else
         {:error, %Error{} = e} -> {{:error, e}, nil}
       end
@@ -379,11 +437,12 @@ defmodule Aerospike.Admin do
   def drop_index(conn_name, namespace, index_name, opts)
       when is_atom(conn_name) and is_binary(namespace) and is_binary(index_name) and
              is_list(opts) do
-    command = "sindex-delete:namespace=#{namespace};indexname=#{index_name}"
     checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
 
     with_telemetry(:drop_index, conn_name, fn ->
       with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, server_version} <- fetch_server_version(pool_pid, opts),
+           command = build_drop_index_command(server_version, namespace, index_name),
            {:ok, map} <- Router.checkout_and_info(pool_pid, [command], checkout_timeout) do
         {parse_drop_index_response(map, command), node_name}
       else
@@ -441,16 +500,20 @@ defmodule Aerospike.Admin do
     end)
   end
 
-  defp build_create_index_command(namespace, set, name, bin, type, collection) do
-    base = "sindex-create:namespace=#{namespace};set=#{set};indexname=#{name}"
+  defp build_create_index_command(server_version, namespace, set, opts, expression)
+       when is_tuple(server_version) and is_binary(namespace) and is_binary(set) and is_list(opts) do
+    command =
+      server_version
+      |> create_index_command_prefix()
+      |> Kernel.<>(namespace)
+      |> maybe_append_set(set)
+      |> Kernel.<>(";indexname=#{Keyword.fetch!(opts, :name)}")
+      |> maybe_append_context(Keyword.get(opts, :ctx))
+      |> maybe_append_expression(expression)
+      |> maybe_append_collection(Keyword.get(opts, :collection))
+      |> append_index_source(server_version, opts, expression)
 
-    base =
-      case collection do
-        nil -> base
-        coll -> base <> ";indextype=#{collection_type_string(coll)}"
-      end
-
-    base <> ";bin=#{bin};type=#{index_type_string(type)}"
+    {:ok, command}
   end
 
   defp index_type_string(:numeric), do: "NUMERIC"
@@ -460,6 +523,140 @@ defmodule Aerospike.Admin do
   defp collection_type_string(:list), do: "LIST"
   defp collection_type_string(:mapkeys), do: "MAPKEYS"
   defp collection_type_string(:mapvalues), do: "MAPVALUES"
+
+  defp create_index_command_prefix(server_version) do
+    if modern_sindex_command?(server_version) do
+      "sindex-create:namespace="
+    else
+      "sindex-create:ns="
+    end
+  end
+
+  defp modern_sindex_command?(server_version) when is_tuple(server_version) do
+    compare_versions(server_version, @sindex_modern_min) != :lt
+  end
+
+  defp build_index_status_command(server_version, namespace, index_name)
+       when is_tuple(server_version) and is_binary(namespace) and is_binary(index_name) do
+    if modern_sindex_command?(server_version) do
+      "sindex-stat:namespace=#{namespace};indexname=#{index_name}"
+    else
+      "sindex/#{namespace}/#{index_name}"
+    end
+  end
+
+  defp build_drop_index_command(server_version, namespace, index_name)
+       when is_tuple(server_version) and is_binary(namespace) and is_binary(index_name) do
+    prefix =
+      if modern_sindex_command?(server_version) do
+        "sindex-delete:namespace="
+      else
+        "sindex-delete:ns="
+      end
+
+    prefix <> namespace <> ";indexname=#{index_name}"
+  end
+
+  defp maybe_append_set(command, ""), do: command
+  defp maybe_append_set(command, set) when is_binary(set), do: command <> ";set=#{set}"
+
+  defp maybe_append_context(command, nil), do: command
+
+  defp maybe_append_context(command, ctx) when is_list(ctx) do
+    command <> ";context=" <> encode_index_context(ctx)
+  end
+
+  defp maybe_append_expression(command, nil), do: command
+
+  defp maybe_append_expression(command, %Exp{wire: wire}) when is_binary(wire) do
+    command <> ";exp=" <> Base.encode64(wire)
+  end
+
+  defp maybe_append_collection(command, nil), do: command
+
+  defp maybe_append_collection(command, collection) do
+    command <> ";indextype=" <> collection_type_string(collection)
+  end
+
+  defp append_index_source(command, server_version, opts, nil) do
+    bin = Keyword.fetch!(opts, :bin)
+    type = Keyword.fetch!(opts, :type)
+
+    if modern_sindex_command?(server_version) do
+      command <> ";bin=#{bin};type=" <> index_type_string(type)
+    else
+      command <> ";indexdata=#{bin}," <> index_type_string(type)
+    end
+  end
+
+  defp append_index_source(command, _server_version, opts, %Exp{}) do
+    command <> ";type=" <> index_type_string(Keyword.fetch!(opts, :type))
+  end
+
+  defp fetch_server_version(pool_pid, opts) when is_pid(pool_pid) and is_list(opts) do
+    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
+
+    with {:ok, map} <- Router.checkout_and_info(pool_pid, ["build"], checkout_timeout) do
+      map
+      |> Map.get("build", "")
+      |> parse_server_version()
+    end
+  end
+
+  defp parse_server_version(build) when is_binary(build) do
+    case Regex.run(~r/^v?\d+(?:\.\d+){0,3}/, build) do
+      [matched] ->
+        [major, minor, patch, build_num] =
+          matched
+          |> String.trim_leading("v")
+          |> String.split(".")
+          |> Enum.map(&String.to_integer/1)
+          |> Kernel.++([0, 0, 0, 0])
+          |> Enum.take(4)
+
+        {:ok, {major, minor, patch, build_num}}
+
+      _ ->
+        {:error,
+         Error.from_result_code(:server_error,
+           message: "unable to parse Aerospike server build for index command: #{inspect(build)}"
+         )}
+    end
+  end
+
+  defp compare_versions(left, right) when is_tuple(left) and is_tuple(right) do
+    cond do
+      left < right -> :lt
+      left > right -> :gt
+      true -> :eq
+    end
+  end
+
+  defp ensure_expression_index_supported(server_version) when is_tuple(server_version) do
+    if modern_sindex_command?(server_version) do
+      :ok
+    else
+      {:error,
+       Error.from_result_code(:parameter_error,
+         message: "expression-backed secondary indexes require Aerospike server 8.1.0 or newer"
+       )}
+    end
+  end
+
+  defp encode_index_context(ctx) when is_list(ctx) do
+    ctx_elems =
+      Enum.flat_map(ctx, fn {id, value} ->
+        [id, cdt_context_value(value)]
+      end)
+
+    ctx_elems
+    |> MessagePack.pack!()
+    |> Base.encode64()
+  end
+
+  defp cdt_context_value(value) when is_binary(value), do: {:particle_string, value}
+  defp cdt_context_value({:bytes, _} = value), do: value
+  defp cdt_context_value(value), do: value
 
   defp parse_create_index_response(map, command, conn_name, namespace, index_name) do
     response = Map.get(map, command, "")

@@ -1,6 +1,7 @@
 defmodule Aerospike.FilterTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Ctx
   alias Aerospike.Filter
   alias Aerospike.Geo
 
@@ -113,6 +114,33 @@ defmodule Aerospike.FilterTest do
   describe "bin name" do
     test "rejects empty bin name for range" do
       assert_raise ArgumentError, fn -> Filter.range("", 0, 1) end
+    end
+  end
+
+  describe "advanced query helpers" do
+    test "using_index/2 targets a named index" do
+      filter = Filter.equal("age", 21) |> Filter.using_index("age_expr_idx")
+
+      assert filter.index_name == "age_expr_idx"
+    end
+
+    test "using_index/2 rejects empty names" do
+      assert_raise ArgumentError, fn ->
+        Filter.equal("age", 21) |> Filter.using_index("")
+      end
+    end
+
+    test "with_ctx/2 attaches nested CDT context" do
+      ctx = [Ctx.map_key("roles"), Ctx.list_index(0)]
+      filter = Filter.contains("profile", :mapvalues, "admin") |> Filter.with_ctx(ctx)
+
+      assert filter.ctx == ctx
+    end
+
+    test "with_ctx/2 rejects empty context lists" do
+      assert_raise ArgumentError, fn ->
+        Filter.equal("age", 21) |> Filter.with_ctx([])
+      end
     end
   end
 end

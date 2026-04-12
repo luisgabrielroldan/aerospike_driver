@@ -75,6 +75,42 @@ Common constructors:
 
 Other helpers ([`Filter.contains/3`](Aerospike.Filter.html#contains/3) for CDT indexes, [`Filter.geo_within/2`](Aerospike.Filter.html#geo_within/2), [`Filter.geo_contains/2`](Aerospike.Filter.html#geo_contains/2)) build SI predicates the same way; pass the result to [`Query.where/2`](Aerospike.Query.html#where/2).
 
+### Targeting advanced indexes
+
+Advanced secondary indexes reuse the same predicate constructors, then add explicit metadata for
+the lookup path:
+
+- [`Filter.using_index/2`](Aerospike.Filter.html#using_index/2) targets a named index, which is the supported public path for expression-backed indexes.
+- [`Filter.with_ctx/2`](Aerospike.Filter.html#with_ctx/2) attaches nested CDT context for context-aware indexes.
+
+Expression-backed query example:
+
+```elixir
+alias Aerospike.{Filter, Query}
+
+query =
+  Query.new("test", "users")
+  |> Query.where(
+    Filter.range("age", 18, 120)
+    |> Filter.using_index("adult_users_idx")
+  )
+  |> Query.max_records(10_000)
+```
+
+Nested CDT query example:
+
+```elixir
+alias Aerospike.{Ctx, Filter, Query}
+
+query =
+  Query.new("test", "profiles")
+  |> Query.where(
+    Filter.contains("profile", :list, "admin")
+    |> Filter.with_ctx([Ctx.map_key("roles")])
+  )
+  |> Query.max_records(10_000)
+```
+
 ### Geospatial filters with `Aerospike.Geo`
 
 [`Aerospike.Geo`](Aerospike.Geo.html) provides typed geometry builders:

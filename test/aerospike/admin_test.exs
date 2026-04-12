@@ -3,6 +3,8 @@ defmodule Aerospike.AdminTest do
 
   alias Aerospike.Admin
   alias Aerospike.Admin.PasswordHash
+  alias Aerospike.Ctx
+  alias Aerospike.Exp
   alias Aerospike.NodePool
   alias Aerospike.Policy
   alias Aerospike.Privilege
@@ -185,6 +187,151 @@ defmodule Aerospike.AdminTest do
 
       assert message ==
                "invalid udf-list entry (missing type): \"filename=broken.lua,hash=abc123\""
+
+      Task.await(server)
+    end
+  end
+
+  describe "secondary index lifecycle compatibility" do
+    setup do
+      name = :"admin_sindex_#{System.unique_integer([:positive, :monotonic])}"
+      start_ets(name)
+      {:ok, name: name}
+    end
+
+    test "drop_index/4 uses the modern delete command on Aerospike 8.1+", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "build\n"
+          MockTcpServer.send_info_response(client, "build\t8.1.0.0\n")
+
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "sindex-delete:namespace=test;indexname=age_idx\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "sindex-delete:namespace=test;indexname=age_idx\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_023)
+
+      assert :ok = Admin.drop_index(name, "test", "age_idx", [])
+      Task.await(server)
+    end
+
+    test "drop_index/4 uses the legacy delete command before Aerospike 8.1", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "build\n"
+          MockTcpServer.send_info_response(client, "build\t7.2.0.0\n")
+
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "sindex-delete:ns=test;indexname=age_idx\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "sindex-delete:ns=test;indexname=age_idx\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_024)
+
+      assert :ok = Admin.drop_index(name, "test", "age_idx", [])
+      Task.await(server)
+    end
+  end
+
+  describe "advanced secondary index creation" do
+    setup do
+      name = :"admin_sindex_create_#{System.unique_integer([:positive, :monotonic])}"
+      start_ets(name)
+      {:ok, name: name}
+    end
+
+    test "create_index/4 encodes nested CDT context in the info command", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "build\n"
+          MockTcpServer.send_info_response(client, "build\t8.1.0.0\n")
+
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+
+          assert body ==
+                   "sindex-create:namespace=test;set=users;indexname=roles_idx;context=kiKmA3JvbGVz;indextype=LIST;bin=profile;type=STRING\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "sindex-create:namespace=test;set=users;indexname=roles_idx;context=kiKmA3JvbGVz;indextype=LIST;bin=profile;type=STRING\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_027)
+
+      assert {:ok, %Aerospike.IndexTask{namespace: "test", index_name: "roles_idx"}} =
+               Admin.create_index(name, "test", "users",
+                 bin: "profile",
+                 name: "roles_idx",
+                 type: :string,
+                 collection: :list,
+                 ctx: [Ctx.map_key("roles")]
+               )
+
+      Task.await(server)
+    end
+
+    test "create_expression_index/5 encodes exp without bin source on supported servers", %{
+      name: name
+    } do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "build\n"
+          MockTcpServer.send_info_response(client, "build\t8.1.0.0\n")
+
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+
+          assert body ==
+                   "sindex-create:namespace=test;set=users;indexname=age_expr_idx;exp=k1ECo2FnZQ==;type=NUMERIC\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "sindex-create:namespace=test;set=users;indexname=age_expr_idx;exp=k1ECo2FnZQ==;type=NUMERIC\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_028)
+
+      assert {:ok, %Aerospike.IndexTask{namespace: "test", index_name: "age_expr_idx"}} =
+               Admin.create_expression_index(name, "test", "users", Exp.int_bin("age"),
+                 name: "age_expr_idx",
+                 type: :numeric
+               )
+
+      Task.await(server)
+    end
+
+    test "create_expression_index/5 rejects Aerospike versions older than 8.1", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "build\n"
+          MockTcpServer.send_info_response(client, "build\t7.2.0.0\n")
+        end)
+
+      register_node(name, pool_pid, 3_029)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error, message: message}} =
+               Admin.create_expression_index(name, "test", "users", Exp.int_bin("age"),
+                 name: "age_expr_idx",
+                 type: :numeric
+               )
+
+      assert message ==
+               "expression-backed secondary indexes require Aerospike server 8.1.0 or newer"
 
       Task.await(server)
     end
