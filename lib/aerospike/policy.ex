@@ -147,6 +147,21 @@ defmodule Aerospike.Policy do
       type: {:in, [:list, :mapkeys, :mapvalues]},
       doc: "Collection index type for CDT bins"
     ],
+    ctx: [type: {:list, :any}, doc: "Nested CDT context path for complex indexes"],
+    pool_checkout_timeout: [type: :non_neg_integer]
+  ]
+
+  @index_expression_create_keys [
+    name: [type: :string, required: true, doc: "Index name"],
+    type: [
+      type: {:in, [:numeric, :string, :geo2dsphere]},
+      required: true,
+      doc: "Index data type"
+    ],
+    collection: [
+      type: {:in, [:list, :mapkeys, :mapvalues]},
+      doc: "Collection index type for expression indexes"
+    ],
     pool_checkout_timeout: [type: :non_neg_integer]
   ]
 
@@ -238,6 +253,7 @@ defmodule Aerospike.Policy do
   @delete_schema NimbleOptions.new!(@delete_keys)
   @exists_schema NimbleOptions.new!(@exists_keys)
   @index_create_schema NimbleOptions.new!(@index_create_keys)
+  @index_expression_create_schema NimbleOptions.new!(@index_expression_create_keys)
   @info_schema NimbleOptions.new!(@info_keys)
   @security_admin_schema NimbleOptions.new!(@security_admin_keys)
   @role_create_schema NimbleOptions.new!(@role_create_keys)
@@ -294,7 +310,19 @@ defmodule Aerospike.Policy do
   def validate_exists(opts), do: NimbleOptions.validate(opts, @exists_schema)
 
   @doc false
-  def validate_index_create(opts), do: NimbleOptions.validate(opts, @index_create_schema)
+  def validate_index_create(opts) do
+    with {:ok, validated} <- NimbleOptions.validate(opts, @index_create_schema) do
+      validate_index_ctx(validated)
+    end
+  end
+
+  @doc false
+  def validate_expression_index_create(%Exp{} = expression, opts) do
+    with {:ok, validated} <- NimbleOptions.validate(opts, @index_expression_create_schema),
+         :ok <- validate_expression_index_wire(expression) do
+      {:ok, validated}
+    end
+  end
 
   @doc false
   def validate_info(opts), do: NimbleOptions.validate(opts, @info_schema)
@@ -339,6 +367,53 @@ defmodule Aerospike.Policy do
     else
       {:ok, validated}
     end
+  end
+
+  defp validate_index_ctx(validated) do
+    case Keyword.get(validated, :ctx) do
+      nil ->
+        {:ok, validated}
+
+      [] ->
+        {:error, validation_error(:ctx, [], "must be a non-empty list of Aerospike.Ctx steps")}
+
+      ctx when is_list(ctx) ->
+        if Enum.all?(ctx, &valid_ctx_step?/1) do
+          {:ok, validated}
+        else
+          {:error,
+           validation_error(
+             :ctx,
+             ctx,
+             "must be a list of `{non_neg_integer(), term()}` Aerospike.Ctx steps"
+           )}
+        end
+    end
+  end
+
+  defp validate_expression_index_wire(%Exp{wire: wire}) when is_binary(wire) do
+    if wire == "" do
+      {:error,
+       validation_error(
+         :expression,
+         wire,
+         "must be a non-empty Aerospike.Exp for expression-backed indexes"
+       )}
+    else
+      :ok
+    end
+  end
+
+  defp valid_ctx_step?({id, _value}) when is_integer(id) and id >= 0, do: true
+  defp valid_ctx_step?(_), do: false
+
+  defp validation_error(key, value, message) do
+    %NimbleOptions.ValidationError{
+      key: key,
+      keys_path: [],
+      value: value,
+      message: message
+    }
   end
 
   defp validate_breaker_ratio(validated) do

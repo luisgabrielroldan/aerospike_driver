@@ -1680,12 +1680,13 @@ defmodule Aerospike do
           {:ok, IndexTask.t()} | {:error, Error.t()}
   def create_index(conn, namespace, set, opts)
       when is_atom(conn) and is_binary(namespace) and is_binary(set) and is_list(opts) do
-    case validate_public_bin_index_opts(opts) do
-      :ok ->
-        do_create_index(conn, namespace, set, opts)
+    case Policy.validate_index_create(opts) do
+      {:ok, call_opts} ->
+        Admin.create_index(conn, namespace, set, call_opts)
 
-      {:error, %Error{} = error} ->
-        {:error, error}
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
     end
   end
 
@@ -1704,41 +1705,18 @@ defmodule Aerospike do
     expression evaluates to a collection.
   * `:pool_checkout_timeout` — pool checkout timeout in ms.
 
-  Expression-backed index command encoding is implemented separately from this
-  facade definition.
-
   """
   @spec create_expression_index(conn(), String.t(), String.t(), Exp.t(), keyword()) ::
           {:ok, IndexTask.t()} | {:error, Error.t()}
-  def create_expression_index(conn, namespace, set, %Exp{}, opts)
+  def create_expression_index(conn, namespace, set, %Exp{} = expression, opts)
       when is_atom(conn) and is_binary(namespace) and is_binary(set) and is_list(opts) do
-    {:error,
-     Error.from_result_code(:parameter_error,
-       message:
-         "expression-backed secondary index creation is defined by the public API but not wired until roadmap phase 3 task 2"
-     )}
-  end
-
-  defp do_create_index(conn, namespace, set, opts) do
-    case Policy.validate_index_create(opts) do
+    case Policy.validate_expression_index_create(expression, opts) do
       {:ok, call_opts} ->
-        Admin.create_index(conn, namespace, set, call_opts)
+        Admin.create_expression_index(conn, namespace, set, expression, call_opts)
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,
          Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
-    end
-  end
-
-  defp validate_public_bin_index_opts(opts) do
-    if Keyword.has_key?(opts, :ctx) do
-      {:error,
-       Error.from_result_code(:parameter_error,
-         message:
-           "context-backed secondary index creation is part of the public API but not wired until roadmap phase 3 task 2"
-       )}
-    else
-      :ok
     end
   end
 
