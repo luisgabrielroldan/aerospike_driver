@@ -19,7 +19,7 @@ defmodule Aerospike.Admin do
 
   @admin_message_type 2
   @default_checkout_timeout 5_000
-  @sindex_create_modern_min {8, 1, 0, 0}
+  @sindex_modern_min {8, 1, 0, 0}
 
   @doc false
   @spec info(atom(), String.t(), keyword()) :: {:ok, String.t()} | {:error, Error.t()}
@@ -413,15 +413,36 @@ defmodule Aerospike.Admin do
   end
 
   @doc false
+  @spec index_status(atom(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Error.t()}
+  def index_status(conn_name, namespace, index_name, opts)
+      when is_atom(conn_name) and is_binary(namespace) and is_binary(index_name) and
+             is_list(opts) do
+    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
+
+    with_telemetry(:index_status, conn_name, fn ->
+      with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, server_version} <- fetch_server_version(pool_pid, opts),
+           command = build_index_status_command(server_version, namespace, index_name),
+           {:ok, map} <- Router.checkout_and_info(pool_pid, [command], checkout_timeout) do
+        {{:ok, Map.get(map, command, "")}, node_name}
+      else
+        {:error, %Error{} = e} -> {{:error, e}, nil}
+      end
+    end)
+  end
+
+  @doc false
   @spec drop_index(atom(), String.t(), String.t(), keyword()) :: :ok | {:error, Error.t()}
   def drop_index(conn_name, namespace, index_name, opts)
       when is_atom(conn_name) and is_binary(namespace) and is_binary(index_name) and
              is_list(opts) do
-    command = "sindex-delete:namespace=#{namespace};indexname=#{index_name}"
     checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
 
     with_telemetry(:drop_index, conn_name, fn ->
       with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, server_version} <- fetch_server_version(pool_pid, opts),
+           command = build_drop_index_command(server_version, namespace, index_name),
            {:ok, map} <- Router.checkout_and_info(pool_pid, [command], checkout_timeout) do
         {parse_drop_index_response(map, command), node_name}
       else
@@ -512,7 +533,28 @@ defmodule Aerospike.Admin do
   end
 
   defp modern_sindex_command?(server_version) when is_tuple(server_version) do
-    compare_versions(server_version, @sindex_create_modern_min) != :lt
+    compare_versions(server_version, @sindex_modern_min) != :lt
+  end
+
+  defp build_index_status_command(server_version, namespace, index_name)
+       when is_tuple(server_version) and is_binary(namespace) and is_binary(index_name) do
+    if modern_sindex_command?(server_version) do
+      "sindex-stat:namespace=#{namespace};indexname=#{index_name}"
+    else
+      "sindex/#{namespace}/#{index_name}"
+    end
+  end
+
+  defp build_drop_index_command(server_version, namespace, index_name)
+       when is_tuple(server_version) and is_binary(namespace) and is_binary(index_name) do
+    prefix =
+      if modern_sindex_command?(server_version) do
+        "sindex-delete:namespace="
+      else
+        "sindex-delete:ns="
+      end
+
+    prefix <> namespace <> ";indexname=#{index_name}"
   end
 
   defp maybe_append_set(command, ""), do: command
@@ -577,7 +619,7 @@ defmodule Aerospike.Admin do
       _ ->
         {:error,
          Error.from_result_code(:server_error,
-           message: "unable to parse Aerospike server build for index creation: #{inspect(build)}"
+           message: "unable to parse Aerospike server build for index command: #{inspect(build)}"
          )}
     end
   end

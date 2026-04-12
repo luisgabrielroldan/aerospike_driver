@@ -190,6 +190,58 @@ defmodule Aerospike.AdminTest do
     end
   end
 
+  describe "secondary index lifecycle compatibility" do
+    setup do
+      name = :"admin_sindex_#{System.unique_integer([:positive, :monotonic])}"
+      start_ets(name)
+      {:ok, name: name}
+    end
+
+    test "drop_index/4 uses the modern delete command on Aerospike 8.1+", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "build\n"
+          MockTcpServer.send_info_response(client, "build\t8.1.0.0\n")
+
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "sindex-delete:namespace=test;indexname=age_idx\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "sindex-delete:namespace=test;indexname=age_idx\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_023)
+
+      assert :ok = Admin.drop_index(name, "test", "age_idx", [])
+      Task.await(server)
+    end
+
+    test "drop_index/4 uses the legacy delete command before Aerospike 8.1", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "build\n"
+          MockTcpServer.send_info_response(client, "build\t7.2.0.0\n")
+
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "sindex-delete:ns=test;indexname=age_idx\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "sindex-delete:ns=test;indexname=age_idx\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_024)
+
+      assert :ok = Admin.drop_index(name, "test", "age_idx", [])
+      Task.await(server)
+    end
+  end
+
   describe "PasswordHash.hash/1" do
     test "matches the Go client for known inputs" do
       assert PasswordHash.hash("secret") ==

@@ -37,17 +37,18 @@ defmodule Aerospike.IndexTask do
 
   use Aerospike.AsyncTask
 
-  alias Aerospike.Router
-
   @default_checkout_timeout 5_000
 
   @impl Aerospike.AsyncTask
   def status(%__MODULE__{conn: conn, namespace: namespace, index_name: index_name}) do
-    command = "sindex/#{namespace}/#{index_name}"
-
-    with {:ok, pool_pid, _node} <- Router.random_node_pool(conn),
-         {:ok, map} <- Router.checkout_and_info(pool_pid, [command], @default_checkout_timeout) do
-      parse_sindex_status(Map.get(map, command, ""))
+    with {:ok, response} <-
+           Aerospike.Admin.index_status(
+             conn,
+             namespace,
+             index_name,
+             pool_checkout_timeout: @default_checkout_timeout
+           ) do
+      parse_sindex_status(response)
     end
   end
 
