@@ -25,6 +25,17 @@ defmodule Aerospike.ScanOps do
   @count_per_node_cap 2_147_483_647
   @max_all_iterations 20
 
+  @dialyzer :no_match
+  @dialyzer {:nowarn_function,
+             [
+               {:finalize_prepared_fanout, 6},
+               {:finalize_prepared_fanout_allow_empty, 6},
+               {:non_empty_partition_group?, 1},
+               {:merge_targeted_partial_entries, 7},
+               {:merge_one_targeted_partial, 7},
+               {:continue_targeted_partial, 5}
+             ]}
+
   @typep partition_groups :: %{String.t() => Router.node_partition_group()}
 
   @typep fanout_prepared :: %{
@@ -55,6 +66,16 @@ defmodule Aerospike.ScanOps do
     end)
   end
 
+  defp all_after_max_ok_node(conn_name, node_name, scannable, opts) do
+    merged = Policy.merge_defaults(conn_name, policy_kind(scannable), opts)
+    max_records = scannable_max_for_distribute(scannable)
+    cmd = scannable_command(:all_node, scannable)
+
+    with_scan_telemetry(cmd, conn_name, scannable, fn ->
+      iterate_all_node(conn_name, node_name, scannable, merged, max_records, [], 0)
+    end)
+  end
+
   defp iterate_all(_conn_name, _scannable, _opts, max_records, acc, _iteration)
        when length(acc) >= max_records do
     {:ok, Enum.take(acc, max_records)}
@@ -73,6 +94,50 @@ defmodule Aerospike.ScanOps do
            prepare_fanout(conn_name, scannable_with_budget, opts, &distribute_record_max/2),
          {:ok, page} <- run_fanout_page(conn_name, prepared, scannable_with_budget, opts) do
       apply_page_result(conn_name, scannable, opts, max_records, acc, iteration, page)
+    end
+  end
+
+  defp iterate_all_node(_conn_name, _node_name, _scannable, _opts, max_records, acc, _iteration)
+       when length(acc) >= max_records do
+    {:ok, Enum.take(acc, max_records)}
+  end
+
+  defp iterate_all_node(
+         _conn_name,
+         _node_name,
+         _scannable,
+         _opts,
+         _max_records,
+         acc,
+         iteration
+       )
+       when iteration >= @max_all_iterations do
+    {:ok, acc}
+  end
+
+  defp iterate_all_node(conn_name, node_name, scannable, opts, max_records, acc, iteration) do
+    remaining = max_records - length(acc)
+    scannable_with_budget = set_max_records(scannable, remaining)
+
+    with {:ok, prepared} <-
+           prepare_single_node_fanout(
+             conn_name,
+             node_name,
+             scannable_with_budget,
+             opts,
+             &distribute_record_max/2
+           ),
+         {:ok, page} <- run_fanout_page(conn_name, prepared, scannable_with_budget, opts) do
+      apply_page_result_node(
+        conn_name,
+        node_name,
+        scannable,
+        opts,
+        max_records,
+        acc,
+        iteration,
+        page
+      )
     end
   end
 
@@ -112,6 +177,69 @@ defmodule Aerospike.ScanOps do
     )
   end
 
+  defp apply_page_result_node(
+         _conn_name,
+         _node_name,
+         _scannable,
+         _opts,
+         max_records,
+         acc,
+         _iteration,
+         %Page{records: new_records, done?: true}
+       ) do
+    {:ok, Enum.take(acc ++ new_records, max_records)}
+  end
+
+  defp apply_page_result_node(
+         _conn_name,
+         _node_name,
+         _scannable,
+         _opts,
+         max_records,
+         acc,
+         _iteration,
+         %Page{records: new_records}
+       )
+       when length(acc) + length(new_records) >= max_records do
+    {:ok, Enum.take(acc ++ new_records, max_records)}
+  end
+
+  defp apply_page_result_node(
+         _conn_name,
+         _node_name,
+         _scannable,
+         _opts,
+         _max_records,
+         acc,
+         _iteration,
+         %Page{records: []}
+       ) do
+    {:ok, acc}
+  end
+
+  defp apply_page_result_node(
+         conn_name,
+         node_name,
+         scannable,
+         opts,
+         max_records,
+         acc,
+         iteration,
+         %Page{records: new_records, cursor: cursor}
+       ) do
+    scannable_with_cursor = attach_cursor_partition_filter(scannable, cursor)
+
+    iterate_all_node(
+      conn_name,
+      node_name,
+      scannable_with_cursor,
+      opts,
+      max_records,
+      acc ++ new_records,
+      iteration + 1
+    )
+  end
+
   defp page_after_max_ok(conn_name, scannable2, opts2) do
     merged = Policy.merge_defaults(conn_name, policy_kind(scannable2), opts2)
 
@@ -128,12 +256,43 @@ defmodule Aerospike.ScanOps do
     end
   end
 
+  defp page_after_max_ok_node(conn_name, node_name, scannable2, opts2) do
+    merged = Policy.merge_defaults(conn_name, policy_kind(scannable2), opts2)
+
+    case prepare_single_node_fanout(
+           conn_name,
+           node_name,
+           scannable2,
+           merged,
+           &distribute_record_max/2
+         ) do
+      {:ok, prepared} ->
+        cmd = scannable_command(:page_node, scannable2)
+
+        with_scan_telemetry(cmd, conn_name, scannable2, fn ->
+          run_fanout_page(conn_name, prepared, scannable2, merged)
+        end)
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   @spec all(atom(), Scan.t() | Query.t(), keyword()) ::
           {:ok, [Record.t()]} | {:error, Error.t()}
   def all(conn_name, scannable, opts \\ [])
       when is_atom(conn_name) and is_list(opts) do
     with :ok <- require_max_records(scannable) do
       all_after_max_ok(conn_name, scannable, opts)
+    end
+  end
+
+  @spec all_node(atom(), String.t(), Scan.t() | Query.t(), keyword()) ::
+          {:ok, [Record.t()]} | {:error, Error.t()}
+  def all_node(conn_name, node_name, scannable, opts \\ [])
+      when is_atom(conn_name) and is_binary(node_name) and is_list(opts) do
+    with :ok <- require_max_records(scannable) do
+      all_after_max_ok_node(conn_name, node_name, scannable, opts)
     end
   end
 
@@ -159,6 +318,28 @@ defmodule Aerospike.ScanOps do
     end
   end
 
+  @spec count_node(atom(), String.t(), Scan.t() | Query.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, Error.t()}
+  def count_node(conn_name, node_name, scannable, opts \\ [])
+      when is_atom(conn_name) and is_binary(node_name) and is_list(opts) do
+    scannable2 = force_no_bins(scannable)
+    merged = Policy.merge_defaults(conn_name, policy_kind(scannable), opts)
+
+    case prepare_single_node_fanout(conn_name, node_name, scannable2, merged, fn _total, _n ->
+           [@count_per_node_cap]
+         end) do
+      {:ok, prepared} ->
+        cmd = scannable_command(:count_node, scannable)
+
+        with_scan_telemetry(cmd, conn_name, scannable, fn ->
+          run_fanout_count(conn_name, prepared, scannable2, merged)
+        end)
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   @spec page(atom(), Scan.t() | Query.t(), keyword()) :: {:ok, Page.t()} | {:error, Error.t()}
   def page(conn_name, scannable, opts \\ [])
       when is_atom(conn_name) and is_list(opts) do
@@ -167,6 +348,18 @@ defmodule Aerospike.ScanOps do
     with {:ok, scannable2} <- apply_optional_cursor(scannable, cursor),
          :ok <- require_max_records(scannable2) do
       page_after_max_ok(conn_name, scannable2, opts2)
+    end
+  end
+
+  @spec page_node(atom(), String.t(), Scan.t() | Query.t(), keyword()) ::
+          {:ok, Page.t()} | {:error, Error.t()}
+  def page_node(conn_name, node_name, scannable, opts \\ [])
+      when is_atom(conn_name) and is_binary(node_name) and is_list(opts) do
+    {cursor, opts2} = Keyword.pop(opts, :cursor)
+
+    with {:ok, scannable2} <- apply_optional_cursor(scannable, cursor),
+         :ok <- require_max_records(scannable2) do
+      page_after_max_ok_node(conn_name, node_name, scannable2, opts2)
     end
   end
 
@@ -182,6 +375,28 @@ defmodule Aerospike.ScanOps do
           scannable,
           merged,
           :stream,
+          nil,
+          &ScanResponse.parse_stream_chunk/3
+        )
+      end,
+      &next_stream/1,
+      &cleanup_stream/1
+    )
+  end
+
+  @spec stream_node(atom(), String.t(), Scan.t() | Query.t(), keyword()) :: Enumerable.t()
+  def stream_node(conn_name, node_name, scannable, opts \\ [])
+      when is_atom(conn_name) and is_binary(node_name) and is_list(opts) do
+    merged = Policy.merge_defaults(conn_name, policy_kind(scannable), opts)
+
+    Stream.resource(
+      fn ->
+        init_stream_state_node(
+          conn_name,
+          node_name,
+          scannable,
+          merged,
+          scannable_command(:stream_node, scannable),
           nil,
           &ScanResponse.parse_stream_chunk/3
         )
@@ -294,6 +509,81 @@ defmodule Aerospike.ScanOps do
               set,
               checkout_timeout,
               max_concurrent,
+              parser
+            )
+          end)
+
+        monitor_ref = Process.monitor(producer)
+
+        %{
+          producer: producer,
+          monitor_ref: monitor_ref,
+          done: false,
+          telemetry: %{t0: t0, meta: meta}
+        }
+
+      {:error, %Error{} = err} ->
+        t0 = :erlang.monotonic_time()
+        meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
+
+        :telemetry.execute(
+          [:aerospike, :command, :start],
+          %{monotonic_time: t0},
+          meta
+        )
+
+        %{failed: err, telemetry: %{t0: t0, meta: meta}}
+    end
+  end
+
+  defp init_stream_state_node(
+         conn_name,
+         node_name,
+         scannable,
+         opts,
+         command,
+         wire_builder,
+         parser
+       ) do
+    distribute_fn = fn total, n ->
+      case total do
+        t when is_integer(t) and t > 0 -> distribute_record_max(t, n)
+        _ -> List.duplicate(0, n)
+      end
+    end
+
+    {ns, set} = namespace_set(scannable)
+
+    case prepare_single_node_fanout(
+           conn_name,
+           node_name,
+           scannable,
+           opts,
+           distribute_fn,
+           wire_builder
+         ) do
+      {:ok, prepared} ->
+        parent = self()
+        checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
+        meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
+        t0 = :erlang.monotonic_time()
+
+        :telemetry.execute(
+          [:aerospike, :command, :start],
+          %{monotonic_time: t0},
+          meta
+        )
+
+        producer =
+          spawn_link(fn ->
+            run_stream_coordinator(
+              conn_name,
+              prepared.node_wires,
+              parent,
+              ns,
+              set,
+              checkout_timeout,
+              1,
               parser
             )
           end)
@@ -645,27 +935,51 @@ defmodule Aerospike.ScanOps do
              groups,
              partials,
              replica_index
-           ),
-         :ok <- ensure_has_node_groups(groups2) do
-      sorted = Enum.sort_by(groups2, &elem(&1, 0))
-      n = length(sorted)
-      max_vals = distribute_fn.(scannable_max_for_distribute(scannable), n)
+           ) do
+      finalize_prepared_fanout(
+        groups2,
+        replica_index,
+        scannable,
+        opts,
+        distribute_fn,
+        wire_builder
+      )
+    end
+  end
 
-      node_wires =
-        sorted
-        |> Enum.zip(max_vals)
-        |> Enum.map(fn {{node_name, group}, node_max} ->
-          page_meta = %{
-            parts_full: group.parts_full,
-            parts_partial: group.parts_partial,
-            record_max: node_max
-          }
+  defp prepare_single_node_fanout(
+         conn_name,
+         node_name,
+         scannable,
+         opts,
+         distribute_fn,
+         wire_builder \\ nil
+       ) do
+    replica_index = replica_index_from_opts(opts)
+    {full_ids, partials} = Router.expand_partition_filter(scannable.partition_filter)
+    set = scannable_set(scannable)
 
-          wire = build_wire(scannable, page_meta, opts, wire_builder)
-          {node_name, group.pool_pid, wire, page_meta}
-        end)
-
-      {:ok, %{groups: groups2, node_wires: node_wires, replica_index: replica_index}}
+    with {:ok, pool_pid, ^node_name} <- Router.node_pool(conn_name, node_name),
+         {:ok, full_groups} <-
+           group_full_partitions(conn_name, scannable.namespace, full_ids, replica_index),
+         {:ok, group} <-
+           merge_targeted_partial_entries(
+             conn_name,
+             scannable.namespace,
+             set,
+             Map.get(full_groups, node_name, empty_partition_group(pool_pid)),
+             partials,
+             replica_index,
+             node_name
+           ) do
+      finalize_prepared_fanout_allow_empty(
+        %{node_name => group},
+        replica_index,
+        scannable,
+        opts,
+        distribute_fn,
+        wire_builder
+      )
     end
   end
 
@@ -683,6 +997,113 @@ defmodule Aerospike.ScanOps do
       :ok
     end
   end
+
+  defp finalize_prepared_fanout(
+         groups,
+         replica_index,
+         scannable,
+         opts,
+         distribute_fn,
+         wire_builder
+       ) do
+    sorted =
+      groups
+      |> Enum.filter(&non_empty_partition_group?/1)
+      |> Enum.sort_by(&elem(&1, 0))
+
+    case sorted do
+      [] ->
+        ensure_has_node_groups(%{})
+
+      _ ->
+        build_prepared_fanout(
+          sorted,
+          groups,
+          replica_index,
+          scannable,
+          opts,
+          distribute_fn,
+          wire_builder
+        )
+    end
+  end
+
+  defp finalize_prepared_fanout_allow_empty(
+         groups,
+         replica_index,
+         scannable,
+         opts,
+         distribute_fn,
+         wire_builder
+       ) do
+    sorted =
+      groups
+      |> Enum.filter(&non_empty_partition_group?/1)
+      |> Enum.sort_by(&elem(&1, 0))
+
+    case sorted do
+      [] ->
+        {:ok, %{groups: groups, node_wires: [], replica_index: replica_index}}
+
+      _ ->
+        build_prepared_fanout(
+          sorted,
+          groups,
+          replica_index,
+          scannable,
+          opts,
+          distribute_fn,
+          wire_builder
+        )
+    end
+  end
+
+  defp build_prepared_fanout(
+         sorted,
+         groups,
+         replica_index,
+         scannable,
+         opts,
+         distribute_fn,
+         wire_builder
+       ) do
+    n = length(sorted)
+    max_vals = distribute_fn.(scannable_max_for_distribute(scannable), n)
+
+    node_wires =
+      sorted
+      |> Enum.zip(max_vals)
+      |> Enum.map(fn {{node_name, group}, node_max} ->
+        page_meta = %{
+          parts_full: group.parts_full,
+          parts_partial: group.parts_partial,
+          record_max: node_max
+        }
+
+        wire = build_wire(scannable, page_meta, opts, wire_builder)
+        {node_name, group.pool_pid, wire, page_meta}
+      end)
+
+    {:ok, %{groups: groups, node_wires: node_wires, replica_index: replica_index}}
+  end
+
+  defp group_full_partitions(_conn_name, _namespace, [], _replica_index), do: {:ok, %{}}
+
+  defp group_full_partitions(conn_name, namespace, full_ids, replica_index) do
+    Router.group_partitions_by_node(conn_name, namespace, full_ids, replica_index)
+  end
+
+  defp empty_partition_group(pool_pid) when is_pid(pool_pid) do
+    %{pool_pid: pool_pid, parts_full: [], parts_partial: []}
+  end
+
+  defp non_empty_partition_group?({_node_name, %{parts_full: [_ | _], parts_partial: _partial}}),
+    do: true
+
+  defp non_empty_partition_group?({_node_name, %{parts_full: [], parts_partial: [_ | _]}}),
+    do: true
+
+  defp non_empty_partition_group?({_node_name, %{parts_full: [], parts_partial: []}}), do: false
 
   @spec merge_partial_entries(
           atom(),
@@ -702,6 +1123,44 @@ defmodule Aerospike.ScanOps do
     end
   end
 
+  defp merge_targeted_partial_entries(
+         _conn_name,
+         _namespace,
+         _set,
+         group,
+         [],
+         _replica_index,
+         _target_node_name
+       ) do
+    {:ok, %{group | parts_partial: Enum.reverse(group.parts_partial)}}
+  end
+
+  defp merge_targeted_partial_entries(
+         conn_name,
+         namespace,
+         set,
+         group,
+         partials,
+         replica_index,
+         target_node_name
+       ) do
+    Enum.reduce_while(partials, {:ok, group}, fn entry, {:ok, acc} ->
+      merge_one_targeted_partial(
+        conn_name,
+        namespace,
+        set,
+        acc,
+        entry,
+        replica_index,
+        target_node_name
+      )
+    end)
+    |> case do
+      {:ok, group2} -> {:ok, %{group2 | parts_partial: Enum.reverse(group2.parts_partial)}}
+      {:error, _} = err -> err
+    end
+  end
+
   defp merge_one_partial(conn_name, namespace, set, acc, entry, replica_index) do
     with {:ok, part_id} <- resolve_partial_partition_id(entry, namespace, set),
          {:ok, pool_pid, node_name} <-
@@ -712,6 +1171,47 @@ defmodule Aerospike.ScanOps do
     else
       {:error, _} = err -> {:halt, err}
     end
+  end
+
+  defp merge_one_targeted_partial(
+         conn_name,
+         namespace,
+         set,
+         acc,
+         entry,
+         replica_index,
+         target_node_name
+       ) do
+    with {:ok, part_id} <- resolve_partial_partition_id(entry, namespace, set),
+         {:ok, pool_pid, resolved_node_name} <-
+           Router.resolve_pool_for_partition(conn_name, namespace, part_id, replica_index) do
+      continue_targeted_partial(
+        resolved_node_name,
+        target_node_name,
+        acc,
+        pool_pid,
+        Map.put(entry, :id, part_id)
+      )
+    else
+      {:error, _} = err -> {:halt, err}
+    end
+  end
+
+  defp continue_targeted_partial(
+         target_node_name,
+         target_node_name,
+         acc,
+         pool_pid,
+         entry
+       ) do
+    case insert_targeted_partial_entry(acc, pool_pid, entry) do
+      {:ok, acc2} -> {:cont, {:ok, acc2}}
+      {:error, _} = err -> {:halt, err}
+    end
+  end
+
+  defp continue_targeted_partial(_resolved_node_name, _target_node_name, acc, _pool_pid, _entry) do
+    {:cont, {:ok, acc}}
   end
 
   defp resolve_partial_partition_id(entry, namespace, set) do
@@ -753,6 +1253,18 @@ defmodule Aerospike.ScanOps do
              "inconsistent pool_pid for node #{inspect(node_name)}: #{inspect(other)} vs #{inspect(pool_pid)}"
          )}
     end
+  end
+
+  defp insert_targeted_partial_entry(%{pool_pid: pool_pid} = group, pool_pid, entry) do
+    {:ok, %{group | parts_partial: [entry | group.parts_partial]}}
+  end
+
+  defp insert_targeted_partial_entry(%{pool_pid: other}, pool_pid, _entry) do
+    {:error,
+     Error.from_result_code(:invalid_node,
+       message:
+         "inconsistent pool_pid for targeted node: #{inspect(other)} vs #{inspect(pool_pid)}"
+     )}
   end
 
   defp run_fanout_count(conn_name, %{node_wires: wires}, _scannable, opts) do
@@ -1027,10 +1539,18 @@ defmodule Aerospike.ScanOps do
 
   defp scannable_command(:all, %Scan{}), do: :scan_all
   defp scannable_command(:all, %Query{}), do: :query_all
+  defp scannable_command(:all_node, %Scan{}), do: :scan_all_node
+  defp scannable_command(:all_node, %Query{}), do: :query_all_node
   defp scannable_command(:count, %Scan{}), do: :scan_count
   defp scannable_command(:count, %Query{}), do: :query_count
+  defp scannable_command(:count_node, %Scan{}), do: :scan_count_node
+  defp scannable_command(:count_node, %Query{}), do: :query_count_node
   defp scannable_command(:page, %Scan{}), do: :scan_page
   defp scannable_command(:page, %Query{}), do: :query_page
+  defp scannable_command(:page_node, %Scan{}), do: :scan_page_node
+  defp scannable_command(:page_node, %Query{}), do: :query_page_node
+  defp scannable_command(:stream_node, %Scan{}), do: :scan_stream_node
+  defp scannable_command(:stream_node, %Query{}), do: :query_stream_node
 
   defp stream_telemetry_meta(command, conn_name, scannable, ns, set) do
     %{

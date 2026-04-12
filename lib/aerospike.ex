@@ -60,6 +60,7 @@ defmodule Aerospike do
   alias Aerospike.Policy
   alias Aerospike.Privilege
   alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Query
   alias Aerospike.RegisterTask
   alias Aerospike.Role
@@ -70,6 +71,34 @@ defmodule Aerospike do
   alias Aerospike.TxnRoll
   alias Aerospike.UDF
   alias Aerospike.User
+
+  @dialyzer {:nowarn_function,
+             [
+               {:batch_get_header!, 2},
+               {:batch_get_header!, 3},
+               {:batch_get_operate!, 3},
+               {:batch_get_operate!, 4},
+               {:batch_delete!, 2},
+               {:batch_delete!, 3},
+               {:batch_udf!, 5},
+               {:batch_udf!, 6},
+               {:query_stream_node!, 3},
+               {:query_stream_node!, 4},
+               {:query_all_node!, 3},
+               {:query_all_node!, 4},
+               {:query_count_node!, 3},
+               {:query_count_node!, 4},
+               {:query_page_node!, 3},
+               {:query_page_node!, 4},
+               {:scan_stream_node!, 3},
+               {:scan_stream_node!, 4},
+               {:scan_all_node!, 3},
+               {:scan_all_node!, 4},
+               {:scan_count_node!, 3},
+               {:scan_count_node!, 4},
+               {:scan_page_node!, 3},
+               {:scan_page_node!, 4}
+             ]}
 
   @typedoc """
   Named connection handle: currently an atom (`:name` from `start_link/1`).
@@ -83,6 +112,11 @@ defmodule Aerospike do
   One cluster node as returned by `nodes/1`: display `name`, TCP `host`, and `port`.
   """
   @type node_info :: %{name: String.t(), host: String.t(), port: non_neg_integer()}
+
+  @typedoc """
+  Cluster node identifier as returned by `node_names/1` or the `:name` field from `nodes/1`.
+  """
+  @type node_name :: String.t()
 
   @typedoc "Security user metadata returned by `query_user/3` and `query_users/2`."
   @type user_info :: User.t()
@@ -699,6 +733,167 @@ defmodule Aerospike do
   end
 
   @doc """
+  Reads record headers for multiple keys in one batch call.
+
+  This dedicated wrapper is accepted for Phase 4 because the capability already
+  exists under `batch_get(..., header_only: true)`, but the narrower name is
+  easier to discover and makes the intended return shape explicit.
+
+  Returns records aligned with `keys`; missing keys appear as `nil`.
+
+  `batch_get_header/3` rejects `:bins` and explicit `:header_only`; the wrapper
+  always enforces header-only semantics itself.
+  """
+  @spec batch_get_header(conn, [Key.key_input()], keyword()) ::
+          {:ok, [Aerospike.Record.t() | nil]} | {:error, Error.t()}
+  def batch_get_header(conn, keys, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_list(opts) do
+    with :ok <- validate_batch_get_header_opts(opts) do
+      batch_get(conn, keys, Keyword.put(opts, :header_only, true))
+    end
+  end
+
+  @doc """
+  Same as `batch_get_header/3` but returns the list or raises `Aerospike.Error`.
+  """
+  @spec batch_get_header!(conn, [Key.key_input()], keyword()) :: [Aerospike.Record.t() | nil]
+  def batch_get_header!(conn, keys, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_list(opts) do
+    case batch_get_header(conn, keys, opts) do
+      {:ok, recs} -> recs
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Executes one shared read-only operate list against multiple keys in one batch call.
+
+  This is the accepted homogeneous/read-focused companion to `batch_operate/3`.
+  Mixed read/write operate flows remain the responsibility of
+  `Aerospike.Batch.operate/3` plus `batch_operate/3`.
+
+  Returns records in key order, with `nil` for missing keys.
+
+  The shared `ops` list must be non-empty and read-only. Missing keys, filtered
+  reads, and missing projected bins normalize to `nil`, matching the existing
+  `batch_get/3` shape.
+  """
+  @spec batch_get_operate(conn, [Key.key_input()], [Aerospike.Op.t()], keyword()) ::
+          {:ok, [Aerospike.Record.t() | nil]} | {:error, Error.t()}
+  def batch_get_operate(conn, keys, ops, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_list(ops) and is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys),
+         :ok <- validate_batch_get_operate_ops(ops),
+         {:ok, bopts} <- Policy.validate_batch(opts),
+         {:ok, results} <- BatchOps.batch_operate(conn, batch_operate_ops(keys, ops), bopts) do
+      normalize_batch_get_operate_results(results)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `batch_get_operate/4` but returns the list or raises `Aerospike.Error`.
+  """
+  @spec batch_get_operate!(conn, [Key.key_input()], [Aerospike.Op.t()], keyword()) ::
+          [Aerospike.Record.t() | nil]
+  def batch_get_operate!(conn, keys, ops, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_list(ops) and is_list(opts) do
+    case batch_get_operate(conn, keys, ops, opts) do
+      {:ok, recs} -> recs
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Deletes multiple keys with one uniform delete intent.
+
+  The accepted return shape is a list of `%Aerospike.BatchResult{}` structs in
+  input order. A plain boolean list would hide real per-key failure detail, and
+  the current batch response model does not preserve enough information to
+  collapse every delete outcome honestly into `true` or `false`.
+
+  """
+  @spec batch_delete(conn, [Key.key_input()], keyword()) ::
+          {:ok, [Aerospike.BatchResult.t()]} | {:error, Error.t()}
+  def batch_delete(conn, keys, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys),
+         {:ok, bopts} <- Policy.validate_batch(opts) do
+      BatchOps.batch_operate(conn, Enum.map(keys, &Batch.delete/1), bopts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `batch_delete/3` but returns results or raises `Aerospike.Error`.
+  """
+  @spec batch_delete!(conn, [Key.key_input()], keyword()) :: [Aerospike.BatchResult.t()]
+  def batch_delete!(conn, keys, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_list(opts) do
+    case batch_delete(conn, keys, opts) do
+      {:ok, results} -> results
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Executes the same record UDF against multiple keys in one batch call.
+
+  The accepted public name is `batch_udf/6`, not `batch_execute/6`. The UDF
+  intent is more explicit, and the library already uses `apply_udf/6`,
+  `query_udf/6`, and `Aerospike.Batch.udf/5` for this concept.
+
+  Return values stay in `%Aerospike.BatchResult{}` form because UDF responses
+  can carry per-key success or failure details that do not compress cleanly into
+  a plain homogeneous list.
+
+  """
+  @spec batch_udf(conn, [Key.key_input()], String.t(), String.t(), list(), keyword()) ::
+          {:ok, [Aerospike.BatchResult.t()]} | {:error, Error.t()}
+  def batch_udf(conn, keys, package, function, args, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_binary(package) and is_binary(function) and
+             is_list(args) and is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys),
+         {:ok, bopts} <- Policy.validate_batch(opts) do
+      batch_ops = Enum.map(keys, &Batch.udf(&1, package, function, args))
+      BatchOps.batch_operate(conn, batch_ops, bopts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `batch_udf/6` but returns results or raises `Aerospike.Error`.
+  """
+  @spec batch_udf!(conn, [Key.key_input()], String.t(), String.t(), list(), keyword()) ::
+          [Aerospike.BatchResult.t()]
+  def batch_udf!(conn, keys, package, function, args, opts \\ [])
+      when is_atom(conn) and is_list(keys) and is_binary(package) and is_binary(function) and
+             is_list(args) and is_list(opts) do
+    case batch_udf(conn, keys, package, function, args, opts) do
+      {:ok, results} -> results
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
   Runs a heterogeneous batch built with `Aerospike.Batch`.
 
   Each input operation produces one `Aerospike.BatchResult` in the same position.
@@ -874,6 +1069,133 @@ defmodule Aerospike do
   @spec query_page!(conn(), Query.t(), keyword()) :: Page.t()
   def query_page!(conn, %Query{} = query, opts \\ []) when is_atom(conn) and is_list(opts) do
     case query_page(conn, query, opts) do
+      {:ok, page} -> page
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns a lazy `Stream` of records from a query restricted to one named node.
+
+  Callers obtain `node_name` from `node_names/1` or from the `:name` field in
+  `nodes/1`. Missing or stale node names return a normal `%Aerospike.Error{}`
+  rather than silently falling back to cluster-wide execution.
+
+  Phase 4 intentionally limits node-targeted support to record-read query APIs.
+  Background query execution, query UDF mutation, and aggregate-query node
+  targeting remain deferred.
+  """
+  @spec query_stream_node(conn(), node_name(), Query.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t()}
+  def query_stream_node(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case validate_scan_query_opts(query, opts) do
+      {:ok, call_opts} ->
+        {:ok, ScanOps.stream_node(conn, node_name, query, call_opts)}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_stream_node/4` but returns the stream or raises `Aerospike.Error`.
+  """
+  @spec query_stream_node!(conn(), node_name(), Query.t(), keyword()) :: Enumerable.t()
+  def query_stream_node!(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case query_stream_node(conn, node_name, query, opts) do
+      {:ok, stream} -> stream
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Eagerly collects query records from one named node.
+  """
+  @spec query_all_node(conn(), node_name(), Query.t(), keyword()) ::
+          {:ok, [Aerospike.Record.t()]} | {:error, Error.t()}
+  def query_all_node(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case validate_scan_query_opts(query, opts) do
+      {:ok, call_opts} ->
+        ScanOps.all_node(conn, node_name, query, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_all_node/4` but returns the list or raises `Aerospike.Error`.
+  """
+  @spec query_all_node!(conn(), node_name(), Query.t(), keyword()) :: [Aerospike.Record.t()]
+  def query_all_node!(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case query_all_node(conn, node_name, query, opts) do
+      {:ok, records} -> records
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Counts query matches on one named node.
+  """
+  @spec query_count_node(conn(), node_name(), Query.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, Error.t()}
+  def query_count_node(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case validate_scan_query_opts(query, opts) do
+      {:ok, call_opts} ->
+        ScanOps.count_node(conn, node_name, query, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_count_node/4` but returns the count or raises `Aerospike.Error`.
+  """
+  @spec query_count_node!(conn(), node_name(), Query.t(), keyword()) :: non_neg_integer()
+  def query_count_node!(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case query_count_node(conn, node_name, query, opts) do
+      {:ok, n} -> n
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns one page of query results from one named node.
+  """
+  @spec query_page_node(conn(), node_name(), Query.t(), keyword()) ::
+          {:ok, Page.t()} | {:error, Error.t()}
+  def query_page_node(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    {cursor, opts2} = Keyword.pop(opts, :cursor)
+
+    case validate_scan_query_opts(query, opts2) do
+      {:ok, call_opts} ->
+        opts3 = if cursor != nil, do: Keyword.put(call_opts, :cursor, cursor), else: call_opts
+        ScanOps.page_node(conn, node_name, query, opts3)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_page_node/4` but returns `%Aerospike.Page{}` or raises `Aerospike.Error`.
+  """
+  @spec query_page_node!(conn(), node_name(), Query.t(), keyword()) :: Page.t()
+  def query_page_node!(conn, node_name, %Query{} = query, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case query_page_node(conn, node_name, query, opts) do
       {:ok, page} -> page
       {:error, %Error{} = e} -> raise e
     end
@@ -1183,6 +1505,117 @@ defmodule Aerospike do
   def page!(conn, scannable, opts \\ []) when is_atom(conn) and is_list(opts) do
     case page(conn, scannable, opts) do
       {:ok, p} -> p
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns a lazy `Stream` of scan records from one named node.
+
+  Callers obtain `node_name` from `node_names/1` or from the `:name` field in
+  `nodes/1`. Missing or stale node names return a normal `%Aerospike.Error{}`
+  rather than silently broadening the scan to the whole cluster.
+  """
+  @spec scan_stream_node!(conn(), node_name(), Scan.t(), keyword()) :: Enumerable.t()
+  def scan_stream_node!(conn, node_name, %Scan{} = scan, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case validate_scan_query_opts(scan, opts) do
+      {:ok, call_opts} ->
+        ScanOps.stream_node(conn, node_name, scan, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        raise Error.from_result_code(:parameter_error,
+                message: Policy.validation_error_message(e)
+              )
+    end
+  end
+
+  @doc """
+  Eagerly collects scan records from one named node.
+  """
+  @spec scan_all_node(conn(), node_name(), Scan.t(), keyword()) ::
+          {:ok, [Aerospike.Record.t()]} | {:error, Error.t()}
+  def scan_all_node(conn, node_name, %Scan{} = scan, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case validate_scan_query_opts(scan, opts) do
+      {:ok, call_opts} ->
+        ScanOps.all_node(conn, node_name, scan, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `scan_all_node/4` but returns the list or raises `Aerospike.Error`.
+  """
+  @spec scan_all_node!(conn(), node_name(), Scan.t(), keyword()) :: [Aerospike.Record.t()]
+  def scan_all_node!(conn, node_name, %Scan{} = scan, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case scan_all_node(conn, node_name, scan, opts) do
+      {:ok, records} -> records
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Counts scan matches on one named node.
+  """
+  @spec scan_count_node(conn(), node_name(), Scan.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, Error.t()}
+  def scan_count_node(conn, node_name, %Scan{} = scan, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case validate_scan_query_opts(scan, opts) do
+      {:ok, call_opts} ->
+        ScanOps.count_node(conn, node_name, scan, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `scan_count_node/4` but returns the count or raises `Aerospike.Error`.
+  """
+  @spec scan_count_node!(conn(), node_name(), Scan.t(), keyword()) :: non_neg_integer()
+  def scan_count_node!(conn, node_name, %Scan{} = scan, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case scan_count_node(conn, node_name, scan, opts) do
+      {:ok, n} -> n
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Returns one page of scan results from one named node.
+  """
+  @spec scan_page_node(conn(), node_name(), Scan.t(), keyword()) ::
+          {:ok, Page.t()} | {:error, Error.t()}
+  def scan_page_node(conn, node_name, %Scan{} = scan, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    {cursor, opts2} = Keyword.pop(opts, :cursor)
+
+    case validate_scan_query_opts(scan, opts2) do
+      {:ok, call_opts} ->
+        opts3 = if cursor != nil, do: Keyword.put(call_opts, :cursor, cursor), else: call_opts
+        ScanOps.page_node(conn, node_name, scan, opts3)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `scan_page_node/4` but returns `%Aerospike.Page{}` or raises `Aerospike.Error`.
+  """
+  @spec scan_page_node!(conn(), node_name(), Scan.t(), keyword()) :: Page.t()
+  def scan_page_node!(conn, node_name, %Scan{} = scan, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(opts) do
+    case scan_page_node(conn, node_name, scan, opts) do
+      {:ok, page} -> page
       {:error, %Error{} = e} -> raise e
     end
   end
@@ -2048,6 +2481,76 @@ defmodule Aerospike do
 
   defp validate_scan_query_opts(%Query{} = _scannable, opts) when is_list(opts),
     do: Policy.validate_query(opts)
+
+  defp validate_batch_get_header_opts(opts) when is_list(opts) do
+    cond do
+      Keyword.has_key?(opts, :bins) ->
+        {:error,
+         Error.from_result_code(:parameter_error,
+           message: "batch_get_header/3 does not accept :bins; it always returns headers only"
+         )}
+
+      Keyword.has_key?(opts, :header_only) ->
+        {:error,
+         Error.from_result_code(:parameter_error,
+           message: "batch_get_header/3 always uses header_only: true; omit :header_only"
+         )}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_batch_get_operate_ops([]) do
+    {:error,
+     Error.from_result_code(:parameter_error, message: "batch operate operations cannot be empty")}
+  end
+
+  defp validate_batch_get_operate_ops(ops) when is_list(ops) do
+    flags = OperateFlags.scan_ops(ops)
+
+    if flags.has_write? do
+      {:error,
+       Error.from_result_code(:parameter_error,
+         message: "batch_get_operate/4 accepts only read-only operations"
+       )}
+    else
+      :ok
+    end
+  end
+
+  defp batch_operate_ops(keys, ops) do
+    Enum.map(keys, &Batch.operate(&1, ops))
+  end
+
+  defp normalize_batch_get_operate_results(results) when is_list(results) do
+    Enum.reduce_while(results, {:ok, []}, fn result, {:ok, acc} ->
+      case normalize_batch_get_operate_result(result) do
+        {:ok, record} -> {:cont, {:ok, [record | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, records} -> {:ok, Enum.reverse(records)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp normalize_batch_get_operate_result(%Aerospike.BatchResult{status: :ok, record: record}),
+    do: {:ok, record}
+
+  defp normalize_batch_get_operate_result(%Aerospike.BatchResult{
+         status: :error,
+         error: %Error{code: code}
+       })
+       when code in [:key_not_found, :filtered_out, :bin_not_found],
+       do: {:ok, nil}
+
+  defp normalize_batch_get_operate_result(%Aerospike.BatchResult{
+         status: :error,
+         error: %Error{} = err
+       }),
+       do: {:error, err}
 
   defp validate_query_ops([]) do
     {:error,

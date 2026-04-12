@@ -1,6 +1,8 @@
 defmodule Aerospike.Integration.BatchTest do
   use ExUnit.Case, async: false
 
+  import Aerospike.Op
+
   alias Aerospike.Batch
   alias Aerospike.Tables
   alias Aerospike.Test.Helpers
@@ -123,6 +125,22 @@ defmodule Aerospike.Integration.BatchTest do
     assert r.ttl > 0
   end
 
+  test "batch_get_header mirrors header-only batch_get semantics", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    k = Helpers.unique_key("test", "batch_itest")
+    on_exit(fn -> Helpers.cleanup_key(k, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, k, %{"a" => 1, "b" => 2}, ttl: 600)
+
+    assert {:ok, [r]} = Aerospike.batch_get_header(conn, [k])
+    assert r.bins == %{}
+    assert r.generation >= 1
+    assert r.ttl > 0
+  end
+
   test "batch_exists", %{conn: conn, host: host, port: port} do
     k1 = Helpers.unique_key("test", "batch_itest")
     k2 = Helpers.unique_key("test", "batch_itest")
@@ -174,6 +192,55 @@ defmodule Aerospike.Integration.BatchTest do
 
     assert res.status == :ok
     assert res.record.bins["c"] == 15
+  end
+
+  test "batch_get_operate returns records and nil for missing keys", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    k1 = Helpers.unique_key("test", "batch_itest")
+    k2 = Helpers.unique_key("test", "batch_itest")
+    on_exit(fn -> Helpers.cleanup_key(k1, host: host, port: port) end)
+    on_exit(fn -> Helpers.cleanup_key(k2, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, k1, %{"n" => 41})
+
+    assert {:ok, [r1, nil]} = Aerospike.batch_get_operate(conn, [k1, k2], [get("n")])
+    assert r1.bins["n"] == 41
+  end
+
+  test "batch_delete deletes each key through batch_operate path", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    k1 = Helpers.unique_key("test", "batch_itest")
+    k2 = Helpers.unique_key("test", "batch_itest")
+    on_exit(fn -> Helpers.cleanup_key(k1, host: host, port: port) end)
+    on_exit(fn -> Helpers.cleanup_key(k2, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, k1, %{"n" => 1})
+    :ok = Aerospike.put!(conn, k2, %{"n" => 2})
+
+    assert {:ok, results} = Aerospike.batch_delete(conn, [k1, k2])
+    assert Enum.all?(results, &(&1.status == :ok and is_nil(&1.record)))
+    assert {:ok, [false, false]} = Aerospike.batch_exists(conn, [k1, k2])
+  end
+
+  test "batch_udf returns batch results for missing udf package", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    k = Helpers.unique_key("test", "batch_itest")
+    on_exit(fn -> Helpers.cleanup_key(k, host: host, port: port) end)
+
+    :ok = Aerospike.put!(conn, k, %{"n" => 1})
+
+    assert {:ok, [result]} = Aerospike.batch_udf(conn, [k], "missing_pkg", "missing_fn", [])
+    assert result.status == :error
+    assert %Aerospike.Error{} = result.error
   end
 
   test "batch telemetry emits command events", %{conn: conn, host: host, port: port} do

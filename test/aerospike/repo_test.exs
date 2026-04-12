@@ -28,7 +28,18 @@ defmodule Aerospike.RepoTest do
     def get(conn, key, opts), do: record(:get, [conn, key, opts], {:ok, %{}})
     def delete(conn, key, opts), do: record(:delete, [conn, key, opts], {:ok, true})
     def batch_get(conn, keys, opts), do: record(:batch_get, [conn, keys, opts], {:ok, []})
+
+    def batch_get_header(conn, keys, opts),
+      do: record(:batch_get_header, [conn, keys, opts], {:ok, []})
+
+    def batch_get_operate(conn, keys, ops, opts),
+      do: record(:batch_get_operate, [conn, keys, ops, opts], {:ok, []})
+
     def batch_operate(conn, ops, opts), do: record(:batch_operate, [conn, ops, opts], {:ok, []})
+    def batch_delete(conn, keys, opts), do: record(:batch_delete, [conn, keys, opts], {:ok, []})
+
+    def batch_udf(conn, keys, package, function, args, opts),
+      do: record(:batch_udf, [conn, keys, package, function, args, opts], {:ok, []})
 
     def query_stream(conn, query, opts),
       do: record(:query_stream, [conn, query, opts], {:ok, :q_stream})
@@ -207,7 +218,11 @@ defmodule Aerospike.RepoTest do
       assert {:ok, %{}} = NamedRepo.get(key, bins: ["n"])
       assert {:ok, true} = NamedRepo.delete(key, [])
       assert {:ok, []} = NamedRepo.batch_get([key], timeout: 1_000)
+      assert {:ok, []} = NamedRepo.batch_get_header([key], timeout: 1_000)
+      assert {:ok, []} = NamedRepo.batch_get_operate([key], [:read_op], timeout: 1_000)
       assert {:ok, []} = NamedRepo.batch_operate([], timeout: 1_000)
+      assert {:ok, []} = NamedRepo.batch_delete([key], timeout: 1_000)
+      assert {:ok, []} = NamedRepo.batch_udf([key], "pkg", "fn", [], timeout: 1_000)
       assert {:ok, :q_stream} = NamedRepo.query_stream(scannable, timeout: 2_000)
       assert :q_stream = NamedRepo.query_stream!(scannable, timeout: 2_000)
       assert {:ok, []} = NamedRepo.query_all(scannable, timeout: 2_000)
@@ -248,15 +263,21 @@ defmodule Aerospike.RepoTest do
       assert {:batch_get, [:repo_conn, [^key], [timeout: 1_000]]} =
                Enum.at(FakeAdapter.calls(), 3)
 
-      assert {:query_stream, [:repo_conn, ^scannable, [timeout: 2_000]]} =
+      assert {:batch_get_header, [:repo_conn, [^key], [timeout: 1_000]]} =
+               Enum.at(FakeAdapter.calls(), 4)
+
+      assert {:batch_get_operate, [:repo_conn, [^key], [:read_op], [timeout: 1_000]]} =
                Enum.at(FakeAdapter.calls(), 5)
 
-      assert {:stream!, [:repo_conn, ^scannable, [timeout: 2_000]]} =
-               Enum.at(FakeAdapter.calls(), 13)
+      assert {:query_stream, [:repo_conn, ^scannable, [timeout: 2_000]]} =
+               Enum.at(FakeAdapter.calls(), 9)
 
-      assert {:transaction_2, [:repo_conn, _fun]} = Enum.at(FakeAdapter.calls(), 26)
-      assert {:commit, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 28)
-      assert {:abort, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 29)
+      assert {:stream!, [:repo_conn, ^scannable, [timeout: 2_000]]} =
+               Enum.at(FakeAdapter.calls(), 17)
+
+      assert {:transaction_2, [:repo_conn, _fun]} = Enum.at(FakeAdapter.calls(), 30)
+      assert {:commit, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 32)
+      assert {:abort, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 33)
     end
   end
 

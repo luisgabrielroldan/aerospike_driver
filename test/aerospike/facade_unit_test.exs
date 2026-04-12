@@ -5,6 +5,7 @@ defmodule Aerospike.FacadeUnitTest do
 
   alias Aerospike.Batch
   alias Aerospike.Key
+  alias Aerospike.PartitionFilter
   alias Aerospike.Query
   alias Aerospike.Scan
   alias Aerospike.TableOwner
@@ -75,7 +76,16 @@ defmodule Aerospike.FacadeUnitTest do
 
     test "batch_get/batch_exists/batch_operate return cluster_not_ready", %{conn: conn, key: key} do
       assert {:error, %{code: :cluster_not_ready}} = Aerospike.batch_get(conn, [key])
+      assert {:error, %{code: :cluster_not_ready}} = Aerospike.batch_get_header(conn, [key])
       assert {:error, %{code: :cluster_not_ready}} = Aerospike.batch_exists(conn, [key])
+
+      assert {:error, %{code: :cluster_not_ready}} =
+               Aerospike.batch_get_operate(conn, [key], [get("n")])
+
+      assert {:error, %{code: :cluster_not_ready}} = Aerospike.batch_delete(conn, [key])
+
+      assert {:error, %{code: :cluster_not_ready}} =
+               Aerospike.batch_udf(conn, [key], "pkg", "fn", [])
 
       assert {:error, %{code: :cluster_not_ready}} =
                Aerospike.batch_operate(conn, [Batch.read(key)])
@@ -128,10 +138,41 @@ defmodule Aerospike.FacadeUnitTest do
                Aerospike.batch_get(:nonexistent, [key], bad_opt: true)
 
       assert {:error, %{code: :parameter_error}} =
+               Aerospike.batch_get_header(:nonexistent, [key], header_only: true)
+
+      assert {:error, %{code: :parameter_error}} =
                Aerospike.batch_exists(:nonexistent, [key], bad_opt: true)
 
       assert {:error, %{code: :parameter_error}} =
+               Aerospike.batch_get_operate(:nonexistent, [key], [get("n")], bad_opt: true)
+
+      assert {:error, %{code: :parameter_error}} =
+               Aerospike.batch_delete(:nonexistent, [key], bad_opt: true)
+
+      assert {:error, %{code: :parameter_error}} =
+               Aerospike.batch_udf(:nonexistent, [key], "pkg", "fn", [], bad_opt: true)
+
+      assert {:error, %{code: :parameter_error}} =
                Aerospike.batch_operate(:nonexistent, [Batch.read(key)], bad_opt: true)
+    end
+
+    test "batch_get_header rejects contradictory read options", %{key: key} do
+      assert {:error, %{code: :parameter_error, message: message}} =
+               Aerospike.batch_get_header(:nonexistent, [key], bins: ["n"])
+
+      assert message =~ "does not accept :bins"
+    end
+
+    test "batch_get_operate rejects empty and write op lists", %{key: key} do
+      assert {:error, %{code: :parameter_error, message: empty_message}} =
+               Aerospike.batch_get_operate(:nonexistent, [key], [])
+
+      assert empty_message =~ "cannot be empty"
+
+      assert {:error, %{code: :parameter_error, message: write_message}} =
+               Aerospike.batch_get_operate(:nonexistent, [key], [put("n", 1)])
+
+      assert write_message =~ "read-only"
     end
 
     test "single-record APIs return parameter_error on invalid key shape" do
@@ -215,7 +256,23 @@ defmodule Aerospike.FacadeUnitTest do
       end
 
       assert_raise Aerospike.Error, fn ->
+        Aerospike.batch_get_header!(:nonexistent, [key], header_only: true)
+      end
+
+      assert_raise Aerospike.Error, fn ->
         Aerospike.batch_exists!(:nonexistent, [key], bad_opt: true)
+      end
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.batch_get_operate!(:nonexistent, [key], [put("n", 1)])
+      end
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.batch_delete!(:nonexistent, [key], bad_opt: true)
+      end
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.batch_udf!(:nonexistent, [key], "pkg", "fn", [], bad_opt: true)
       end
 
       assert_raise Aerospike.Error, fn ->
@@ -443,6 +500,108 @@ defmodule Aerospike.FacadeUnitTest do
       end
     end
 
+    test "phase 4 node-targeted read APIs expose missing-node errors", %{scan: scan} do
+      conn = :"facade_phase4_#{System.unique_integer([:positive, :monotonic])}"
+      query = Query.new("test", "users")
+      setup_ready_tables(conn)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_all_node(:nonexistent, "node-a", query, bad_opt: true)
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.scan_stream_node!(:nonexistent, "node-a", scan, bad_opt: true) |> Enum.to_list()
+      end
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.query_all_node(conn, "missing-node", Query.max_records(query, 1))
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.query_count_node(conn, "missing-node", query)
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.query_page_node(conn, "missing-node", Query.max_records(query, 1))
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.scan_all_node(conn, "missing-node", Scan.max_records(scan, 1))
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.scan_count_node(conn, "missing-node", scan)
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.scan_page_node(conn, "missing-node", Scan.max_records(scan, 1))
+
+      assert {:ok, query_stream} = Aerospike.query_stream_node(conn, "missing-node", query)
+
+      err =
+        assert_raise Aerospike.Error, fn ->
+          Enum.to_list(query_stream)
+        end
+
+      assert err.code == :invalid_node
+
+      err =
+        assert_raise Aerospike.Error, fn ->
+          Aerospike.scan_stream_node!(conn, "missing-node", scan) |> Enum.to_list()
+        end
+
+      assert err.code == :invalid_node
+    end
+
+    test "phase 4 node-targeted scan APIs do not widen to other nodes when the target has no partitions" do
+      conn = :"facade_phase4_scan_scope_#{System.unique_integer([:positive, :monotonic])}"
+      setup_ready_tables(conn)
+
+      target_node = "node-a"
+      other_node = "node-b"
+      part_id = 42
+
+      :ets.insert(Tables.nodes(conn), {target_node, %{pool_pid: self(), active: true}})
+      :ets.insert(Tables.nodes(conn), {other_node, %{pool_pid: self(), active: true}})
+      :ets.insert(Tables.partitions(conn), {{"test", part_id, 0}, other_node})
+
+      scan =
+        Scan.new("test", "users")
+        |> Scan.partition_filter(PartitionFilter.by_id(part_id))
+        |> Scan.max_records(5)
+
+      assert {:ok, []} = Aerospike.scan_all_node(conn, target_node, scan)
+      assert {:ok, 0} = Aerospike.scan_count_node(conn, target_node, scan)
+
+      assert {:ok, %Aerospike.Page{records: [], cursor: nil, done?: true}} =
+               Aerospike.scan_page_node(conn, target_node, scan)
+
+      assert [] =
+               Aerospike.scan_stream_node!(conn, target_node, scan)
+               |> Enum.to_list()
+    end
+
+    test "phase 4 node-targeted query APIs do not widen to other nodes when the target has no partitions" do
+      conn = :"facade_phase4_query_scope_#{System.unique_integer([:positive, :monotonic])}"
+      setup_ready_tables(conn)
+
+      target_node = "node-a"
+      other_node = "node-b"
+      part_id = 84
+
+      :ets.insert(Tables.nodes(conn), {target_node, %{pool_pid: self(), active: true}})
+      :ets.insert(Tables.nodes(conn), {other_node, %{pool_pid: self(), active: true}})
+      :ets.insert(Tables.partitions(conn), {{"test", part_id, 0}, other_node})
+
+      query =
+        Query.new("test", "users")
+        |> Query.partition_filter(PartitionFilter.by_id(part_id))
+        |> Query.max_records(5)
+
+      assert {:ok, []} = Aerospike.query_all_node(conn, target_node, query)
+      assert {:ok, 0} = Aerospike.query_count_node(conn, target_node, query)
+
+      assert {:ok, %Aerospike.Page{records: [], cursor: nil, done?: true}} =
+               Aerospike.query_page_node(conn, target_node, query)
+
+      assert {:ok, stream} = Aerospike.query_stream_node(conn, target_node, query)
+      assert [] = Enum.to_list(stream)
+    end
+
     test "transaction wrappers delegate to TxnRoll variants" do
       conn = :"facade_txn_#{System.unique_integer([:positive, :monotonic])}"
       _pid = start_supervised!({TableOwner, name: conn})
@@ -456,5 +615,26 @@ defmodule Aerospike.FacadeUnitTest do
       assert {:ok, :v1} = Aerospike.transaction(conn, fn _txn -> :v1 end)
       assert {:ok, :v2} = Aerospike.transaction(conn, [timeout: 5_000], fn _txn -> :v2 end)
     end
+  end
+
+  defp setup_ready_tables(conn) do
+    meta = Tables.meta(conn)
+    nodes = Tables.nodes(conn)
+    parts = Tables.partitions(conn)
+
+    :ets.new(meta, [:set, :public, :named_table])
+    :ets.new(nodes, [:set, :public, :named_table, read_concurrency: true])
+    :ets.new(parts, [:set, :public, :named_table, read_concurrency: true])
+    :ets.insert(meta, {Tables.ready_key(), true})
+
+    on_exit(fn ->
+      for t <- [meta, nodes, parts] do
+        try do
+          :ets.delete(t)
+        catch
+          :error, :badarg -> :ok
+        end
+      end
+    end)
   end
 end
