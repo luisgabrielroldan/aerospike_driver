@@ -2,6 +2,11 @@
 
 Batch APIs pack many keys into one request per server node. The client groups keys by partition owner, encodes a single wire message per node, and merges results back into **the same order as your input list**.
 
+Use the facade `batch_*` functions when one intent applies uniformly across the
+whole key list. Use [`batch_operate/3`](Aerospike.html#batch_operate/3) plus
+[`Aerospike.Batch`](Aerospike.Batch.html) builders when per-key behavior needs
+to vary.
+
 ## Homogeneous reads: [`batch_get/3`](Aerospike.html#batch_get/3) and [`batch_exists/3`](Aerospike.html#batch_exists/3)
 
 Use [`Aerospike.batch_get/3`](Aerospike.html#batch_get/3) when every operation is a read with the same options (namespace/set can differ per key; routing is per key digest).
@@ -34,6 +39,16 @@ Enum.each(records, fn
 end)
 ```
 
+[`batch_get_header/3`](Aerospike.html#batch_get_header/3) is the dedicated
+wrapper for this same shape:
+
+```elixir
+{:ok, records} = MyApp.Repo.batch_get_header(keys)
+```
+
+It keeps the homogeneous `[Record.t() | nil]` result while rejecting
+contradictory options like `bins: [...]`.
+
 ### [`batch_exists/3`](Aerospike.html#batch_exists/3)
 
 [`Aerospike.batch_exists/3`](Aerospike.html#batch_exists/3) returns a list of booleans aligned with `keys`:
@@ -50,6 +65,47 @@ existing_keys =
   |> Enum.map(fn {k, _} -> k end)
 ```
 
+## Homogeneous read-op batches: [`batch_get_operate/4`](Aerospike.html#batch_get_operate/4)
+
+[`batch_get_operate/4`](Aerospike.html#batch_get_operate/4) applies the same
+non-empty, read-only operation list to every key and still returns the simpler
+homogeneous read shape:
+
+```elixir
+import Aerospike.Op
+
+{:ok, [user1, user2, nil]} =
+  MyApp.Repo.batch_get_operate(
+    [key1, key2, missing_key],
+    [get("name"), get("score")]
+  )
+```
+
+If the op list includes writes, or each key needs different operations, switch
+to [`batch_operate/3`](Aerospike.html#batch_operate/3).
+
+## Uniform delete and UDF wrappers
+
+[`batch_delete/3`](Aerospike.html#batch_delete/3) and
+[`batch_udf/6`](Aerospike.html#batch_udf/6) expose the uniform write cases
+without forcing callers to assemble builders manually:
+
+```elixir
+{:ok, delete_results} = MyApp.Repo.batch_delete([key1, key2, key3])
+
+{:ok, udf_results} =
+  MyApp.Repo.batch_udf(
+    [key1, key2],
+    "leaderboard",
+    "mark_active",
+    ["gold"]
+  )
+```
+
+These wrappers intentionally return
+[`BatchResult`](Aerospike.BatchResult.html) entries. A collapsed `:ok`/`false`
+shape would hide per-key failures and `in_doubt` write state.
+
 ## Heterogeneous ops: [`batch_operate/3`](Aerospike.html#batch_operate/3)
 
 Use [`Aerospike.batch_operate/3`](Aerospike.html#batch_operate/3) when each key can have a different operation (read, put, delete, [`operate/4`](Aerospike.html#operate/4), UDF). Build operations with [`Aerospike.Batch`](Aerospike.Batch.html):
@@ -65,6 +121,10 @@ alias Aerospike.Batch
     Batch.operate(key4, [Aerospike.Op.add("c", 1)])
   ])
 ```
+
+This is also the escape hatch for intentionally heterogeneous reads. There is
+no separate `batch_get_complex` facade wrapper; use [`Batch.read/2`](Aerospike.Batch.html#read/2)
+entries directly when different keys need different read options.
 
 Each element of `results` is an [`Aerospike.BatchResult`](Aerospike.BatchResult.html):
 
@@ -145,7 +205,11 @@ IO.puts("#{length(ok)} succeeded, #{length(errors)} failed")
 | Use case | API |
 |----------|-----|
 | Many reads, same policy | [`batch_get/3`](Aerospike.html#batch_get/3) |
+| Header-only reads | [`batch_get_header/3`](Aerospike.html#batch_get_header/3) |
+| Same read-op list for every key | [`batch_get_operate/4`](Aerospike.html#batch_get_operate/4) |
 | Existence checks | [`batch_exists/3`](Aerospike.html#batch_exists/3) |
+| Delete every key with one shared policy | [`batch_delete/3`](Aerospike.html#batch_delete/3) |
+| Run the same record UDF on every key | [`batch_udf/6`](Aerospike.html#batch_udf/6) |
 | Mix of reads, writes, deletes, CDT ops | [`batch_operate/3`](Aerospike.html#batch_operate/3) |
 | Per-key errors as [`BatchResult`](Aerospike.BatchResult.html) | [`batch_operate/3`](Aerospike.html#batch_operate/3) with [`Batch.read/2`](Aerospike.Batch.html#read/2) |
 

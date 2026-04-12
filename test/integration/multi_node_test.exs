@@ -10,6 +10,10 @@ defmodule Aerospike.Integration.MultiNodeTest do
 
   use ExUnit.Case, async: false
 
+  alias Aerospike.Filter
+  alias Aerospike.Page
+  alias Aerospike.Query
+  alias Aerospike.Scan
   alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
@@ -139,6 +143,112 @@ defmodule Aerospike.Integration.MultiNodeTest do
     end
   end
 
+  describe "node-targeted scan/query APIs" do
+    test "scan node wrappers stay on the selected node", %{conn: conn, host: host, port: port} do
+      node_names =
+        :ets.tab2list(Tables.nodes(conn))
+        |> Enum.map(fn {name, _} -> name end)
+
+      set_name = "scan_node_itest_#{System.unique_integer([:positive])}"
+
+      keys_by_node =
+        conn
+        |> find_keys_for_nodes(node_names, set_name)
+        |> Map.new()
+
+      assert map_size(keys_by_node) == length(node_names),
+             "expected one routed key per node, got #{inspect(keys_by_node)}"
+
+      for {node_name, key} <- keys_by_node do
+        on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+        assert :ok = Aerospike.put(conn, key, %{"owner_node" => node_name, "kind" => "scan"})
+      end
+
+      target_node = hd(node_names)
+
+      scan =
+        Scan.new("test", set_name)
+        |> Scan.max_records(10)
+
+      assert {:ok, records} = Aerospike.scan_all_node(conn, target_node, scan)
+      assert_records_belong_to_node(conn, records, target_node)
+
+      assert {:ok, 1} = Aerospike.scan_count_node(conn, target_node, scan)
+
+      assert {:ok, %Page{records: page_records, cursor: nil, done?: true}} =
+               Aerospike.scan_page_node(conn, target_node, scan)
+
+      assert_records_belong_to_node(conn, page_records, target_node)
+
+      stream_records =
+        Aerospike.scan_stream_node!(conn, target_node, scan)
+        |> Enum.to_list()
+
+      assert_records_belong_to_node(conn, stream_records, target_node)
+    end
+
+    test "query node wrappers stay on the selected node", %{conn: conn, host: host, port: port} do
+      node_names =
+        :ets.tab2list(Tables.nodes(conn))
+        |> Enum.map(fn {name, _} -> name end)
+
+      set_name = "query_node_itest_#{System.unique_integer([:positive])}"
+      index_name = "qni_#{System.unique_integer([:positive])}"
+
+      keys_by_node =
+        conn
+        |> find_keys_for_nodes(node_names, set_name)
+        |> Map.new()
+
+      assert map_size(keys_by_node) == length(node_names),
+             "expected one routed key per node, got #{inspect(keys_by_node)}"
+
+      for {node_name, key} <- keys_by_node do
+        on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+        assert :ok = Aerospike.put(conn, key, %{"owner_node" => node_name, "bucket" => 1})
+      end
+
+      on_exit(fn ->
+        if :ets.whereis(Tables.meta(conn)) != :undefined do
+          _ = Aerospike.drop_index(conn, "test", index_name)
+        end
+      end)
+
+      assert {:ok, task} =
+               Aerospike.create_index(conn, "test", set_name,
+                 bin: "bucket",
+                 name: index_name,
+                 type: :numeric
+               )
+
+      assert :ok = Aerospike.IndexTask.wait(task, timeout: 30_000, poll_interval: 200)
+      Process.sleep(500)
+
+      target_node = hd(node_names)
+
+      query =
+        Query.new("test", set_name)
+        |> Query.where(Filter.range("bucket", 1, 1) |> Filter.using_index(index_name))
+        |> Query.max_records(10)
+
+      assert {:ok, records} = Aerospike.query_all_node(conn, target_node, query)
+      assert_records_belong_to_node(conn, records, target_node)
+
+      assert {:ok, 1} = Aerospike.query_count_node(conn, target_node, query)
+
+      assert {:ok, %Page{records: page_records, cursor: nil, done?: true}} =
+               Aerospike.query_page_node(conn, target_node, query)
+
+      assert_records_belong_to_node(conn, page_records, target_node)
+
+      assert {:ok, stream} = Aerospike.query_stream_node(conn, target_node, query)
+
+      stream_records = Enum.to_list(stream)
+
+      assert_records_belong_to_node(conn, stream_records, target_node)
+    end
+  end
+
   describe "seed failover" do
     test "connects via second seed when first is unreachable", %{host: host, port: port} do
       name = :"failover_itest_#{System.unique_integer([:positive])}"
@@ -218,10 +328,10 @@ defmodule Aerospike.Integration.MultiNodeTest do
     end
   end
 
-  defp find_keys_for_nodes(conn, node_names) do
+  defp find_keys_for_nodes(conn, node_names, set_name \\ "multi_node_itest") do
     target_set = MapSet.new(node_names)
 
-    Stream.repeatedly(fn -> Helpers.unique_key("test", "multi_node_itest") end)
+    Stream.repeatedly(fn -> Helpers.unique_key("test", set_name) end)
     |> Enum.reduce_while({%{}, 0}, fn key, {found, attempts} ->
       if all_nodes_found?(found, target_set) or attempts > 500 do
         {:halt, {found, attempts}}
@@ -247,6 +357,15 @@ defmodule Aerospike.Integration.MultiNodeTest do
       _ ->
         found
     end
+  end
+
+  defp assert_records_belong_to_node(conn, records, target_node) do
+    assert length(records) == 1
+
+    Enum.each(records, fn record ->
+      assert record.bins["owner_node"] == target_node
+      assert {:ok, _partition_id, ^target_node} = route_key(conn, record.key)
+    end)
   end
 
   defp cluster_running?(host, port) do

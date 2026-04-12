@@ -180,6 +180,53 @@ optional keywords such as `:timeout`, `:pool_checkout_timeout`, and `:replica`
 (merged with `defaults: [scan: ...]` or `defaults: [query: ...]` where
 configured).
 
+### Node-targeted record reads
+
+Cluster-wide helpers such as [`all/3`](Aerospike.html#all/3),
+[`stream!/3`](Aerospike.html#stream!/3), [`count/3`](Aerospike.html#count/3),
+and [`page/3`](Aerospike.html#page/3) fan out to every applicable node. Phase 4
+adds explicit single-node record-read entry points:
+
+- query:
+  [`query_stream_node/4`](Aerospike.html#query_stream_node/4),
+  [`query_all_node/4`](Aerospike.html#query_all_node/4),
+  [`query_count_node/4`](Aerospike.html#query_count_node/4),
+  [`query_page_node/4`](Aerospike.html#query_page_node/4)
+- scan:
+  [`scan_stream_node!/4`](Aerospike.html#scan_stream_node!/4),
+  [`scan_all_node/4`](Aerospike.html#scan_all_node/4),
+  [`scan_count_node/4`](Aerospike.html#scan_count_node/4),
+  [`scan_page_node/4`](Aerospike.html#scan_page_node/4)
+
+Callers discover valid `node_name` values through
+[`node_names/1`](Aerospike.html#node_names/1) or the `:name` field returned by
+[`nodes/1`](Aerospike.html#nodes/1):
+
+```elixir
+alias Aerospike.{Filter, Query, Scan}
+
+{:ok, [node_name | _]} = MyApp.Repo.node_names()
+
+scan =
+  Scan.new("test", "users")
+  |> Scan.max_records(100)
+
+{:ok, page} = MyApp.Repo.scan_page_node(node_name, scan)
+
+query =
+  Query.new("test", "users")
+  |> Query.where(Filter.equal("active", 1))
+  |> Query.max_records(100)
+
+{:ok, records} = MyApp.Repo.query_all_node(node_name, query)
+```
+
+These APIs narrow execution to exactly one resolved node before fan-out
+planning. Missing or stale node names return a normal `{:error, %Aerospike.Error{}}`
+instead of silently broadening back to the whole cluster. The node-targeted
+scope in this phase is record reads only: `query_execute/4`, `query_udf/6`, and
+`query_aggregate/6` remain cluster-wide APIs.
+
 ### Query execution modes
 
 Phase 2 keeps the builder model the same, but splits execution into three
@@ -240,6 +287,14 @@ larger positive bound to cap concurrent node streams.
 ```elixir
 MyApp.Repo.stream!(Scan.new("test", "users"))
 |> Stream.filter(fn r -> r.bins["age"] > 21 end)
+|> Enum.take(100)
+```
+
+Node-targeted stream variants keep the same lazy semantics, but hold one
+connection only for the selected node:
+
+```elixir
+MyApp.Repo.scan_stream_node!(node_name, Scan.new("test", "users"))
 |> Enum.take(100)
 ```
 
@@ -370,6 +425,14 @@ token = Cursor.encode(page.cursor)
 
 Treat cursor strings as opaque capability tokens: verify authorization before resuming a scan or query on behalf of a client.
 
+Node-targeted pagination follows the same cursor contract, but the cursor stays
+bound to the selected node rather than resuming a cluster-wide fan-out:
+
+```elixir
+{:ok, page} = MyApp.Repo.query_page_node(node_name, query)
+{:ok, next_page} = MyApp.Repo.query_page_node(node_name, query, cursor: page.cursor)
+```
+
 ## Partition filters
 
 [`Aerospike.PartitionFilter`](Aerospike.PartitionFilter.html) describes which of the 4_096 partitions participate:
@@ -409,6 +472,9 @@ Scans use the scan path; query-specific short-query hints apply to `Query` execu
 - **`count/3` still has to walk matching records.** It skips bin data, but
   the server still sends one lightweight result per record and the client
   tallies them.
+- **Node-targeted APIs only cover record-read scan/query flows.**
+  Background query execution, query UDF mutation, and aggregate streaming do
+  not currently accept `node_name`.
 - **`query_aggregate/6` streams server aggregate values, not a client-finalized result.**
   The current client does not execute a local Lua reduction step across partial
   values from multiple nodes. For aggregate UDFs that naturally produce one

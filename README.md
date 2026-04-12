@@ -15,8 +15,8 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 - **Repo wrapper** — recommended application-facing API via `use Aerospike.Repo`
 - **Single-record CRUD** — `put`, `get`, `delete`, `exists`, `touch` with bang variants
 - **Operate** — atomic multi-operation per record (`add`, `append`, `prepend`, custom op lists)
-- **Batch operations** — `batch_get`, `batch_exists`, `batch_operate` for multi-key round-trips
-- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`, plus explicit `query_stream`, `query_execute`, `query_udf`, and `query_aggregate` flows
+- **Batch operations** — `batch_get`, `batch_get_header`, `batch_get_operate`, `batch_exists`, `batch_delete`, `batch_udf`, and `batch_operate` for multi-key round-trips
+- **Scan & query** — cluster-wide `stream!`, `all`, `count`, `page`, plus node-targeted `*_node` scan/query reads and explicit `query_stream`, `query_execute`, `query_udf`, and `query_aggregate` flows
 - **CDT operations** — List, Map, Bit, HLL, and expression ops with nested context (`Ctx`)
 - **Server-side expressions** — filter results with `Aerospike.Exp` expressions
 - **Geospatial support** — typed geo helpers plus geo query filters
@@ -145,6 +145,46 @@ key = Aerospike.key("test", "users", "user:1001")
 :ok = Aerospike.put!(:aero, key, %{"name" => "Ada"})
 {:ok, record} = Aerospike.get(:aero, key)
 ```
+
+### Batch Convenience and Node-Targeted Reads
+
+Phase 4 adds first-class wrappers for the common homogeneous batch cases and
+for record-read scan/query execution against one resolved cluster node.
+
+```elixir
+import Aerospike.Op
+alias Aerospike.{Query, Scan}
+
+keys = [
+  MyApp.Repo.key("test", "users", "user:1"),
+  MyApp.Repo.key("test", "users", "user:2")
+]
+
+{:ok, headers} = MyApp.Repo.batch_get_header(keys)
+{:ok, records} = MyApp.Repo.batch_get_operate(keys, [get("name"), get("score")])
+{:ok, delete_results} = MyApp.Repo.batch_delete(keys)
+{:ok, udf_results} = MyApp.Repo.batch_udf(keys, "pkg", "fn", [])
+
+{:ok, [node_name | _]} = MyApp.Repo.node_names()
+
+scan =
+  Scan.new("test", "users")
+  |> Scan.max_records(100)
+
+{:ok, page} = MyApp.Repo.scan_page_node(node_name, scan)
+
+query =
+  Query.new("test", "users")
+  |> Query.max_records(100)
+
+{:ok, records} = MyApp.Repo.query_all_node(node_name, query)
+```
+
+Use the dedicated batch wrappers when one intent applies uniformly across all
+keys. Use `batch_operate/2` plus `Aerospike.Batch.*` builders when per-key work
+differs. Node-targeted APIs accept `node_name` values returned by
+`node_names/0` or `nodes/0`; they narrow record-read execution to that node,
+while `query_execute`, `query_udf`, and `query_aggregate` remain cluster-wide.
 
 ### Query UDFs and Aggregation
 
