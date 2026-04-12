@@ -874,9 +874,6 @@ defmodule Aerospike do
   @doc """
   Returns metadata for all UDF packages registered in the cluster.
 
-  This is a Phase 2 API surface definition. Runtime support is added in the
-  subsequent implementation task.
-
   ## Options
 
   Info policy: `:timeout`, `:pool_checkout_timeout`.
@@ -884,8 +881,8 @@ defmodule Aerospike do
   @spec list_udfs(conn(), keyword()) :: {:ok, [udf_info()]} | {:error, Error.t()}
   def list_udfs(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
     case Policy.validate_info(opts) do
-      {:ok, _call_opts} ->
-        unsupported_phase_2_operation(:list_udfs)
+      {:ok, call_opts} ->
+        Admin.list_udfs(conn, call_opts)
 
       {:error, %NimbleOptions.ValidationError{} = e} ->
         {:error,

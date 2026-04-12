@@ -12,6 +12,7 @@ defmodule Aerospike.Admin do
   alias Aerospike.Role
   alias Aerospike.Router
   alias Aerospike.Tables
+  alias Aerospike.UDF
   alias Aerospike.User
 
   @admin_message_type 2
@@ -43,6 +44,23 @@ defmodule Aerospike.Admin do
       with {:ok, pool_pid, ^node_name} <- Router.node_pool(conn_name, node_name),
            {:ok, map} <- Router.checkout_and_info(pool_pid, [command], checkout_timeout) do
         {{:ok, Map.get(map, command, "")}, node_name}
+      else
+        {:error, %Error{} = e} -> {{:error, e}, nil}
+      end
+    end)
+  end
+
+  @doc false
+  @spec list_udfs(atom(), keyword()) :: {:ok, [UDF.t()]} | {:error, Error.t()}
+  def list_udfs(conn_name, opts) when is_atom(conn_name) and is_list(opts) do
+    command = "udf-list"
+    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
+
+    with_telemetry(:list_udfs, conn_name, fn ->
+      with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, map} <- Router.checkout_and_info(pool_pid, [command], checkout_timeout),
+           {:ok, udfs} <- parse_udf_inventory(Map.get(map, command, "")) do
+        {{:ok, udfs}, node_name}
       else
         {:error, %Error{} = e} -> {{:error, e}, nil}
       end
@@ -495,6 +513,69 @@ defmodule Aerospike.Admin do
          message: "unexpected info response: #{inspect(response)}"
        )}
     end
+  end
+
+  defp parse_udf_inventory(""), do: {:ok, []}
+
+  defp parse_udf_inventory(response) when is_binary(response) do
+    response
+    |> String.split(";", trim: false)
+    |> Enum.reduce_while({:ok, []}, &parse_udf_inventory_entry/2)
+    |> case do
+      {:ok, udfs} -> {:ok, Enum.reverse(udfs)}
+      {:error, %Error{} = error} -> {:error, error}
+    end
+  end
+
+  defp parse_udf_inventory_entry(entry, {:ok, acc}) do
+    case parse_udf_entry(entry) do
+      :skip -> {:cont, {:ok, acc}}
+      {:ok, udf} -> {:cont, {:ok, [udf | acc]}}
+      {:error, %Error{} = error} -> {:halt, {:error, error}}
+    end
+  end
+
+  defp parse_udf_entry(entry) when is_binary(entry) do
+    trimmed = String.trim(entry)
+
+    if trimmed == "" do
+      :skip
+    else
+      with {:ok, pairs} <- parse_udf_pairs(trimmed),
+           {:ok, filename} <- fetch_udf_value(pairs, "filename", trimmed),
+           {:ok, hash} <- fetch_udf_value(pairs, "hash", trimmed),
+           {:ok, language} <- fetch_udf_value(pairs, "type", trimmed) do
+        {:ok, %UDF{filename: filename, hash: hash, language: language}}
+      end
+    end
+  end
+
+  defp parse_udf_pairs(entry) when is_binary(entry) do
+    entry
+    |> String.split(",", trim: true)
+    |> Enum.reduce_while({:ok, %{}}, fn pair, {:ok, acc} ->
+      case String.split(pair, "=", parts: 2) do
+        [key, value] when key != "" and value != "" ->
+          {:cont, {:ok, Map.put(acc, key, value)}}
+
+        _ ->
+          {:halt, {:error, malformed_udf_inventory(entry)}}
+      end
+    end)
+  end
+
+  defp fetch_udf_value(pairs, key, entry)
+       when is_map(pairs) and is_binary(key) and is_binary(entry) do
+    case Map.fetch(pairs, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, malformed_udf_inventory(entry, "missing #{key}")}
+    end
+  end
+
+  defp malformed_udf_inventory(entry, detail \\ "invalid key/value pair") do
+    Error.from_result_code(:server_error,
+      message: "invalid udf-list entry (#{detail}): #{inspect(entry)}"
+    )
   end
 
   defp read_udf_content(path_or_content) do

@@ -2,8 +2,7 @@ defmodule Aerospike.UDF do
   @moduledoc """
   Metadata for one server-side UDF package.
 
-  Returned by `Aerospike.list_udfs/2` once UDF inventory support is
-  implemented.
+  Returned by `Aerospike.list_udfs/2`.
   """
 
   @enforce_keys [:filename, :hash, :language]
