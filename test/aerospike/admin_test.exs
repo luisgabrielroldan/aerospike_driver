@@ -501,9 +501,14 @@ defmodule Aerospike.AdminTest do
         Supervisor.child_spec(
           {NimblePool,
            [
-             worker:
+            worker:
                {NodePool,
-                connect_opts: [host: "127.0.0.1", port: port, timeout: 2_000],
+                connect_opts: [
+                  host: "127.0.0.1",
+                  port: port,
+                  timeout: 30_000,
+                  recv_timeout: 30_000
+                ],
                 auth_opts: auth_opts},
              pool_size: 1
            ]},
