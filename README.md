@@ -363,7 +363,7 @@ docker compose up -d
 # 3-node cluster — adds multi-node, partition routing, and peer discovery tests
 docker compose --profile cluster up -d
 
-# All services — adds enterprise-only feature tests (durable delete, etc.)
+# All services — adds enterprise-only feature tests (durable delete, security admin, etc.)
 docker compose --profile cluster --profile enterprise up -d
 ```
 

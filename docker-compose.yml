@@ -119,3 +119,24 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  aerospike-ee-security:
+    image: aerospike/aerospike-server-enterprise:latest
+    container_name: aerospike-ee-security
+    hostname: aerospike-ee-security
+    profiles: [enterprise]
+    ports:
+      - "3200:3000" # security-enabled client protocol
+      - "3201:3001" # fabric
+      - "3202:3002" # heartbeat
+    volumes:
+      - ./docker/aerospike-enterprise-security.conf:/opt/aerospike/aerospike.conf
+      - ./docker/entrypoint-ee.sh:/usr/local/bin/entrypoint-ee.sh:ro
+    entrypoint: ["/usr/local/bin/entrypoint-ee.sh"]
+    command: ["/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-U", "admin", "-P", "admin", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

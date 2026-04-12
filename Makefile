@@ -4,8 +4,8 @@ AEROSPIKE_HOST ?= 127.0.0.1
 AEROSPIKE_PORT ?= 3000
 AEROSPIKE_EE_HOST ?= 127.0.0.1
 AEROSPIKE_EE_PORT ?= 3100
-AEROSPIKE_SECURITY_EE_HOST ?= $(AEROSPIKE_EE_HOST)
-AEROSPIKE_SECURITY_EE_PORT ?= $(AEROSPIKE_EE_PORT)
+AEROSPIKE_SECURITY_EE_HOST ?= 127.0.0.1
+AEROSPIKE_SECURITY_EE_PORT ?= 3200
 AEROSPIKE_SECURITY_EE_USER ?= admin
 AEROSPIKE_SECURITY_EE_PASSWORD ?= admin
 
@@ -54,14 +54,15 @@ deps-cluster-up:
 
 # Enterprise dependencies (enterprise/TLS tests).
 deps-enterprise-up: tls-fixtures
-	@docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki
+	@docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki aerospike-ee-security
 	@$(MAKE) wait-service SERVICE=aerospike-ee
 	@$(MAKE) wait-service SERVICE=aerospike-ee-tls
 	@$(MAKE) wait-service SERVICE=aerospike-ee-pki
+	@$(MAKE) wait-service SERVICE=aerospike-ee-security
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee-tls
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee-pki
-	@echo "Enterprise dependencies ready: localhost:3100 (EE), :4333 (TLS), :4334 (mTLS)"
+	@echo "Enterprise dependencies ready: localhost:3100 (EE), :3200 (security), :4333 (TLS), :4334 (mTLS)"
 
 # Full dependency stack for full-suite testing.
 deps-all-up: tls-fixtures
@@ -72,6 +73,7 @@ deps-all-up: tls-fixtures
 	@$(MAKE) wait-service SERVICE=aerospike-ee
 	@$(MAKE) wait-service SERVICE=aerospike-ee-tls
 	@$(MAKE) wait-service SERVICE=aerospike-ee-pki
+	@$(MAKE) wait-service SERVICE=aerospike-ee-security
 	@$(MAKE) wait-cluster-size SERVICE=aerospike1 EXPECTED=3
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee-tls
@@ -84,7 +86,12 @@ deps-down:
 wait-service:
 	@echo "Waiting for $(SERVICE)..."
 	@for i in $$(seq 1 30); do \
-		if docker exec $(SERVICE) asinfo -v status 2>/dev/null | grep -q ok; then \
+		if [ "$(SERVICE)" = "aerospike-ee-security" ]; then \
+			STATUS_CMD="asinfo -U $(AEROSPIKE_SECURITY_EE_USER) -P $(AEROSPIKE_SECURITY_EE_PASSWORD) -v status"; \
+		else \
+			STATUS_CMD="asinfo -v status"; \
+		fi; \
+		if docker exec $(SERVICE) sh -lc "$$STATUS_CMD" 2>/dev/null | grep -q ok; then \
 			echo "$(SERVICE) is ready"; \
 			exit 0; \
 		fi; \

@@ -19,7 +19,9 @@ secured test target:
 - `AEROSPIKE_SECURITY_EE_PASSWORD`
 
 The repository currently does not ship a committed secure Enterprise bootstrap.
-You need to provide that server externally before running the security tests.
+The repository's `docker compose --profile enterprise up -d` stack now includes
+a dedicated security-enabled EE node on `127.0.0.1:3200`, so the default test
+contract no longer depends on a separately started container.
 
 ## Connecting As An Admin User
 
