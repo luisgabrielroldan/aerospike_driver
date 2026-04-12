@@ -1,8 +1,17 @@
 TLS_FIXTURES_DIR ?= test/support/fixtures/tls
 TLS_DAYS ?= 3650
+AEROSPIKE_HOST ?= 127.0.0.1
+AEROSPIKE_PORT ?= 3000
+AEROSPIKE_EE_HOST ?= 127.0.0.1
+AEROSPIKE_EE_PORT ?= 3100
+AEROSPIKE_SECURITY_EE_HOST ?= $(AEROSPIKE_EE_HOST)
+AEROSPIKE_SECURITY_EE_PORT ?= $(AEROSPIKE_EE_PORT)
+AEROSPIKE_SECURITY_EE_USER ?= admin
+AEROSPIKE_SECURITY_EE_PASSWORD ?= admin
 
 .PHONY: tls-fixtures tls-fixtures-clean test.tls \
-	deps-up deps-cluster-up deps-enterprise-up deps-all-up deps-down
+	deps-up deps-cluster-up deps-enterprise-up deps-all-up deps-down \
+	test-unit-ci test-integration-ci test-enterprise-ci test-cluster-ci
 
 tls-fixtures:
 	@command -v openssl >/dev/null 2>&1 || (echo "openssl is required" && exit 1)
@@ -31,22 +40,110 @@ test.tls: tls-fixtures
 # Single-node dependencies (unit/property/basic integration).
 deps-up:
 	@docker compose up -d aerospike
+	@$(MAKE) wait-service SERVICE=aerospike
 	@echo "Dependencies ready: localhost:3000"
 
 # Multi-node cluster dependencies (cluster integration tests).
 deps-cluster-up:
 	@docker compose --profile cluster up -d aerospike aerospike2 aerospike3
+	@$(MAKE) wait-service SERVICE=aerospike1
+	@$(MAKE) wait-service SERVICE=aerospike2
+	@$(MAKE) wait-service SERVICE=aerospike3
+	@$(MAKE) wait-cluster-size SERVICE=aerospike1 EXPECTED=3
 	@echo "Cluster dependencies ready: localhost:3000, :3010, :3020"
 
 # Enterprise dependencies (enterprise/TLS tests).
 deps-enterprise-up: tls-fixtures
 	@docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki
+	@$(MAKE) wait-service SERVICE=aerospike-ee
+	@$(MAKE) wait-service SERVICE=aerospike-ee-tls
+	@$(MAKE) wait-service SERVICE=aerospike-ee-pki
+	@$(MAKE) ensure-roster SERVICE=aerospike-ee
+	@$(MAKE) ensure-roster SERVICE=aerospike-ee-tls
+	@$(MAKE) ensure-roster SERVICE=aerospike-ee-pki
 	@echo "Enterprise dependencies ready: localhost:3100 (EE), :4333 (TLS), :4334 (mTLS)"
 
 # Full dependency stack for full-suite testing.
 deps-all-up: tls-fixtures
 	@docker compose --profile cluster --profile enterprise up -d
+	@$(MAKE) wait-service SERVICE=aerospike1
+	@$(MAKE) wait-service SERVICE=aerospike2
+	@$(MAKE) wait-service SERVICE=aerospike3
+	@$(MAKE) wait-service SERVICE=aerospike-ee
+	@$(MAKE) wait-service SERVICE=aerospike-ee-tls
+	@$(MAKE) wait-service SERVICE=aerospike-ee-pki
+	@$(MAKE) wait-cluster-size SERVICE=aerospike1 EXPECTED=3
+	@$(MAKE) ensure-roster SERVICE=aerospike-ee
+	@$(MAKE) ensure-roster SERVICE=aerospike-ee-tls
+	@$(MAKE) ensure-roster SERVICE=aerospike-ee-pki
 	@echo "All dependencies ready (single-node, cluster, enterprise)"
 
 deps-down:
 	@docker compose --profile cluster --profile enterprise down
+
+wait-service:
+	@echo "Waiting for $(SERVICE)..."
+	@for i in $$(seq 1 30); do \
+		if docker exec $(SERVICE) asinfo -v status 2>/dev/null | grep -q ok; then \
+			echo "$(SERVICE) is ready"; \
+			exit 0; \
+		fi; \
+		if [ $$i -eq 30 ]; then \
+			echo "$(SERVICE) did not start in time"; \
+			docker logs $(SERVICE) || true; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done
+
+wait-cluster-size:
+	@echo "Waiting for cluster size $(EXPECTED) on $(SERVICE)..."
+	@for i in $$(seq 1 20); do \
+		CLUSTER_SIZE=$$(docker exec $(SERVICE) asinfo -v 'statistics' 2>/dev/null | tr ';' '\n' | grep '^cluster_size=' | cut -d= -f2); \
+		if [ "$$CLUSTER_SIZE" = "$(EXPECTED)" ]; then \
+			echo "$(SERVICE): cluster size $$CLUSTER_SIZE"; \
+			exit 0; \
+		fi; \
+		if [ $$i -eq 20 ]; then \
+			echo "$(SERVICE): expected cluster size $(EXPECTED), got '$$CLUSTER_SIZE'"; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done
+
+ensure-roster:
+	@echo "Checking roster on $(SERVICE)..."
+	@for i in $$(seq 1 15); do \
+		ROSTER=$$(docker exec $(SERVICE) asinfo -v 'roster:namespace=test' 2>/dev/null || true); \
+		if echo "$$ROSTER" | grep -q 'roster=' && ! echo "$$ROSTER" | grep -q 'roster=null'; then \
+			echo "$(SERVICE): roster OK"; \
+			exit 0; \
+		fi; \
+		if echo "$$ROSTER" | grep -q 'roster=null'; then \
+			NODE_ID=$$(docker exec $(SERVICE) asinfo -v 'node' 2>/dev/null | tr -d '[:space:]'); \
+			echo "$(SERVICE): roster=null, setting roster -> $$NODE_ID"; \
+			docker exec $(SERVICE) asinfo -v "roster-set:namespace=test;nodes=$$NODE_ID" || true; \
+			docker exec $(SERVICE) asinfo -v 'recluster:' || true; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "$(SERVICE): roster not ready after 30s"; \
+	docker exec $(SERVICE) asinfo -v 'roster:namespace=test' || true; \
+	exit 1
+
+test-unit-ci: tls-fixtures
+	@mix test --include property
+
+test-integration-ci:
+	@AEROSPIKE_HOST=$(AEROSPIKE_HOST) AEROSPIKE_PORT=$(AEROSPIKE_PORT) \
+		mix test --include integration
+
+test-enterprise-ci: tls-fixtures
+	@AEROSPIKE_EE_HOST=$(AEROSPIKE_EE_HOST) AEROSPIKE_EE_PORT=$(AEROSPIKE_EE_PORT) \
+	AEROSPIKE_SECURITY_EE_HOST=$(AEROSPIKE_SECURITY_EE_HOST) AEROSPIKE_SECURITY_EE_PORT=$(AEROSPIKE_SECURITY_EE_PORT) \
+	AEROSPIKE_SECURITY_EE_USER=$(AEROSPIKE_SECURITY_EE_USER) AEROSPIKE_SECURITY_EE_PASSWORD=$(AEROSPIKE_SECURITY_EE_PASSWORD) \
+		mix test --include enterprise --include tls_stack --include security
+
+test-cluster-ci:
+	@AEROSPIKE_HOST=$(AEROSPIKE_HOST) AEROSPIKE_PORT=$(AEROSPIKE_PORT) \
+		mix test --include cluster

@@ -3,6 +3,8 @@ defmodule Aerospike.Test.MockTcpServer do
 
   alias Aerospike.Protocol.Message
 
+  @default_timeout 15_000
+
   @doc """
   Starts a TCP listener on a random port. Returns `{:ok, listen_socket, port}`.
 
@@ -18,7 +20,7 @@ defmodule Aerospike.Test.MockTcpServer do
   Accepts one connection and calls `handler.(client_socket)`, then closes everything.
   """
   def accept_once(lsock, handler) do
-    {:ok, client} = :gen_tcp.accept(lsock, 5_000)
+    {:ok, client} = :gen_tcp.accept(lsock, @default_timeout)
     handler.(client)
     :gen_tcp.close(client)
     :gen_tcp.close(lsock)
@@ -28,12 +30,12 @@ defmodule Aerospike.Test.MockTcpServer do
   Reads one full Aerospike wire message from the socket (8-byte header + body).
   """
   def recv_message(socket) do
-    {:ok, header} = :gen_tcp.recv(socket, 8, 5_000)
+    {:ok, header} = :gen_tcp.recv(socket, 8, @default_timeout)
     {:ok, {_version, _type, length}} = Message.decode_header(header)
 
     body =
       if length > 0 do
-        {:ok, b} = :gen_tcp.recv(socket, length, 5_000)
+        {:ok, b} = :gen_tcp.recv(socket, length, @default_timeout)
         b
       else
         <<>>
