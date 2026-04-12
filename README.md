@@ -16,12 +16,12 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 - **Single-record CRUD** — `put`, `get`, `delete`, `exists`, `touch` with bang variants
 - **Operate** — atomic multi-operation per record (`add`, `append`, `prepend`, custom op lists)
 - **Batch operations** — `batch_get`, `batch_exists`, `batch_operate` for multi-key round-trips
-- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`, with cursor paging and partition filters
+- **Scan & query** — full-table scans and secondary-index queries via `stream!`, `all`, `count`, `page`, plus explicit `query_stream`, `query_execute`, `query_udf`, and `query_aggregate` flows
 - **CDT operations** — List, Map, Bit, HLL, and expression ops with nested context (`Ctx`)
 - **Server-side expressions** — filter results with `Aerospike.Exp` expressions
 - **Geospatial support** — typed geo helpers plus geo query filters
 - **Secondary indexes** — `create_index` / `drop_index` with async `IndexTask` polling
-- **UDF management** — `register_udf`, `remove_udf`, `apply_udf` for Lua user-defined functions
+- **UDF management** — `register_udf`, `remove_udf`, `apply_udf`, and `list_udfs` for Lua user-defined functions
 - **Transactions** — multi-record transactions (`transaction/2`, `commit/2`, `abort/2`) on Enterprise Edition
 - **Write policies** — TTL, generation checks (CAS), create/update/replace semantics, durable delete
 - **Read policies** — selective bin projection, header-only reads
@@ -145,6 +145,45 @@ key = Aerospike.key("test", "users", "user:1001")
 :ok = Aerospike.put!(:aero, key, %{"name" => "Ada"})
 {:ok, record} = Aerospike.get(:aero, key)
 ```
+
+### Query UDFs and Aggregation
+
+Phase 2 adds explicit query-wide execution APIs alongside the older generic
+scan/query helpers:
+
+```elixir
+alias Aerospike.{Filter, Query}
+
+query =
+  Query.new("test", "users")
+  |> Query.where(Filter.range("score", 10, 100))
+
+{:ok, udfs} = MyApp.Repo.list_udfs()
+
+{:ok, task} =
+  MyApp.Repo.query_udf(
+    query,
+    "leaderboard",
+    "mark_active",
+    ["gold"]
+  )
+
+:ok = Aerospike.ExecuteTask.wait(task, timeout: 15_000)
+
+values =
+  MyApp.Repo.query_aggregate(query, "leaderboard", "sum_scores", ["score"])
+  |> Enum.to_list()
+```
+
+`query_stream/3` yields `%Aerospike.Record{}` structs, `query_execute/4` and
+`query_udf/6` return `%Aerospike.ExecuteTask{}` values for background work, and
+`query_aggregate/6` yields one or more aggregate values from the server. The
+current client does not perform a final client-side Lua reduction across
+multi-node aggregate partials, so callers should reduce those values in Elixir
+when they need one final answer.
+
+See [Queries and Scanning](guides/queries-and-scanning.md) and
+[User Defined Functions](guides/udfs.md) for complete examples.
 
 ### Security Administration
 

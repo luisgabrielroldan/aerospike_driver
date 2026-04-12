@@ -166,6 +166,62 @@ the package was registered:
 :ok = MyApp.Repo.remove_udf("multiply.lua")
 ```
 
+## Listing Registered UDFs
+
+[`Aerospike.list_udfs/2`](Aerospike.html#list_udfs/2) reads the server's UDF
+inventory and returns `%Aerospike.UDF{}` entries with the package name, hash,
+and server-reported type/language metadata:
+
+```elixir
+{:ok, udfs} = MyApp.Repo.list_udfs()
+
+Enum.each(udfs, fn udf ->
+  IO.puts("#{udf.filename} #{udf.hash} #{udf.type}")
+end)
+```
+
+This is an info/admin-style read, not a background task. If the connection name
+is unknown or not ready, it returns the normal `%Aerospike.Error{}` result
+instead of raising from the router path.
+
+## Query-wide UDFs and aggregation
+
+Phase 2 also adds query-wide UDF entry points:
+
+- [`Aerospike.query_udf/6`](Aerospike.html#query_udf/6) applies a record UDF in the background across query matches and returns an [`Aerospike.ExecuteTask`](Aerospike.ExecuteTask.html).
+- [`Aerospike.query_aggregate/6`](Aerospike.html#query_aggregate/6) streams aggregate values from a query-wide stream UDF.
+
+```elixir
+alias Aerospike.{ExecuteTask, Filter, Query}
+
+query =
+  Query.new("test", "users")
+  |> Query.where(Filter.range("score", 50, 500))
+
+{:ok, task} =
+  MyApp.Repo.query_udf(
+    query,
+    "leaderboard",
+    "mark_active",
+    ["bronze"]
+  )
+
+:ok = ExecuteTask.wait(task, timeout: 15_000)
+
+aggregate_values =
+  MyApp.Repo.query_aggregate(query, "leaderboard", "sum_scores", ["score"])
+  |> Enum.to_list()
+```
+
+`query_udf/6` is for background mutation over query matches. If you want to
+apply normal write operations instead of a Lua function, use
+[`Aerospike.query_execute/4`](Aerospike.html#query_execute/4) from the query
+guide; it returns the same task type and wait semantics.
+
+### Current aggregation limitation
+
+[`query_aggregate/6`](Aerospike.html#query_aggregate/6) does not yet embed a local Lua runtime to perform a final client-side reduction across partial values from multiple nodes. That means the enumerable may yield more than one aggregate value for a single logical query. If your aggregate UDF is naturally reducible to one final answer, reduce the returned values in Elixir for now.
+
 ## Error Handling
 
 ### UDF Runtime Errors

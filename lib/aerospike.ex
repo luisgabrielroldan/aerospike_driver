@@ -975,6 +975,13 @@ defmodule Aerospike do
   This is distinct from `query_stream/3`: aggregate queries yield transformed
   values, not `%Aerospike.Record{}` structs. Depending on server/runtime
   behavior, the enumerable may emit one or more aggregate values.
+
+  ## Current limitation
+
+  The client does **not** currently run a local Lua reduction step across
+  partial aggregate values. In multi-node queries, callers should therefore
+  expect one or more server-emitted aggregate values and reduce them in Elixir
+  if a single final value is required.
   """
   @spec query_aggregate(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
