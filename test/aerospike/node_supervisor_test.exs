@@ -22,22 +22,29 @@ defmodule Aerospike.NodeSupervisorTest do
 
   describe "stop_pool/2" do
     test "returns not_found for non-existent supervisor atom" do
+      pool_pid = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(pool_pid, :kill) end)
+
       assert {:error, :not_found} =
-               NodeSupervisor.stop_pool(:nonexistent_node_sup, "some_node")
+               NodeSupervisor.stop_pool(:nonexistent_node_sup, pool_pid)
     end
 
     test "returns not_found for non-existent pool in running supervisor" do
       {:ok, sup} = DynamicSupervisor.start_link(strategy: :one_for_one)
       on_exit(fn -> safe_stop(sup) end)
+      pool_pid = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(pool_pid, :kill) end)
 
-      assert {:error, :not_found} = NodeSupervisor.stop_pool(sup, "nonexistent_node")
+      assert {:error, :not_found} = NodeSupervisor.stop_pool(sup, pool_pid)
     end
 
     test "accepts PID as supervisor reference" do
       {:ok, sup} = DynamicSupervisor.start_link(strategy: :one_for_one)
       on_exit(fn -> safe_stop(sup) end)
+      pool_pid = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(pool_pid, :kill) end)
 
-      assert {:error, :not_found} = NodeSupervisor.stop_pool(sup, "missing")
+      assert {:error, :not_found} = NodeSupervisor.stop_pool(sup, pool_pid)
     end
   end
 

@@ -2,10 +2,12 @@ defmodule Aerospike.Integration.SecurityAdminTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Admin.PasswordHash
+  alias Aerospike.Cluster
   alias Aerospike.Error
   alias Aerospike.Privilege
   alias Aerospike.Role
   alias Aerospike.Tables
+  alias Aerospike.Test.Helpers
   alias Aerospike.User
 
   @moduletag :enterprise
@@ -36,7 +38,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
     opts = [
       name: name,
       hosts: ["#{host}:#{port}"],
-      pool_size: 2,
+      pool_size: 1,
       connect_timeout: 5_000,
       tend_interval: 60_000,
       auth_opts: [user: admin_user, credential: PasswordHash.hash(admin_password)]
@@ -46,7 +48,8 @@ defmodule Aerospike.Integration.SecurityAdminTest do
     await_cluster_ready(name)
     assert_security_ready!(name)
 
-    {:ok, conn: name}
+    {:ok,
+     conn: name, host: host, port: port, admin_user: admin_user, admin_password: admin_password}
   end
 
   test "user lifecycle works against a secured cluster", %{conn: conn} do
@@ -194,6 +197,53 @@ defmodule Aerospike.Integration.SecurityAdminTest do
     end)
   end
 
+  test "self password change rotates runtime auth for fresh disposable-user requests", %{
+    conn: conn,
+    host: host,
+    port: port
+  } do
+    user_name = unique_name("sec_rotate_user")
+    initial_password = "pw-#{System.unique_integer([:positive, :monotonic])}"
+    rotated_password = "pw-#{System.unique_integer([:positive, :monotonic])}"
+    key = Helpers.unique_key(@namespace, "security_admin_itest")
+
+    on_exit(fn ->
+      if :ets.whereis(Tables.meta(conn)) != :undefined do
+        _ = Aerospike.delete(conn, key)
+        _ = Aerospike.drop_user(conn, user_name)
+      end
+    end)
+
+    assert :ok = Aerospike.create_user(conn, user_name, initial_password, ["read-write"])
+
+    assert_eventually("created disposable user appears with read-write role", fn ->
+      case Aerospike.query_user(conn, user_name) do
+        {:ok, %User{name: ^user_name, roles: roles}} -> Enum.sort(roles) == ["read-write"]
+        _ -> false
+      end
+    end)
+
+    assert {:ok, :ok} =
+             with_security_conn(host, port, user_name, initial_password, fn user_conn ->
+               assert :ok = Aerospike.change_password(user_conn, user_name, rotated_password)
+
+               cluster_pid = Process.whereis(Cluster.cluster_name(user_conn))
+               assert is_pid(cluster_pid)
+
+               cluster_auth_opts = :sys.get_state(cluster_pid).auth_opts
+
+               assert Keyword.fetch!(cluster_auth_opts, :credential) ==
+                        PasswordHash.hash(rotated_password)
+
+               assert :ok = force_fresh_auth!(user_conn)
+               assert :ok = Aerospike.put(user_conn, key, %{"value" => 42, "owner" => user_name})
+               assert {:ok, record} = Aerospike.get(user_conn, key)
+               assert record.bins["value"] == 42
+               assert record.bins["owner"] == user_name
+               :ok
+             end)
+  end
+
   defp assert_security_ready!(conn) do
     case Aerospike.query_users(conn) do
       {:ok, _users} ->
@@ -213,7 +263,9 @@ defmodule Aerospike.Integration.SecurityAdminTest do
   end
 
   defp unique_name(prefix) do
-    "#{prefix}_#{System.unique_integer([:positive, :monotonic])}"
+    unique = System.unique_integer([:positive, :monotonic])
+    stamp = System.system_time(:microsecond)
+    "#{prefix}_#{stamp}_#{unique}"
   end
 
   defp ee_running?(host, port) do
@@ -264,5 +316,50 @@ defmodule Aerospike.Integration.SecurityAdminTest do
         Process.sleep(interval)
         assert_eventually_loop(message, fun, deadline, interval)
     end
+  end
+
+  defp with_security_conn(host, port, admin_user, password, fun)
+       when is_binary(host) and is_integer(port) and is_binary(admin_user) and is_binary(password) and
+              is_function(fun, 1) do
+    temp_conn = :"security_admin_restore_#{System.unique_integer([:positive])}"
+    opts = security_conn_opts(temp_conn, host, port, admin_user, password)
+
+    case Aerospike.start_link(opts) do
+      {:ok, _pid} ->
+        run_security_conn_fun(temp_conn, fun)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp security_conn_opts(name, host, port, admin_user, password) do
+    [
+      name: name,
+      hosts: ["#{host}:#{port}"],
+      pool_size: 1,
+      connect_timeout: 5_000,
+      tend_interval: 60_000,
+      auth_opts: [user: admin_user, credential: PasswordHash.hash(password)]
+    ]
+  end
+
+  defp run_security_conn_fun(temp_conn, fun) when is_atom(temp_conn) and is_function(fun, 1) do
+    await_cluster_ready(temp_conn)
+    {:ok, fun.(temp_conn)}
+  after
+    Aerospike.close(temp_conn)
+  end
+
+  defp force_fresh_auth!(conn) when is_atom(conn) do
+    [{_node_name, %{pool_pid: pool_pid}} | _] = :ets.tab2list(Tables.nodes(conn))
+
+    NimblePool.checkout!(pool_pid, :checkout, fn _from, pooled_conn ->
+      {mod, socket} = pooled_conn.transport
+      _ = mod.close(socket)
+      {:ok, :close}
+    end)
+
+    :ok
   end
 end

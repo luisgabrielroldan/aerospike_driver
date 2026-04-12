@@ -58,31 +58,18 @@ defmodule Aerospike.NodeSupervisor do
   end
 
   @doc """
-  Stops the pool child for `node_name` if present.
+  Stops the pool child for `pool_pid` if present.
   """
-  @spec stop_pool(pid() | atom(), String.t()) :: :ok | {:error, :not_found}
-  def stop_pool(supervisor, node_name) when is_binary(node_name) do
+  @spec stop_pool(pid() | atom(), pid()) :: :ok | {:error, :not_found}
+  def stop_pool(supervisor, pool_pid) when is_pid(pool_pid) do
     sup = sup_pid(supervisor)
 
     with sup when sup != nil <- sup,
-         {:ok, pool_pid} <- find_pool_pid(sup, node_name),
          :ok <- DynamicSupervisor.terminate_child(sup, pool_pid) do
       :ok
     else
       nil -> {:error, :not_found}
-      :error -> {:error, :not_found}
       {:error, _} -> {:error, :not_found}
-    end
-  end
-
-  # Searches the DynamicSupervisor's children for the pool matching `node_name`.
-  defp find_pool_pid(sup, node_name) do
-    case Enum.find(DynamicSupervisor.which_children(sup), fn
-           {{:node_pool, ^node_name}, pool_pid, _, _} when is_pid(pool_pid) -> true
-           _ -> false
-         end) do
-      {{:node_pool, ^node_name}, pool_pid, _, _} -> {:ok, pool_pid}
-      _ -> :error
     end
   end
 

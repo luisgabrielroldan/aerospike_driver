@@ -159,9 +159,72 @@ defmodule Aerospike.Protocol.AdminTest do
                Admin.decode_users_block(admin_record(60, []))
     end
 
+    test "ignores empty user records" do
+      assert {:ok, %{done?: false, users: []}} = Admin.decode_users_block(user_record_body([]))
+    end
+
+    test "returns truncated-record-header errors for short bodies" do
+      assert {:error, :truncated_record_header} = Admin.decode_users_block(<<0::size(120)>>)
+    end
+
+    test "returns truncated-field-header errors for partial user field headers" do
+      body = admin_header(0, 1) <> <<0, 0, 0, 5>>
+      assert {:error, :truncated_field_header} = Admin.decode_users_block(body)
+    end
+
     test "returns truncated-field errors for partial payloads" do
       body = admin_header(0, 1) <> <<0, 0, 0, 5, 0, "abc">>
       assert {:error, :truncated_field_data} = Admin.decode_users_block(body)
+    end
+
+    test "returns invalid-string-list errors for malformed role payloads" do
+      body =
+        user_record_body([
+          field(0, "alice"),
+          field(10, <<0, 1>>)
+        ])
+
+      assert {:error, :invalid_string_list_field} = Admin.decode_users_block(body)
+    end
+
+    test "returns truncated-string-list errors for partial role payloads" do
+      body =
+        user_record_body([
+          field(0, "alice"),
+          field(10, <<1, 5, "abc">>)
+        ])
+
+      assert {:error, :truncated_string_list_field} = Admin.decode_users_block(body)
+    end
+
+    test "returns invalid-info errors for malformed counter payloads" do
+      body =
+        user_record_body([
+          field(0, "alice"),
+          field(16, <<0, 1>>)
+        ])
+
+      assert {:error, :invalid_info_field} = Admin.decode_users_block(body)
+    end
+
+    test "returns truncated-info errors for partial counter payloads" do
+      body =
+        user_record_body([
+          field(0, "alice"),
+          field(17, <<1, 0, 0, 0>>)
+        ])
+
+      assert {:error, :truncated_info_field} = Admin.decode_users_block(body)
+    end
+
+    test "returns invalid-connections-field errors for non-uint32 widths" do
+      body =
+        user_record_body([
+          field(0, "alice"),
+          field(18, <<7::16-big>>)
+        ])
+
+      assert {:error, :invalid_connections_field} = Admin.decode_users_block(body)
     end
   end
 
@@ -207,6 +270,19 @@ defmodule Aerospike.Protocol.AdminTest do
                Admin.decode_roles_block(admin_record(50, []))
     end
 
+    test "ignores empty role records" do
+      assert {:ok, %{done?: false, roles: []}} = Admin.decode_roles_block(role_record_body([]))
+    end
+
+    test "returns truncated-record-header errors for short role bodies" do
+      assert {:error, :truncated_record_header} = Admin.decode_roles_block(<<0::size(120)>>)
+    end
+
+    test "returns truncated-field-header errors for partial role field headers" do
+      body = admin_header(0, 1) <> <<0, 0, 0, 5>>
+      assert {:error, :truncated_field_header} = Admin.decode_roles_block(body)
+    end
+
     test "returns truncated privilege scope errors" do
       body =
         role_record_body([
@@ -215,6 +291,46 @@ defmodule Aerospike.Protocol.AdminTest do
         ])
 
       assert {:error, :truncated_privilege_scope} = Admin.decode_roles_block(body)
+    end
+
+    test "returns invalid-privileges errors for malformed privilege payloads" do
+      body =
+        role_record_body([
+          field(11, "analyst"),
+          field(12, <<0, 1>>)
+        ])
+
+      assert {:error, :invalid_privileges_field} = Admin.decode_roles_block(body)
+    end
+
+    test "returns truncated-privileges errors for partial privilege payloads" do
+      body =
+        role_record_body([
+          field(11, "analyst"),
+          field(12, <<2, 1>>)
+        ])
+
+      assert {:error, :truncated_privileges_field} = Admin.decode_roles_block(body)
+    end
+
+    test "returns invalid read quota errors for non-uint32 widths" do
+      body =
+        role_record_body([
+          field(11, "analyst"),
+          field(14, <<25::16-big>>)
+        ])
+
+      assert {:error, :invalid_read_quota_field} = Admin.decode_roles_block(body)
+    end
+
+    test "returns invalid write quota errors for non-uint32 widths" do
+      body =
+        role_record_body([
+          field(11, "analyst"),
+          field(15, <<50::16-big>>)
+        ])
+
+      assert {:error, :invalid_write_quota_field} = Admin.decode_roles_block(body)
     end
   end
 

@@ -405,7 +405,14 @@ defmodule Aerospike.Cluster do
   end
 
   defp prune_departed_peer(state, node_name) do
-    _ = NodeSupervisor.stop_pool(state.node_supervisor, node_name)
+    case :ets.lookup(Tables.nodes(state.name), node_name) do
+      [{^node_name, %{pool_pid: pool_pid}}] when is_pid(pool_pid) ->
+        _ = stop_pool_and_wait(state.node_supervisor, pool_pid)
+
+      _ ->
+        :ok
+    end
+
     :ets.delete(Tables.nodes(state.name), node_name)
     _ = :ets.select_delete(Tables.partitions(state.name), [{{:"$1", node_name}, [], [true]}])
 
@@ -552,16 +559,96 @@ defmodule Aerospike.Cluster do
     end)
   end
 
-  defp restart_node_pool(state, node_name, %{host: host, port: port} = row) do
-    _ = NodeSupervisor.stop_pool(state.node_supervisor, node_name)
+  defp restart_node_pool(state, node_name, %{host: host, port: port, pool_pid: pool_pid} = row) do
+    _ = stop_pool_and_wait(state.node_supervisor, pool_pid)
 
-    case ensure_node_pool(state, node_name, host, port) do
-      {:ok, pool_pid} ->
-        :ets.insert(Tables.nodes(state.name), {node_name, %{row | pool_pid: pool_pid}})
+    case ensure_node_pool_with_retry(state, node_name, host, port, pool_pid) do
+      {:ok, new_pool_pid} ->
+        :ets.insert(Tables.nodes(state.name), {node_name, %{row | pool_pid: new_pool_pid}})
         state
 
       {:error, _reason} ->
         state
+    end
+  end
+
+  defp ensure_node_pool_with_retry(
+         state,
+         node_name,
+         host,
+         port,
+         previous_pool_pid,
+         attempts \\ 100
+       )
+       when is_binary(node_name) and is_binary(host) and is_integer(port) and is_integer(attempts) and
+              attempts >= 0 and is_pid(previous_pool_pid) do
+    case ensure_node_pool(state, node_name, host, port) do
+      {:ok, pool_pid} when is_pid(pool_pid) ->
+        handle_restarted_pool_pid(
+          state,
+          node_name,
+          host,
+          port,
+          previous_pool_pid,
+          attempts,
+          pool_pid
+        )
+
+      {:error, _reason} ->
+        retry_ensure_node_pool(state, node_name, host, port, previous_pool_pid, attempts)
+    end
+  end
+
+  defp handle_restarted_pool_pid(
+         state,
+         node_name,
+         host,
+         port,
+         previous_pool_pid,
+         attempts,
+         pool_pid
+       )
+       when is_pid(previous_pool_pid) and is_integer(attempts) and is_pid(pool_pid) do
+    if valid_restarted_pool_pid?(pool_pid, previous_pool_pid) do
+      {:ok, pool_pid}
+    else
+      retry_ensure_node_pool(state, node_name, host, port, previous_pool_pid, attempts)
+    end
+  end
+
+  defp valid_restarted_pool_pid?(pool_pid, previous_pool_pid)
+       when is_pid(pool_pid) and is_pid(previous_pool_pid) do
+    Process.alive?(pool_pid) and pool_pid != previous_pool_pid
+  end
+
+  defp retry_ensure_node_pool(state, node_name, host, port, previous_pool_pid, attempts)
+       when is_integer(attempts) and attempts > 0 do
+    Process.sleep(50)
+    ensure_node_pool_with_retry(state, node_name, host, port, previous_pool_pid, attempts - 1)
+  end
+
+  defp retry_ensure_node_pool(_state, _node_name, _host, _port, _previous_pool_pid, 0) do
+    {:error, :pool_restart_timeout}
+  end
+
+  defp stop_pool_and_wait(node_supervisor, pool_pid, timeout \\ 1_000)
+       when is_pid(pool_pid) and is_integer(timeout) and timeout >= 0 do
+    monitor = if Process.alive?(pool_pid), do: Process.monitor(pool_pid), else: nil
+    result = NodeSupervisor.stop_pool(node_supervisor, pool_pid)
+
+    case monitor do
+      nil ->
+        result
+
+      ref ->
+        receive do
+          {:DOWN, ^ref, :process, ^pool_pid, _reason} ->
+            result
+        after
+          timeout ->
+            Process.demonitor(ref, [:flush])
+            result
+        end
     end
   end
 

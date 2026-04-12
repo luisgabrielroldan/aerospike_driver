@@ -153,6 +153,24 @@ defmodule Aerospike.AdminTest do
       Task.await(server)
     end
 
+    test "create_pki_user sends the no-password credential", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert command_id(body) == 1
+          fields = decode_fields(body)
+          assert Map.fetch!(fields, 0) == "cert-user"
+          assert Map.fetch!(fields, 1) == PasswordHash.no_password_credential()
+          assert Map.fetch!(fields, 10) == counted_strings(["read-write"])
+          MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
+        end)
+
+      register_node(name, pool_pid, 3_010)
+
+      assert :ok = Admin.create_pki_user(name, "cert-user", ["read-write"], [])
+      Task.await(server)
+    end
+
     test "change_password uses the self-service command when the auth user matches", %{name: name} do
       old_credential = PasswordHash.hash("oldsecret")
 
@@ -186,6 +204,89 @@ defmodule Aerospike.AdminTest do
       Task.await(server)
     end
 
+    test "change_password uses the admin set-password command for non-self changes", %{name: name} do
+      caller_credential = PasswordHash.hash("admin-secret")
+
+      {:ok, pool_pid, server} =
+        start_pool_with_server(
+          name,
+          fn client ->
+            {:ok, _login_header, login_body} = MockTcpServer.recv_message(client)
+            assert command_id(login_body) == 20
+            MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
+
+            {:ok, _header, body} = MockTcpServer.recv_message(client)
+            assert command_id(body) == 3
+            fields = decode_fields(body)
+            assert Map.fetch!(fields, 0) == "bob"
+            assert Map.fetch!(fields, 1) == PasswordHash.hash("newsecret")
+            refute Map.has_key?(fields, 2)
+            MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
+          end,
+          user: "alice",
+          credential: caller_credential
+        )
+
+      register_node(name, pool_pid, 3_005)
+      :ets.insert(Tables.meta(name), {:auth_opts, [user: "alice", credential: caller_credential]})
+
+      assert :ok = Admin.change_password(name, "bob", "newsecret", [])
+
+      assert [{:auth_opts, auth_opts}] = :ets.lookup(Tables.meta(name), :auth_opts)
+      assert Keyword.fetch!(auth_opts, :credential) == caller_credential
+      Task.await(server)
+    end
+
+    test "change_password does not rotate auth state when self-change fails", %{name: name} do
+      old_credential = PasswordHash.hash("oldsecret")
+
+      {:ok, pool_pid, server} =
+        start_pool_with_server(
+          name,
+          fn client ->
+            {:ok, _login_header, login_body} = MockTcpServer.recv_message(client)
+            assert command_id(login_body) == 20
+            MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
+
+            {:ok, _header, body} = MockTcpServer.recv_message(client)
+            assert command_id(body) == 4
+            fields = decode_fields(body)
+            assert Map.fetch!(fields, 0) == "alice"
+            assert Map.fetch!(fields, 2) == old_credential
+            assert Map.fetch!(fields, 1) == PasswordHash.hash("newsecret")
+            MockTcpServer.send_admin_response(client, admin_record(64, []))
+          end,
+          user: "alice",
+          credential: old_credential
+        )
+
+      register_node(name, pool_pid, 3_006)
+      :ets.insert(Tables.meta(name), {:auth_opts, [user: "alice", credential: old_credential]})
+
+      assert {:error, %{code: :forbidden_password}} =
+               Admin.change_password(name, "alice", "newsecret", [])
+
+      assert [{:auth_opts, auth_opts}] = :ets.lookup(Tables.meta(name), :auth_opts)
+      assert Keyword.fetch!(auth_opts, :credential) == old_credential
+      Task.await(server)
+    end
+
+    test "create_user translates admin result-code failures", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert command_id(body) == 1
+          MockTcpServer.send_admin_response(client, admin_record(60, []))
+        end)
+
+      register_node(name, pool_pid, 3_007)
+
+      assert {:error, %{code: :invalid_user}} =
+               Admin.create_user(name, "ada", "secret", ["read-write"], [])
+
+      Task.await(server)
+    end
+
     test "query_users reads streamed admin responses until query_end", %{name: name} do
       {:ok, pool_pid, server} =
         start_pool_with_server(name, fn client ->
@@ -210,6 +311,34 @@ defmodule Aerospike.AdminTest do
       assert {:ok, [%User{name: "ada", roles: ["read-write", "sys-admin"]}]} =
                Admin.query_users(name, [])
 
+      Task.await(server)
+    end
+
+    test "query_users translates streamed admin result-code failures", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert command_id(body) == 9
+          MockTcpServer.send_admin_response(client, admin_record(60, []))
+        end)
+
+      register_node(name, pool_pid, 3_008)
+
+      assert {:error, %{code: :invalid_user}} = Admin.query_users(name, [])
+      Task.await(server)
+    end
+
+    test "query_user returns nil when the server streams no matching records", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert command_id(body) == 9
+          MockTcpServer.send_admin_response(client, admin_record(50, []))
+        end)
+
+      register_node(name, pool_pid, 3_011)
+
+      assert {:ok, nil} = Admin.query_user(name, "missing-user", [])
       Task.await(server)
     end
 
@@ -278,6 +407,82 @@ defmodule Aerospike.AdminTest do
                   write_quota: 50
                 }
               ]} = Admin.query_roles(name, [])
+
+      Task.await(server)
+    end
+
+    test "query_roles translates malformed streamed admin payloads into protocol errors", %{
+      name: name
+    } do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert command_id(body) == 16
+
+          malformed_role_body =
+            admin_record(
+              0,
+              [
+                field(11, "analyst"),
+                field(12, <<1, 11, 4, "tes">>)
+              ]
+            )
+
+          MockTcpServer.send_admin_response(client, malformed_role_body)
+          MockTcpServer.send_admin_response(client, admin_record(50, []))
+        end)
+
+      register_node(name, pool_pid, 3_009)
+
+      assert {:error, %{code: :server_error, message: message}} = Admin.query_roles(name, [])
+      assert message == "invalid admin response: :truncated_privilege_scope"
+      Task.await(server)
+    end
+
+    test "query_role returns nil when the server streams no matching records", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert command_id(body) == 16
+          MockTcpServer.send_admin_response(client, admin_record(50, []))
+        end)
+
+      register_node(name, pool_pid, 3_012)
+
+      assert {:ok, nil} = Admin.query_role(name, "missing-role", [])
+      Task.await(server)
+    end
+
+    test "query_role preserves default whitelist and quotas when optional fields are absent", %{
+      name: name
+    } do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert command_id(body) == 16
+
+          role_body =
+            admin_record(
+              0,
+              [
+                field(11, "observer")
+              ]
+            )
+
+          MockTcpServer.send_admin_response(client, role_body)
+          MockTcpServer.send_admin_response(client, admin_record(50, []))
+        end)
+
+      register_node(name, pool_pid, 3_013)
+
+      assert {:ok,
+              %Role{
+                name: "observer",
+                privileges: [],
+                whitelist: [],
+                read_quota: 0,
+                write_quota: 0
+              }} = Admin.query_role(name, "observer", [])
 
       Task.await(server)
     end
