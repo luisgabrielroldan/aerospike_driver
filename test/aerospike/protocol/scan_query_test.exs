@@ -1,6 +1,7 @@
 defmodule Aerospike.Protocol.ScanQueryTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Ctx
   alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.Protocol.AsmMsg
@@ -132,6 +133,39 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert field_data(msg, Field.type_namespace()) == "ns"
     assert field_data(msg, Field.type_table()) == "set1"
     assert field_data(msg, Field.type_pid_array()) == <<3::16-little>>
+  end
+
+  test "build_query/3 emits INDEX_NAME and blanks the bin in INDEX_RANGE for named indexes" do
+    filter = Filter.equal("age", 21) |> Filter.using_index("age_expr_idx")
+    q = Query.new("ns", "set1") |> Query.where(filter)
+
+    wire =
+      ScanQuery.build_query(q, %{parts_full: [3], parts_partial: [], record_max: 0}, task_id: 42)
+
+    msg = decode_as_msg(wire)
+    range_data = field_data(msg, Field.type_index_range())
+
+    assert field_data(msg, Field.type_index_name()) == "age_expr_idx"
+    assert range_data == Aerospike.Protocol.Filter.encode(filter)
+    assert range_data == <<1, 0, 1, 0, 0, 0, 8, 21::64-signed-big, 0, 0, 0, 8, 21::64-signed-big>>
+  end
+
+  test "build_query/3 emits INDEX_CONTEXT for nested CDT filters" do
+    ctx = [Ctx.map_key("roles"), Ctx.list_index(0)]
+
+    filter =
+      Filter.contains("profile", :mapvalues, "admin")
+      |> Filter.with_ctx(ctx)
+
+    q = Query.new("ns", "set1") |> Query.where(filter)
+
+    wire =
+      ScanQuery.build_query(q, %{parts_full: [3], parts_partial: [], record_max: 0}, task_id: 42)
+
+    msg = decode_as_msg(wire)
+
+    assert field_data(msg, Field.type_index_context()) ==
+             Aerospike.Protocol.Filter.encode_ctx(ctx)
   end
 
   test "build_query/3 with partials includes BVAL_ARRAY after DIGEST_ARRAY order in field list" do

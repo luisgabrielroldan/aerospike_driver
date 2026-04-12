@@ -17,6 +17,7 @@ defmodule Aerospike.Protocol.Filter do
   # String/GeoJSON: raw UTF-8 bytes.
 
   alias Aerospike.Filter
+  alias Aerospike.Protocol.MessagePack
 
   @particle_integer 1
   @particle_string 3
@@ -55,6 +56,13 @@ defmodule Aerospike.Protocol.Filter do
   defp named_index?(%Filter{index_name: name}) when is_binary(name) and name != "", do: true
   defp named_index?(_), do: false
 
+  @spec encode_ctx([Aerospike.Ctx.step()]) :: binary()
+  def encode_ctx(ctx) when is_list(ctx) do
+    ctx
+    |> Enum.flat_map(fn {id, value} -> [id, encode_ctx_value(value)] end)
+    |> MessagePack.pack!()
+  end
+
   defp encode_endpoint(%Filter{particle_type: :integer}, n) when is_integer(n) do
     <<n::64-signed-big>>
   end
@@ -62,4 +70,8 @@ defmodule Aerospike.Protocol.Filter do
   defp encode_endpoint(%Filter{particle_type: :string}, s) when is_binary(s) do
     s
   end
+
+  defp encode_ctx_value(value) when is_binary(value), do: {:particle_string, value}
+  defp encode_ctx_value({:bytes, _} = value), do: value
+  defp encode_ctx_value(value), do: value
 end

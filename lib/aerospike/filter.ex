@@ -253,8 +253,8 @@ defmodule Aerospike.Filter do
   @doc """
   Attaches nested CDT context to a secondary-index filter.
 
-  Query encoding support for `ctx` is wired separately from this public builder,
-  but callers should use this function instead of mutating `%Aerospike.Filter{}` by hand.
+  Query encoding uses this context to target nested CDT indexes. Callers should
+  use this function instead of mutating `%Aerospike.Filter{}` by hand.
   """
   @spec with_ctx(t(), [Ctx.step()]) :: t()
   def with_ctx(%__MODULE__{} = filter, ctx) when is_list(ctx) do
