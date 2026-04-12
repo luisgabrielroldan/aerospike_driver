@@ -1705,6 +1705,22 @@ defmodule Aerospike do
     expression evaluates to a collection.
   * `:pool_checkout_timeout` — pool checkout timeout in ms.
 
+  Expression-backed secondary indexes require Aerospike server `8.1.0` or newer.
+
+  ## Example
+
+      expression =
+        Aerospike.Exp.int_bin("age")
+        |> Aerospike.Exp.gt(Aerospike.Exp.val(17))
+
+      {:ok, task} =
+        Aerospike.create_expression_index(:aero, "test", "users", expression,
+          name: "adult_users_idx",
+          type: :numeric
+        )
+
+      :ok = Aerospike.IndexTask.wait(task, timeout: 30_000)
+
   """
   @spec create_expression_index(conn(), String.t(), String.t(), Exp.t(), keyword()) ::
           {:ok, IndexTask.t()} | {:error, Error.t()}

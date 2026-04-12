@@ -7,6 +7,12 @@ records change.
 Secondary indexes are complementary to [`Aerospike.Query`](Aerospike.Query.html) — once an index exists, pass
 [`Aerospike.Filter`](Aerospike.Filter.html) predicates in your query to use it.
 
+This client ships three practical SI families:
+
+- Standard bin-backed indexes created with [`create_index/4`](Aerospike.html#create_index/4)
+- Advanced CDT indexes that add `:collection` and optional nested `:ctx`
+- Expression-backed indexes created with [`create_expression_index/5`](Aerospike.html#create_expression_index/5)
+
 ## Creating an Index
 
 [`Aerospike.create_index/4`](Aerospike.html#create_index/4) sends the creation command to the server. Index building happens
@@ -174,6 +180,79 @@ inner values rather than the bin container itself:
 | `:mapkeys` | Every key in a map bin |
 | `:mapvalues` | Every value in a map bin |
 
+## Nested CDT Indexes
+
+Top-level `:collection` support is enough for flat CDT bins, but nested CDT indexes need an
+additional `:ctx` path so the server knows which inner list or map to index.
+
+```elixir
+alias Aerospike.Ctx
+
+ctx = [Ctx.map_key("roles")]
+
+{:ok, task} =
+  MyApp.Repo.create_index("test", "profiles",
+    bin: "profile",
+    name: "profiles_roles_idx",
+    type: :string,
+    collection: :list,
+    ctx: ctx
+  )
+
+:ok = Aerospike.IndexTask.wait(task)
+```
+
+Use the same context on the query filter so the predicate targets the nested path that was indexed:
+
+```elixir
+alias Aerospike.{Filter, Query}
+
+ctx = [Aerospike.Ctx.map_key("roles")]
+
+{:ok, records} =
+  Query.new("test", "profiles")
+  |> Query.where(
+    Filter.contains("profile", :list, "admin")
+    |> Filter.with_ctx(ctx)
+  )
+  |> Query.max_records(10_000)
+  |> then(&MyApp.Repo.all(&1))
+```
+
+## Expression-Backed Indexes
+
+Use [`create_expression_index/5`](Aerospike.html#create_expression_index/5) when the indexed value
+comes from a server expression instead of a single stored bin.
+
+Expression-backed index creation requires Aerospike server `8.1.0` or newer. On older servers the
+client returns a parameter error instead of sending an ambiguous info command.
+
+```elixir
+alias Aerospike.{Exp, Filter, Query}
+
+expression =
+  Exp.int_bin("age")
+  |> Exp.gt(Exp.val(17))
+
+{:ok, task} =
+  MyApp.Repo.create_expression_index("test", "users", expression,
+    name: "adult_users_idx",
+    type: :numeric
+  )
+
+:ok = Aerospike.IndexTask.wait(task)
+
+{:ok, records} =
+  Query.new("test", "users")
+  |> Query.where(Filter.range("age", 18, 120) |> Filter.using_index("adult_users_idx"))
+  |> Query.max_records(10_000)
+  |> then(&MyApp.Repo.all(&1))
+```
+
+The query predicate still carries the value range or equality test, but
+[`Filter.using_index/2`](Aerospike.Filter.html#using_index/2) makes the named advanced index the
+explicit lookup target.
+
 ## Querying with an Index
 
 Pair secondary indexes with [`Aerospike.Query`](Aerospike.Query.html) and [`Aerospike.Filter`](Aerospike.Filter.html). Execute with [`Aerospike.all/3`](Aerospike.html#all/3) (or [`stream!/3`](Aerospike.html#stream!/3), [`page/3`](Aerospike.html#page/3), etc.); [`all/3`](Aerospike.html#all/3) requires [`Query.max_records/2`](Aerospike.Query.html#max_records/2).
@@ -215,6 +294,11 @@ query =
 
 The index filter runs server-side first (fast path), then the expression filter applies to
 the smaller result set.
+
+For advanced indexes, use the filter annotations instead of mutating `%Aerospike.Filter{}` directly:
+
+- [`Filter.using_index/2`](Aerospike.Filter.html#using_index/2) targets a named index, including expression-backed indexes.
+- [`Filter.with_ctx/2`](Aerospike.Filter.html#with_ctx/2) attaches the nested CDT path for context-aware indexes.
 
 ## Dropping an Index
 
@@ -286,6 +370,7 @@ end
 - Indexes persist across server restarts.
 - Dropping an index that does not exist returns `:ok` (idempotent).
 - Background index builds do not block writes — data written during the build is captured.
+- Expression-backed index creation requires Aerospike server `8.1.0` or newer.
 
 ## Next Steps
 
