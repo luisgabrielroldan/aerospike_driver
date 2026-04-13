@@ -195,6 +195,92 @@ defmodule Aerospike.ClusterTest do
       )
     end
 
+    test "tend refetches a re-joined peer whose partition-generation matches its stale entry",
+         %{name: name} do
+      # Regression for the per-node-generation cleanup added in
+      # `prune_departed_peer/2` (parent plan
+      # `docs/plans/cluster-per-node-partition-gen/` Task 2, step 8).
+      #
+      # The skip path that the cleanup prevents only triggers when the
+      # rejoined peer reports the *same* `partition-generation` it had when it
+      # departed. `check_partition_generation/4` uses `gen != stored`, so a
+      # rejoin with a *different* gen (higher or lower) refetches via the
+      # normal comparison and proves nothing about the cleanup. Keep this test
+      # at "equal gen" — do not "fix" it back to "lower gen". See
+      # `docs/plans/cluster-peer-tend-gap/notes.md` for the full rationale.
+      #
+      # Repro: bootstrap B_PEER at gen=7 with partitions=[1]. Drop B_PEER from
+      # the seed's `peers-clear-std` reply and drive tend until the prune
+      # path runs. Re-advertise B_PEER with the *same* gen=7 but a new
+      # partition set [2]. Without the `Map.delete(state.partition_generations,
+      # node_name)` line in `prune_departed_peer/2`, the per-node entry for
+      # B_PEER stays at 7, so the next `check_partition_generation/4` sees
+      # `7 != 7 -> false` and skips refetch — partition 2 never appears in
+      # ETS. With the cleanup, the entry is gone, so `7 != nil -> true`
+      # forces the refetch.
+      #
+      # Node names are chosen so the seed sorts before the peer in Erlang
+      # term order (`"A_SEED" < "B_PEER"`). `tend_refresh_peers/1` reads only
+      # the first entry of `Map.to_list(state.tend_conns)`, and small-map
+      # iteration follows term order — so this naming guarantees the seed is
+      # the node whose `peers-clear-std` drives the depart-and-rejoin
+      # transitions, mirroring the existing prune test convention.
+      peer = start_info_server("B_PEER", partition_generation: 7, partitions: [1])
+      on_exit(fn -> stop_info_server(peer) end)
+
+      seed =
+        start_info_server(
+          "A_SEED",
+          peers: peers_payload(1, [{"B_PEER", "127.0.0.1", peer.port}]),
+          partitions: [0]
+        )
+
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Bootstrap must have populated B_PEER's base partition and seeded its
+      # per-node `partition_generations` entry to 7.
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 1, 0}) == [{{"test", 1, 0}, "B_PEER"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Depart B_PEER by dropping it from the seed's peer list. Drive tend
+      # until the prune path removes it from `Tables.nodes/1`. The peer
+      # mock keeps running so the rejoin handshake can succeed below.
+      update_info_server(seed, peers: peers_payload(2, []))
+
+      Helpers.poll_until(
+        fn -> :ets.lookup(Tables.nodes(name), "B_PEER") == [] end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Re-advertise B_PEER with a *new* partition set ([2]) and the *same*
+      # `partition-generation` (7) it had on departure. The new partition
+      # gives the assertion a visible signal that refetch ran; the equal gen
+      # exercises the skip path that the cleanup prevents.
+      update_info_server(peer, partitions: [2])
+
+      update_info_server(
+        seed,
+        peers: peers_payload(3, [{"B_PEER", "127.0.0.1", peer.port}])
+      )
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 2, 0}) == [{{"test", 2, 0}, "B_PEER"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+    end
+
     test "tend removes peers no longer reported by peers-clear-std", %{name: name} do
       peer = start_info_server("B_PEER", partition_generation: 1, partitions: [1])
       on_exit(fn -> stop_info_server(peer) end)
