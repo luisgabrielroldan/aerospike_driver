@@ -439,32 +439,49 @@ defmodule Aerospike.Cluster do
     |> tend_refresh_partitions()
   end
 
-  # Asks one tend connection for the current peer list; skips if generation hasn't changed.
+  # Iterates tend connections until one yields a usable `peers-clear-std`
+  # reply. Halts on `:advanced` (state updated from that conn) or `:same`
+  # (stable-cluster short-circuit — `peers_generation` is cluster-wide, so
+  # any healthy conn reporting the stored gen is authoritative). Continues
+  # past `:error` (dead conn, info failure, unparseable payload) so a single
+  # broken node does not mask topology updates visible to others.
   defp tend_refresh_peers(state) do
-    case Map.to_list(state.tend_conns) do
-      [] ->
-        state
+    state.tend_conns
+    |> Map.to_list()
+    |> Enum.reduce_while(state, fn {node_name, conn}, _acc ->
+      case try_refresh_peers_on(state, node_name, conn) do
+        {:advanced, new_state} -> {:halt, new_state}
+        :same -> {:halt, state}
+        :error -> {:cont, state}
+      end
+    end)
+  end
 
-      [{node_name, conn} | _] ->
-        do_tend_refresh_peers(state, node_name, conn)
+  # Per-conn helper. Always reasons about the *original* state so partial
+  # updates from an errored iteration cannot leak forward. Only the winning
+  # conn's entry is written back to `state.tend_conns`.
+  defp try_refresh_peers_on(state, node_name, conn) do
+    with {:ok, conn, info} <- Connection.request_info(conn, ["peers-clear-std"]),
+         raw when is_binary(raw) <- Map.get(info, "peers-clear-std"),
+         {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw) do
+      if gen == state.peers_generation do
+        :same
+      else
+        {:advanced, apply_refreshed_peers(state, node_name, conn, gen, peers)}
+      end
+    else
+      _ -> :error
     end
   end
 
-  defp do_tend_refresh_peers(state, node_name, conn) do
-    with {:ok, conn, info} <- Connection.request_info(conn, ["peers-clear-std"]),
-         raw when is_binary(raw) <- Map.get(info, "peers-clear-std"),
-         {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw),
-         true <- gen != state.peers_generation do
-      new_conns = add_peer_nodes(state, peers, node_name)
+  defp apply_refreshed_peers(state, node_name, conn, gen, peers) do
+    new_conns = add_peer_nodes(state, peers, node_name)
 
-      state
-      |> merge_tend_conns(new_conns)
-      |> prune_departed_peers(peers, node_name)
-      |> Map.put(:peers_generation, gen)
-      |> Map.update!(:tend_conns, &Map.put(&1, node_name, conn))
-    else
-      _ -> state
-    end
+    state
+    |> merge_tend_conns(new_conns)
+    |> prune_departed_peers(peers, node_name)
+    |> Map.put(:peers_generation, gen)
+    |> Map.update!(:tend_conns, &Map.put(&1, node_name, conn))
   end
 
   defp prune_departed_peers(state, peers, reporting_node_name) do
