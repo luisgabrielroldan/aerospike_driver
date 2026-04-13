@@ -18,7 +18,7 @@ defmodule Aerospike.Integration.ScanQueryTest do
   @set "scan_test_phase8"
   @index_name "idx_age_phase8"
 
-  setup do
+  setup_all do
     host = System.get_env("AEROSPIKE_HOST", "127.0.0.1")
     port = System.get_env("AEROSPIKE_PORT", "3000") |> String.to_integer()
     name = :"scan_query_itest_#{System.unique_integer([:positive])}"
