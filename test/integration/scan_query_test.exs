@@ -9,7 +9,6 @@ defmodule Aerospike.Integration.ScanQueryTest do
   alias Aerospike.Query
   alias Aerospike.Record
   alias Aerospike.Scan
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
   @moduletag :integration
@@ -39,7 +38,7 @@ defmodule Aerospike.Integration.ScanQueryTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     :ok = sindex_create_numeric!(host, port, @namespace, @set, @index_name, "age")
 
@@ -295,29 +294,6 @@ defmodule Aerospike.Integration.ScanQueryTest do
       assert is_integer(age)
       assert age >= 20 and age <= 25
     end
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_cluster_ready_loop(name, deadline)
-  end
-
-  defp await_cluster_ready_loop(name, deadline) do
-    cond do
-      cluster_ready?(name) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("cluster not ready")
-
-      true ->
-        Process.sleep(50)
-        await_cluster_ready_loop(name, deadline)
-    end
-  end
-
-  defp cluster_ready?(name) do
-    match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
   end
 
   defp sindex_create_numeric!(host, port, ns, set, index_name, bin) do
