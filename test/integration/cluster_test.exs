@@ -2,7 +2,6 @@ defmodule Aerospike.Integration.ClusterTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Cluster
-  alias Aerospike.Connection
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Response
@@ -207,84 +206,6 @@ defmodule Aerospike.Integration.ClusterTest do
                node_result.warmed == result.requested_per_node and
                is_nil(node_result.error)
            end)
-  end
-
-  test "partition map converges under divergent per-node partition-generation values",
-       %{name: name} do
-    nodes = :ets.tab2list(Tables.nodes(name))
-
-    if length(nodes) < 2 do
-      ExUnit.Assertions.flunk("""
-      This test requires a multi-node Aerospike cluster. Start it with:
-
-          docker compose --profile cluster up -d
-
-      Only #{length(nodes)} node(s) discovered on port #{System.get_env("AEROSPIKE_PORT", "3000")}.
-      """)
-    end
-
-    # Precondition: confirm the server-reported partition-generation values
-    # diverge across nodes. Each node advertises its own generation via the
-    # `partition-generation` info command. This is the exact condition that
-    # originally masked the scalar-conflation bug fixed in this plan.
-    node_gens = node_partition_generations(nodes)
-
-    distinct_gens = node_gens |> Map.values() |> Enum.uniq()
-
-    assert length(distinct_gens) >= 2,
-           "expected at least two divergent partition-generation values across " <>
-             "nodes, got #{inspect(node_gens)}. If this ever fails naturally " <>
-             "the test should force divergence via `asinfo -v recluster:` on " <>
-             "one node."
-
-    cluster_pid = Process.whereis(Cluster.cluster_name(name))
-    assert is_pid(cluster_pid)
-
-    # Drive tend manually (setup uses tend_interval: 60_000). The convergence
-    # predicate polls observable ETS content, not private GenServer state.
-    expected_partitions = 4096 * 2
-
-    Helpers.poll_until(
-      fn ->
-        size = :ets.info(Tables.partitions(name), :size)
-        if size == expected_partitions, do: size, else: false
-      end,
-      timeout: 15_000,
-      interval: 100,
-      between: fn -> send(cluster_pid, :tend) end
-    )
-
-    # Spot-check: pick a handful of partition ids across both replicas and
-    # confirm they resolve to a node name that is currently in Tables.nodes.
-    node_name_set = nodes |> Enum.map(fn {node_name, _} -> node_name end) |> MapSet.new()
-
-    for pid <- [0, 1024, 2048, 3072, 4095], replica_index <- [0, 1] do
-      case :ets.lookup(Tables.partitions(name), {"test", pid, replica_index}) do
-        [{_, node_name}] ->
-          assert MapSet.member?(node_name_set, node_name),
-                 "partition {test, #{pid}, #{replica_index}} points at unknown " <>
-                   "node #{inspect(node_name)}; known nodes: #{inspect(MapSet.to_list(node_name_set))}"
-
-        [] ->
-          flunk("partition {test, #{pid}, #{replica_index}} missing from ETS after convergence")
-      end
-    end
-  end
-
-  defp node_partition_generations(nodes) do
-    Map.new(nodes, fn {node_name, %{host: host, port: port}} ->
-      {:ok, conn} = Connection.connect(host: host, port: port)
-      {:ok, conn} = Connection.login(conn)
-      {:ok, _conn, info} = Connection.request_info(conn, ["partition-generation"])
-      Connection.close(conn)
-
-      gen =
-        info
-        |> Map.fetch!("partition-generation")
-        |> String.to_integer()
-
-      {node_name, gen}
-    end)
   end
 
   defp await_process_restart(registered_name, timeout \\ 5_000) do

@@ -40,25 +40,24 @@ test.tls: tls-fixtures
 # Single-node dependencies (unit/property/basic integration).
 deps-up:
 	@docker compose up -d aerospike
-	@$(MAKE) wait-service SERVICE=aerospike1
+	@$(MAKE) wait-service SERVICE=aerospike1 EXPECTED_SIZE=1
 	@echo "Dependencies ready: localhost:3000"
 
 # Multi-node cluster dependencies (cluster integration tests).
 deps-cluster-up:
 	@docker compose --profile cluster up -d aerospike aerospike2 aerospike3
-	@$(MAKE) wait-service SERVICE=aerospike1
-	@$(MAKE) wait-service SERVICE=aerospike2
-	@$(MAKE) wait-service SERVICE=aerospike3
-	@$(MAKE) wait-cluster-size SERVICE=aerospike1 EXPECTED=3
+	@$(MAKE) wait-service SERVICE=aerospike1 EXPECTED_SIZE=3
+	@$(MAKE) wait-service SERVICE=aerospike2 EXPECTED_SIZE=3
+	@$(MAKE) wait-service SERVICE=aerospike3 EXPECTED_SIZE=3
 	@echo "Cluster dependencies ready: localhost:3000, :3010, :3020"
 
 # Enterprise dependencies (enterprise/TLS tests).
 deps-enterprise-up: tls-fixtures
 	@docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki aerospike-ee-security
-	@$(MAKE) wait-service SERVICE=aerospike-ee
-	@$(MAKE) wait-service SERVICE=aerospike-ee-tls
-	@$(MAKE) wait-service SERVICE=aerospike-ee-pki
-	@$(MAKE) wait-service SERVICE=aerospike-ee-security
+	@$(MAKE) wait-service SERVICE=aerospike-ee EXPECTED_SIZE=1
+	@$(MAKE) wait-service SERVICE=aerospike-ee-tls EXPECTED_SIZE=1
+	@$(MAKE) wait-service SERVICE=aerospike-ee-pki EXPECTED_SIZE=1
+	@$(MAKE) wait-service SERVICE=aerospike-ee-security EXPECTED_SIZE=1
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee-tls
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee-pki
@@ -67,14 +66,13 @@ deps-enterprise-up: tls-fixtures
 # Full dependency stack for full-suite testing.
 deps-all-up: tls-fixtures
 	@docker compose --profile cluster --profile enterprise up -d
-	@$(MAKE) wait-service SERVICE=aerospike1
-	@$(MAKE) wait-service SERVICE=aerospike2
-	@$(MAKE) wait-service SERVICE=aerospike3
-	@$(MAKE) wait-service SERVICE=aerospike-ee
-	@$(MAKE) wait-service SERVICE=aerospike-ee-tls
-	@$(MAKE) wait-service SERVICE=aerospike-ee-pki
-	@$(MAKE) wait-service SERVICE=aerospike-ee-security
-	@$(MAKE) wait-cluster-size SERVICE=aerospike1 EXPECTED=3
+	@$(MAKE) wait-service SERVICE=aerospike1 EXPECTED_SIZE=3
+	@$(MAKE) wait-service SERVICE=aerospike2 EXPECTED_SIZE=3
+	@$(MAKE) wait-service SERVICE=aerospike3 EXPECTED_SIZE=3
+	@$(MAKE) wait-service SERVICE=aerospike-ee EXPECTED_SIZE=1
+	@$(MAKE) wait-service SERVICE=aerospike-ee-tls EXPECTED_SIZE=1
+	@$(MAKE) wait-service SERVICE=aerospike-ee-pki EXPECTED_SIZE=1
+	@$(MAKE) wait-service SERVICE=aerospike-ee-security EXPECTED_SIZE=1
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee-tls
 	@$(MAKE) ensure-roster SERVICE=aerospike-ee-pki
@@ -84,35 +82,22 @@ deps-down:
 	@docker compose --profile cluster --profile enterprise down
 
 wait-service:
-	@echo "Waiting for $(SERVICE)..."
-	@for i in $$(seq 1 30); do \
+	@echo "Waiting for $(SERVICE) (expected cluster size $(EXPECTED_SIZE))..."
+	@for i in $$(seq 1 45); do \
 		if [ "$(SERVICE)" = "aerospike-ee-security" ]; then \
-			STATUS_CMD="asinfo -U $(AEROSPIKE_SECURITY_EE_USER) -P $(AEROSPIKE_SECURITY_EE_PASSWORD) -v status"; \
+			PROBE_CMD="asinfo -U $(AEROSPIKE_SECURITY_EE_USER) -P $(AEROSPIKE_SECURITY_EE_PASSWORD) -v 'cluster-stable:size=$(EXPECTED_SIZE);ignore-migrations=true'"; \
 		else \
-			STATUS_CMD="asinfo -v status"; \
+			PROBE_CMD="asinfo -v 'cluster-stable:size=$(EXPECTED_SIZE);ignore-migrations=true'"; \
 		fi; \
-		if docker exec $(SERVICE) sh -lc "$$STATUS_CMD" 2>/dev/null | grep -q ok; then \
-			echo "$(SERVICE) is ready"; \
-			exit 0; \
-		fi; \
-		if [ $$i -eq 30 ]; then \
-			echo "$(SERVICE) did not start in time"; \
-			docker logs $(SERVICE) || true; \
-			exit 1; \
-		fi; \
-		sleep 2; \
-	done
-
-wait-cluster-size:
-	@echo "Waiting for cluster size $(EXPECTED) on $(SERVICE)..."
-	@for i in $$(seq 1 20); do \
-		CLUSTER_SIZE=$$(docker exec $(SERVICE) asinfo -v 'statistics' 2>/dev/null | tr ';' '\n' | grep '^cluster_size=' | cut -d= -f2); \
-		if [ "$$CLUSTER_SIZE" = "$(EXPECTED)" ]; then \
-			echo "$(SERVICE): cluster size $$CLUSTER_SIZE"; \
-			exit 0; \
-		fi; \
-		if [ $$i -eq 20 ]; then \
-			echo "$(SERVICE): expected cluster size $(EXPECTED), got '$$CLUSTER_SIZE'"; \
+		OUTPUT=$$(docker exec $(SERVICE) sh -lc "$$PROBE_CMD" 2>/dev/null || true); \
+		case "$$OUTPUT" in \
+			ERROR*|'') ;; \
+			*) echo "$(SERVICE) is stable (cluster key $$OUTPUT)"; exit 0 ;; \
+		esac; \
+		if [ $$i -eq 45 ]; then \
+			echo "$(SERVICE) did not reach stable cluster size $(EXPECTED_SIZE) in time"; \
+			docker exec $(SERVICE) sh -lc "$$PROBE_CMD" || true; \
+			docker logs --tail 100 $(SERVICE) || true; \
 			exit 1; \
 		fi; \
 		sleep 2; \
