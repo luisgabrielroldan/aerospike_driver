@@ -8,7 +8,7 @@ defmodule Aerospike.MixProject do
     "--full" => "full"
   }
 
-  @version "0.2.0"
+  @version "0.3.0"
   @source_url "https://github.com/luisgabrielroldan/aerospike_driver"
   @description "Idiomatic Elixir client for the Aerospike database"
 
