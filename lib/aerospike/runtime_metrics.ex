@@ -4,9 +4,6 @@ defmodule Aerospike.RuntimeMetrics do
   alias Aerospike.Error
   alias Aerospike.Tables
 
-  @command_start_event [:aerospike, :command, :start]
-  @command_stop_event [:aerospike, :command, :stop]
-  @command_exception_event [:aerospike, :command, :exception]
   @metrics_enabled_key {:runtime, :metrics_enabled}
 
   @spec init(atom(), keyword()) :: :ok
@@ -16,31 +13,23 @@ defmodule Aerospike.RuntimeMetrics do
 
       maybe_put_config(table, :pool_size, Keyword.get(opts, :pool_size))
       maybe_put_config(table, :tend_interval_ms, Keyword.get(opts, :tend_interval))
-      attach(conn)
     end
 
     :ok
   end
 
-  @spec attach(atom()) :: :ok
-  def attach(conn) when is_atom(conn) do
-    handler_id = handler_id(conn)
-    _ = :telemetry.detach(handler_id)
+  @doc false
+  @spec record(atom(), atom(), integer(), term(), nil | String.t()) :: :ok
+  def record(conn, command, start_mono, result, node_name)
+      when is_atom(conn) and is_atom(command) and is_integer(start_mono) do
+    if metrics_enabled?(conn) do
+      duration_us =
+        System.convert_time_unit(System.monotonic_time() - start_mono, :native, :microsecond)
 
-    :ok =
-      :telemetry.attach_many(
-        handler_id,
-        [@command_start_event, @command_stop_event, @command_exception_event],
-        &__MODULE__.handle_command_event/4,
-        conn
-      )
+      record_command_counters(conn, command, node_name, duration_us)
+      record_command_result(conn, node_name, command, command_result_tag(result))
+    end
 
-    :ok
-  end
-
-  @spec detach(atom()) :: :ok
-  def detach(conn) when is_atom(conn) do
-    _ = :telemetry.detach(handler_id(conn))
     :ok
   end
 
@@ -55,8 +44,6 @@ defmodule Aerospike.RuntimeMetrics do
   @spec enable(atom(), keyword()) :: :ok | {:error, Error.t()}
   def enable(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
     if table_exists?(conn) do
-      attach(conn)
-
       if Keyword.get(opts, :reset, false) do
         clear_command_metrics(conn)
       end
@@ -224,44 +211,15 @@ defmodule Aerospike.RuntimeMetrics do
     :ok
   end
 
-  @doc false
-  @spec handle_command_event([atom()], map(), map(), atom()) :: :ok
-  def handle_command_event(@command_start_event, _measurements, metadata, conn)
-      when is_atom(conn) do
-    with %{conn: ^conn, telemetry_span_context: span_ctx, command: command} <- metadata do
-      put_span_context(conn, span_ctx, command)
-    end
+  defp command_result_tag(:ok), do: :ok
 
-    :ok
-  end
+  defp command_result_tag({:ok, _}), do: :ok
 
-  def handle_command_event(@command_stop_event, measurements, metadata, conn)
-      when is_atom(conn) do
-    with %{telemetry_span_context: span_ctx} <- metadata,
-         {:ok, command} <- pop_span_context(conn, span_ctx) do
-      if metrics_enabled?(conn) do
-        node_name = Map.get(metadata, :node)
-        duration_us = duration_us(measurements)
-        result = Map.get(metadata, :result, :ok)
+  defp command_result_tag({:error, %Error{code: code}}), do: {:error, code}
 
-        record_command_counters(conn, command, node_name, duration_us)
-        record_command_result(conn, node_name, command, result)
-      end
-    end
+  defp command_result_tag({:error, code}) when is_atom(code), do: {:error, code}
 
-    :ok
-  end
-
-  def handle_command_event(@command_exception_event, _measurements, metadata, conn)
-      when is_atom(conn) do
-    with %{telemetry_span_context: span_ctx} <- metadata do
-      _ = pop_span_context(conn, span_ctx)
-    end
-
-    :ok
-  end
-
-  def handle_command_event(_event, _measurements, _metadata, _conn), do: :ok
+  defp command_result_tag(other), do: other
 
   defp record_command_result(conn, node_name, command, :ok) do
     bump_counter(conn, {:runtime, :commands, :ok})
@@ -432,27 +390,6 @@ defmodule Aerospike.RuntimeMetrics do
     Map.get(meta_entries, {:runtime, :config, key})
   end
 
-  defp put_span_context(conn, span_ctx, command) do
-    if table_exists?(conn) do
-      :ets.insert(Tables.meta(conn), {{:runtime, :span_context, span_ctx}, command})
-    end
-
-    :ok
-  end
-
-  defp pop_span_context(conn, span_ctx) do
-    key = {:runtime, :span_context, span_ctx}
-
-    case lookup_meta(conn, key) do
-      [{^key, command}] ->
-        :ets.delete(Tables.meta(conn), key)
-        {:ok, command}
-
-      _ ->
-        :error
-    end
-  end
-
   defp maybe_put_config(_table, _key, nil), do: :ok
 
   defp maybe_put_config(table, key, value) do
@@ -497,12 +434,6 @@ defmodule Aerospike.RuntimeMetrics do
     :ok
   end
 
-  defp duration_us(%{duration: duration}) when is_integer(duration) do
-    System.convert_time_unit(duration, :native, :microsecond)
-  end
-
-  defp duration_us(_), do: 0
-
   defp clear_command_metrics(conn) do
     table = Tables.meta(conn)
 
@@ -537,8 +468,6 @@ defmodule Aerospike.RuntimeMetrics do
   defp table_exists?(conn) do
     :ets.whereis(Tables.meta(conn)) != :undefined
   end
-
-  defp handler_id(conn), do: {:aerospike_runtime_metrics, conn}
 
   defp default_stats do
     %{
