@@ -223,9 +223,10 @@ query =
 
 These APIs narrow execution to exactly one resolved node before fan-out
 planning. Missing or stale node names return a normal `{:error, %Aerospike.Error{}}`
-instead of silently broadening back to the whole cluster. The node-targeted
-scope in this phase is record reads only: `query_execute/4`, `query_udf/6`, and
-`query_aggregate/6` remain cluster-wide APIs.
+instead of silently broadening back to the whole cluster. Node-targeted query
+execution now covers both record reads and background query execute/UDF calls.
+The shipped aggregate entry point remains cluster-wide `query_aggregate/6`; there
+is intentionally no `query_aggregate_node` public API today.
 
 ### Query execution modes
 
@@ -234,11 +235,17 @@ distinct query paths:
 
 - [`query_stream/3`](Aerospike.html#query_stream/3) reads matching records and
   yields `%Aerospike.Record{}` structs.
-- [`query_execute/4`](Aerospike.html#query_execute/4) and
-  [`query_udf/6`](Aerospike.html#query_udf/6) run background server-side work
-  and return an [`Aerospike.ExecuteTask`](Aerospike.ExecuteTask.html).
+- [`query_execute/4`](Aerospike.html#query_execute/4),
+  [`query_execute_node/5`](Aerospike.html#query_execute_node/5),
+  [`query_udf/6`](Aerospike.html#query_udf/6), and
+  [`query_udf_node/7`](Aerospike.html#query_udf_node/7) run background
+  server-side work and return an [`Aerospike.ExecuteTask`](Aerospike.ExecuteTask.html).
 - [`query_aggregate/6`](Aerospike.html#query_aggregate/6) streams aggregate
   values from a query-wide stream UDF instead of raw records.
+
+Node-targeted background query execution uses the same task semantics as the
+cluster-wide variants, but resolves one node before dispatch. Aggregate
+execution remains cluster-wide only.
 
 ```elixir
 alias Aerospike.{ExecuteTask, Filter, Operation, Query}
@@ -262,6 +269,25 @@ records =
 aggregate_values =
   MyApp.Repo.query_aggregate(query, "leaderboard", "sum_scores", ["score"])
   |> Enum.to_list()
+```
+
+```elixir
+alias Aerospike.{ExecuteTask, Filter, Operation, Query}
+
+node_name = MyApp.Repo.node_names() |> hd()
+
+query =
+  Query.new("test", "users")
+  |> Query.where(Filter.range("score", 100, 1_000))
+
+{:ok, task} =
+  MyApp.Repo.query_execute_node(
+    node_name,
+    query,
+    [Operation.put("tier", "gold")]
+  )
+
+:ok = ExecuteTask.wait(task, timeout: 15_000)
 ```
 
 ### `Aerospike.all/3` and `all!/3`
@@ -480,6 +506,9 @@ Scans use the scan path; query-specific short-query hints apply to `Query` execu
   values from multiple nodes. For aggregate UDFs that naturally produce one
   value per node, callers should expect multiple values and reduce them in
   Elixir when they need a single final answer.
+- **Aggregate execution is cluster-wide only.**
+  There is intentionally no `query_aggregate_node` public API in the current
+  shipped surface.
 - **For plain "how many records are in this set?" checks, use info stats when possible.**
   The raw info command (`sets/<ns>/<set>`) is usually faster because it
   returns pre-aggregated set metadata instead of streaming per-record results.

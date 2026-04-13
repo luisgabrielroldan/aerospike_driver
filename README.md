@@ -215,12 +215,13 @@ values =
   |> Enum.to_list()
 ```
 
-`query_stream/3` yields `%Aerospike.Record{}` structs, `query_execute/4` and
-`query_udf/6` return `%Aerospike.ExecuteTask{}` values for background work, and
-`query_aggregate/6` yields one or more aggregate values from the server. The
-current client does not perform a final client-side Lua reduction across
-multi-node aggregate partials, so callers should reduce those values in Elixir
-when they need one final answer.
+`query_stream/3` yields `%Aerospike.Record{}` structs, `query_execute/4`,
+`query_execute_node/5`, `query_udf/6`, and `query_udf_node/7` return
+`%Aerospike.ExecuteTask{}` values for background work, and `query_aggregate/6`
+yields one or more aggregate values from the server. The current client does
+not perform a final client-side Lua reduction across multi-node aggregate
+partials, so callers should reduce those values in Elixir when they need one
+final answer.
 
 See [Queries and Scanning](guides/queries-and-scanning.md) and
 [User Defined Functions](guides/udfs.md) for complete examples.

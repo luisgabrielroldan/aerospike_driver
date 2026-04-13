@@ -90,6 +90,10 @@ defmodule Aerospike do
                {:query_count_node!, 4},
                {:query_page_node!, 3},
                {:query_page_node!, 4},
+               {:query_execute_node!, 4},
+               {:query_execute_node!, 5},
+               {:query_udf_node!, 6},
+               {:query_udf_node!, 7},
                {:scan_stream_node!, 3},
                {:scan_stream_node!, 4},
                {:scan_all_node!, 3},
@@ -130,7 +134,10 @@ defmodule Aerospike do
   @typedoc "Server-side UDF package metadata returned by `list_udfs/2`."
   @type udf_info :: UDF.t()
 
-  @typedoc "Background query task returned by `query_execute/4` and `query_udf/6`."
+  @typedoc """
+  Background query task returned by `query_execute/4`, `query_execute_node/5`,
+  `query_udf/6`, and `query_udf_node/7`.
+  """
   @type execute_task :: ExecuteTask.t()
 
   @typedoc "One aggregate result emitted by `query_aggregate/6`."
@@ -1081,9 +1088,9 @@ defmodule Aerospike do
   `nodes/1`. Missing or stale node names return a normal `%Aerospike.Error{}`
   rather than silently falling back to cluster-wide execution.
 
-  Phase 4 intentionally limits node-targeted support to record-read query APIs.
-  Background query execution, query UDF mutation, and aggregate-query node
-  targeting remain deferred.
+  Aggregate-query node targeting remains deferred. Background mutation entry
+  points are available separately as `query_execute_node/5` and
+  `query_udf_node/7`.
   """
   @spec query_stream_node(conn(), node_name(), Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
@@ -1235,6 +1242,10 @@ defmodule Aerospike do
   Starts a background query that applies write operations to matching records.
 
   Returns an `%Aerospike.ExecuteTask{}` that can later be polled or awaited.
+
+  Use `query_execute_node/5` to narrow execution to one named node. The shipped
+  aggregate path remains `query_aggregate/6`; there is intentionally no
+  `query_aggregate_node` public API today.
   """
   @spec query_execute(conn(), Query.t(), list(), keyword()) ::
           {:ok, execute_task()} | {:error, Error.t()}
@@ -1269,6 +1280,10 @@ defmodule Aerospike do
   Starts a background query that applies a record UDF to matching records.
 
   Returns an `%Aerospike.ExecuteTask{}` that can later be polled or awaited.
+
+  Use `query_udf_node/7` to narrow execution to one named node. The shipped
+  aggregate path remains `query_aggregate/6`; there is intentionally no
+  `query_aggregate_node` public API today.
   """
   @spec query_udf(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, execute_task()} | {:error, Error.t()}
@@ -1299,6 +1314,85 @@ defmodule Aerospike do
   end
 
   @doc """
+  Starts a background query that applies write operations to matching records on one named node.
+
+  Returns an `%Aerospike.ExecuteTask{}` scoped to the requested node name for
+  later polling or waiting. Missing or stale node names return a normal
+  `%Aerospike.Error{}` instead of broadening back to cluster-wide execution.
+  """
+  @spec query_execute_node(conn(), node_name(), Query.t(), list(), keyword()) ::
+          {:ok, execute_task()} | {:error, Error.t()}
+  def query_execute_node(conn, node_name, %Query{} = query, ops, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(ops) and is_list(opts) do
+    with :ok <- validate_query_ops(ops),
+         {:ok, call_opts} <- Policy.validate_query(opts) do
+      ScanOps.query_execute_node(conn, node_name, query, ops, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_execute_node/5` but returns the task or raises `Aerospike.Error`.
+  """
+  @spec query_execute_node!(conn(), node_name(), Query.t(), list(), keyword()) :: execute_task()
+  def query_execute_node!(conn, node_name, %Query{} = query, ops, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_list(ops) and is_list(opts) do
+    case query_execute_node(conn, node_name, query, ops, opts) do
+      {:ok, task} -> task
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
+  Starts a background query that applies a record UDF to matching records on one named node.
+
+  Returns an `%Aerospike.ExecuteTask{}` scoped to the requested node name for
+  later polling or waiting. Missing or stale node names return a normal
+  `%Aerospike.Error{}` instead of broadening back to cluster-wide execution.
+  """
+  @spec query_udf_node(conn(), node_name(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, execute_task()} | {:error, Error.t()}
+  def query_udf_node(conn, node_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_binary(package) and
+             is_binary(function) and is_list(args) and is_list(opts) do
+    case Policy.validate_query(opts) do
+      {:ok, call_opts} ->
+        ScanOps.query_udf_node(conn, node_name, query, package, function, args, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `query_udf_node/7` but returns the task or raises `Aerospike.Error`.
+  """
+  @spec query_udf_node!(
+          conn(),
+          node_name(),
+          Query.t(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: execute_task()
+  def query_udf_node!(conn, node_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_atom(conn) and is_binary(node_name) and is_binary(package) and
+             is_binary(function) and is_list(args) and is_list(opts) do
+    case query_udf_node(conn, node_name, query, package, function, args, opts) do
+      {:ok, task} -> task
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
   Builds a lazy enumerable of aggregate values from a query-wide stream UDF.
 
   This is distinct from `query_stream/3`: aggregate queries yield transformed
@@ -1311,6 +1405,9 @@ defmodule Aerospike do
   partial aggregate values. In multi-node queries, callers should therefore
   expect one or more server-emitted aggregate values and reduce them in Elixir
   if a single final value is required.
+
+  Aggregate queries are currently cluster-wide only. There is intentionally no
+  `query_aggregate_node` public API today.
   """
   @spec query_aggregate(conn(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
