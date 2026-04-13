@@ -167,22 +167,56 @@ defmodule Aerospike.Integration.QueryExecuteTest do
     assert Enum.sum(results) == 110
   end
 
-  defp await_cluster_ready(name, timeout \\ 5_000) do
+  defp await_cluster_ready(name, timeout \\ 20_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     await_cluster_ready_loop(name, deadline)
   end
 
   defp await_cluster_ready_loop(name, deadline) do
     cond do
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) ->
+      cluster_ready?(name) ->
         :ok
 
       System.monotonic_time(:millisecond) > deadline ->
         flunk("cluster not ready within timeout")
 
       true ->
-        Process.sleep(50)
+        # Nudge the cluster GenServer to retend. On a cold single-node cluster
+        # the first tend can land while the server still reports an empty
+        # partition map; subsequent tends are normally 60s away in these tests,
+        # so we poke the cluster directly to refresh sooner.
+        poke_tend(name)
+        Process.sleep(100)
         await_cluster_ready_loop(name, deadline)
+    end
+  end
+
+  # Checks both the tend-completed flag AND that the full partition map for
+  # namespace "test" has been received. The ready_key flag alone can flip
+  # before the first partition refresh lands; even a non-empty partitions
+  # table isn't enough because namespaces populate independently and a put
+  # routes per-partition. On a cold single-node cluster the server may return
+  # replicas for some namespaces before others, so we require a full 4096
+  # replica-0 set for the exact namespace the test writes to.
+  @partitions_per_namespace 4096
+  defp cluster_ready?(name) do
+    match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) and
+      namespace_partitions_complete?(name, @namespace)
+  end
+
+  defp namespace_partitions_complete?(name, namespace) do
+    tab = Tables.partitions(name)
+
+    :ets.whereis(tab) != :undefined and
+      :ets.select_count(tab, [
+        {{{namespace, :_, 0}, :_}, [], [true]}
+      ]) == @partitions_per_namespace
+  end
+
+  defp poke_tend(name) do
+    case Process.whereis(Aerospike.Cluster.cluster_name(name)) do
+      nil -> :ok
+      pid -> send(pid, :tend)
     end
   end
 end

@@ -289,22 +289,50 @@ defmodule Aerospike.Integration.IndexTest do
     end
   end
 
-  defp await_cluster_ready(name, timeout \\ 5_000) do
+  @partitions_per_namespace 4096
+
+  defp await_cluster_ready(name, timeout \\ 20_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     await_cluster_ready_loop(name, deadline)
   end
 
   defp await_cluster_ready_loop(name, deadline) do
     cond do
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) ->
+      cluster_ready?(name) ->
         :ok
 
       System.monotonic_time(:millisecond) > deadline ->
         flunk("cluster not ready within timeout")
 
       true ->
-        Process.sleep(50)
+        poke_tend(name)
+        Process.sleep(100)
         await_cluster_ready_loop(name, deadline)
+    end
+  end
+
+  # Ready means: tend flag set AND the full 4096-partition replica-0 map for
+  # namespace "test" has been received. The flag alone can flip after a first
+  # tend that saw an empty/partial bitmap on a cold server; the full-map check
+  # catches that and the poke loop nudges the cluster GenServer to retend so
+  # we don't have to wait for the 60s tend interval to expire.
+  defp cluster_ready?(name) do
+    match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) and
+      namespace_partitions_complete?(name, "test")
+  end
+
+  defp namespace_partitions_complete?(name, namespace) do
+    tab = Tables.partitions(name)
+
+    :ets.whereis(tab) != :undefined and
+      :ets.select_count(tab, [{{{namespace, :_, 0}, :_}, [], [true]}]) ==
+        @partitions_per_namespace
+  end
+
+  defp poke_tend(name) do
+    case Process.whereis(Aerospike.Cluster.cluster_name(name)) do
+      nil -> :ok
+      pid -> send(pid, :tend)
     end
   end
 end

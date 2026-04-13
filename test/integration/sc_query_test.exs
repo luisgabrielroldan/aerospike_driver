@@ -209,7 +209,9 @@ defmodule Aerospike.Integration.SCQueryTest do
     end
   end
 
-  defp await_cluster_ready(name, timeout \\ 10_000) do
+  @partitions_per_namespace 4096
+
+  defp await_cluster_ready(name, timeout \\ 20_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     await_cluster_ready_loop(name, deadline)
   end
@@ -223,13 +225,33 @@ defmodule Aerospike.Integration.SCQueryTest do
         flunk("cluster not ready within timeout")
 
       true ->
-        Process.sleep(50)
+        poke_tend(name)
+        Process.sleep(100)
         await_cluster_ready_loop(name, deadline)
     end
   end
 
+  # Ready means: tend flag set AND the full 4096-partition replica-0 map for
+  # namespace @namespace has been received. See query_execute_test.exs for
+  # the rationale behind the compound check and the poke_tend nudge.
   defp cluster_ready?(name) do
-    match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
+    match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) and
+      namespace_partitions_complete?(name, @namespace)
+  end
+
+  defp namespace_partitions_complete?(name, namespace) do
+    tab = Tables.partitions(name)
+
+    :ets.whereis(tab) != :undefined and
+      :ets.select_count(tab, [{{{namespace, :_, 0}, :_}, [], [true]}]) ==
+        @partitions_per_namespace
+  end
+
+  defp poke_tend(name) do
+    case Process.whereis(Aerospike.Cluster.cluster_name(name)) do
+      nil -> :ok
+      pid -> send(pid, :tend)
+    end
   end
 
   defp sindex_create_numeric!(host, port, ns, set, index_name, bin) do
