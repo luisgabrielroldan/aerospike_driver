@@ -14,13 +14,14 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 - **Cluster-aware** — discovers nodes, maintains partition maps, routes operations to the correct node
 - **Repo wrapper** — recommended application-facing API via `use Aerospike.Repo`
 - **Single-record CRUD** — `put`, `get`, `delete`, `exists`, `touch` with bang variants
+- **Raw payload writes (advanced)** — `put_payload` escape hatch for caller-built single-record write/delete wire messages (replay, proxy, tooling); does not register keys with the transaction monitor
 - **Operate** — atomic multi-operation per record (`add`, `append`, `prepend`, custom op lists)
 - **Batch operations** — `batch_get`, `batch_get_header`, `batch_get_operate`, `batch_exists`, `batch_delete`, `batch_udf`, and `batch_operate` for multi-key round-trips
-- **Scan & query** — cluster-wide `stream!`, `all`, `count`, `page`, plus node-targeted `*_node` scan/query reads and explicit `query_stream`, `query_execute`, `query_udf`, and `query_aggregate` flows
+- **Scan & query** — cluster-wide `stream!`, `all`, `count`, `page`, explicit `query_stream`, `query_execute`, `query_udf`, and `query_aggregate` flows, plus node-targeted record reads (`scan_*_node`, `query_*_node`) and node-targeted background execution (`query_execute_node`, `query_udf_node`)
 - **CDT operations** — List, Map, Bit, HLL, and expression ops with nested context (`Ctx`)
 - **Server-side expressions** — filter results with `Aerospike.Exp` expressions
 - **Geospatial support** — typed geo helpers plus geo query filters
-- **Secondary indexes** — `create_index` / `drop_index` with async `IndexTask` polling
+- **Secondary indexes** — `create_index` / `drop_index` with async `IndexTask` polling, including scalar, collection-element (list/map key/value), and expression-backed index variants
 - **UDF management** — `register_udf`, `remove_udf`, `apply_udf`, and `list_udfs` for Lua user-defined functions
 - **Transactions** — multi-record transactions (`transaction/2`, `commit/2`, `abort/2`) on Enterprise Edition
 - **Write policies** — TTL, generation checks (CAS), create/update/replace semantics, durable delete
@@ -322,7 +323,7 @@ stats = MyApp.Repo.stats()
 :ok = MyApp.Repo.disable_metrics()
 ```
 
-Warmup exercises the current discovered node pools to reduce first-request latency:
+Warmup verifies the current discovered node pools with real checkout/checkin cycles. Node pools in this client are eager (workers are opened and authenticated at supervisor startup), so warmup is a verification pass — not a lazy-pool fill as in the Go client. `count: 0` and values above `pool_size` clamp to the configured `pool_size`:
 
 ```elixir
 {:ok, result} = MyApp.Repo.warm_up()
