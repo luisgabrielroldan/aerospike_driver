@@ -310,6 +310,44 @@ defmodule Aerospike.ClusterTest do
       end)
     end
 
+    test "cold start with empty replicas bitmap keeps cluster not ready", %{name: name} do
+      # Regression for the empty-partition-map premature-ready bug. A cold
+      # single-node cluster where the seed replies to `replicas` with an
+      # empty bitmap parses into zero partition rows in ETS, yet today's
+      # `build_partition_map/1` returns `{:ok, state}` unconditionally, so
+      # `do_initial_tend/1` flips `ready_key` to `true`. Routing then sends
+      # user-data writes into a partitions ETS table that owns nothing, and
+      # the first `put!/4` raises `invalid_cluster_partition_map`.
+      #
+      # Oracle: drive tend until the seed is registered in `Tables.nodes/1`
+      # (proof that `do_initial_tend/1` synchronously ran through
+      # `insert_node_registry` and therefore through `build_partition_map`
+      # and the `mark_cluster_ready` call site within the same `with`
+      # chain). At that point the partitions ETS table must still be empty
+      # and `ready_key` must remain unset. Under the current bug, `ready_key`
+      # is already `true` by the time the seed row appears, so this test
+      # fails. After the Task 2 fix, `build_partition_map/1` returns
+      # `{:error, :empty_partition_map}`, the `with` chain falls through
+      # before `mark_cluster_ready` runs, and the assertion holds.
+      seed = start_info_server("SEED_A", partitions: [])
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+
+      Helpers.poll_until(
+        fn -> match?([{"SEED_A", _}], :ets.lookup(Tables.nodes(name), "SEED_A")) end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      assert :ets.info(Tables.partitions(name), :size) == 0
+
+      refute match?(
+               [{_, true}],
+               :ets.lookup(Tables.meta(name), Tables.ready_key())
+             )
+    end
+
     test "unreachable seeds keep cluster not ready", %{name: name} do
       free_port = reserve_free_port()
 
