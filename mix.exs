@@ -88,18 +88,22 @@ defmodule Aerospike.MixProject do
     ]
   end
 
+  @all_test_tags ~w(integration property cluster enterprise tls_stack security)
+  @all_tags_flags Enum.map_join(@all_test_tags, " ", &"--include #{&1}")
+
+  defp with_all_tags(task), do: "#{task} #{@all_tags_flags}"
+
   defp aliases do
     [
       bench: &bench/1,
       "bench.clean": &bench_clean/1,
-      coveralls: "coveralls --include integration",
-      "coveralls.detail": "coveralls.detail --include integration",
-      "coveralls.html": "coveralls.html --include integration",
-      "coveralls.json": "coveralls.json --include integration",
-      "coveralls.lcov": "coveralls.lcov --include integration",
-      "test.coverage": "coveralls.html --include integration",
-      "test.all":
-        "test --include integration --include property --include cluster --include enterprise --include tls_stack --include security",
+      coveralls: with_all_tags("coveralls"),
+      "coveralls.detail": with_all_tags("coveralls.detail"),
+      "coveralls.html": with_all_tags("coveralls.html"),
+      "coveralls.json": with_all_tags("coveralls.json"),
+      "coveralls.lcov": with_all_tags("coveralls.lcov"),
+      "test.coverage": with_all_tags("coveralls.html"),
+      "test.all": with_all_tags("test"),
       "test.enterprise": "test --include enterprise"
     ]
   end
