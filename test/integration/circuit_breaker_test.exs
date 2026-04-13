@@ -82,14 +82,8 @@ defmodule Aerospike.Integration.CircuitBreakerTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike.Supervisor, Keyword.merge(base_opts, opts)})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
     name
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    poll_until(timeout, "cluster not ready", fn ->
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
-    end)
   end
 
   defp first_node_name(name) do

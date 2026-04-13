@@ -12,7 +12,6 @@ defmodule Aerospike.Integration.EnterpriseTest do
   """
   use ExUnit.Case, async: false
 
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
   @moduletag :enterprise
@@ -40,7 +39,7 @@ defmodule Aerospike.Integration.EnterpriseTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     {:ok, conn: name, host: host, port: port}
   end
@@ -71,25 +70,6 @@ defmodule Aerospike.Integration.EnterpriseTest do
 
       _ ->
         false
-    end
-  end
-
-  defp await_cluster_ready(name, timeout \\ 10_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_loop(name, deadline, timeout)
-  end
-
-  defp await_loop(name, deadline, timeout) do
-    cond do
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("enterprise cluster not ready within #{timeout}ms")
-
-      true ->
-        Process.sleep(100)
-        await_loop(name, deadline, timeout)
     end
   end
 end

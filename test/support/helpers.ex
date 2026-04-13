@@ -1,6 +1,7 @@
 defmodule Aerospike.Test.Helpers do
   @moduledoc false
 
+  alias Aerospike.Cluster
   alias Aerospike.Connection
   alias Aerospike.Error
   alias Aerospike.Key
@@ -8,6 +9,9 @@ defmodule Aerospike.Test.Helpers do
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
+  alias Aerospike.Tables
+
+  @partitions_per_namespace 4096
 
   @doc """
   Builds a unique string user key in the given namespace and set.
@@ -60,6 +64,123 @@ defmodule Aerospike.Test.Helpers do
   @spec cleanup_udf(String.t(), keyword()) :: :ok
   def cleanup_udf(udf_name, opts \\ []) when is_binary(udf_name) do
     send_info(["udf-remove:filename=#{udf_name};"], opts)
+  end
+
+  @doc """
+  Polls `fun` until it returns a truthy value or the deadline elapses.
+
+  Returns the truthy value on success. Raises `ExUnit.AssertionError` on
+  timeout, naming the last observed value so flakes surface as clear
+  assertion failures instead of silent `false` returns.
+
+  ## Options
+
+    * `:timeout` — total budget in milliseconds (default `10_000`). The
+      deadline is captured once at call time, so clock jitter cannot
+      shorten the convergence window.
+    * `:interval` — sleep between failed checks in milliseconds (default
+      `50`).
+    * `:between` — optional zero-arity callback invoked after each failed
+      check (before the interval sleep). Useful for driving an external
+      loop — e.g. `between: fn -> send(pid, :tend) end` — between polls.
+
+  """
+  @spec poll_until((-> any()), keyword()) :: any()
+  def poll_until(fun, opts \\ []) when is_function(fun, 0) do
+    timeout = Keyword.get(opts, :timeout, 10_000)
+    interval = Keyword.get(opts, :interval, 50)
+    between = Keyword.get(opts, :between)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    poll_until_loop(fun, deadline, timeout, interval, between)
+  end
+
+  defp poll_until_loop(fun, deadline, timeout, interval, between) do
+    result = fun.()
+
+    cond do
+      result ->
+        result
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        ExUnit.Assertions.flunk(
+          "poll_until/2 timed out after #{timeout}ms; last value: #{inspect(result)}"
+        )
+
+      true ->
+        if is_function(between, 0), do: between.()
+        Process.sleep(interval)
+        poll_until_loop(fun, deadline, timeout, interval, between)
+    end
+  end
+
+  @doc """
+  Waits until the named cluster is fully ready to serve writes for `namespace`.
+
+  "Ready" requires both:
+
+    * the `ready_key` flag in the cluster meta ETS table is `true`, and
+    * the partitions ETS table holds the full replica-0 partition map for
+      `namespace` (4096 rows by default).
+
+  The `ready_key` flag alone can flip before the first partition refresh
+  lands; namespaces also populate independently, so a non-empty partitions
+  table isn't enough either. Between polls the cluster GenServer is poked
+  with `:tend` so a cold single-node cluster doesn't have to wait for the
+  next 60s tend cycle.
+
+  Returns `:ok` on success and flunks with a clear message on timeout.
+
+  ## Options
+
+    * `:namespace` — namespace to wait on (default `"test"`).
+    * `:timeout` — total budget in milliseconds (default `20_000`).
+    * `:interval` — sleep between failed checks in milliseconds
+      (default `100`).
+    * `:partitions_per_namespace` — expected replica-0 row count
+      (default `4096`).
+
+  """
+  @spec await_cluster_ready(atom(), keyword()) :: :ok
+  def await_cluster_ready(name, opts \\ []) when is_atom(name) do
+    namespace = Keyword.get(opts, :namespace, "test")
+    timeout = Keyword.get(opts, :timeout, 20_000)
+    interval = Keyword.get(opts, :interval, 100)
+
+    partitions_per_namespace =
+      Keyword.get(opts, :partitions_per_namespace, @partitions_per_namespace)
+
+    _ =
+      poll_until(fn -> cluster_ready?(name, namespace, partitions_per_namespace) end,
+        timeout: timeout,
+        interval: interval,
+        between: fn -> poke_tend(name) end
+      )
+
+    :ok
+  end
+
+  defp cluster_ready?(name, namespace, partitions_per_namespace) do
+    meta_tab = Tables.meta(name)
+
+    :ets.whereis(meta_tab) != :undefined and
+      match?([{_, true}], :ets.lookup(meta_tab, Tables.ready_key())) and
+      namespace_partitions_complete?(name, namespace, partitions_per_namespace)
+  end
+
+  defp namespace_partitions_complete?(name, namespace, partitions_per_namespace) do
+    tab = Tables.partitions(name)
+
+    :ets.whereis(tab) != :undefined and
+      :ets.select_count(tab, [
+        {{{namespace, :_, 0}, :_}, [], [true]}
+      ]) == partitions_per_namespace
+  end
+
+  defp poke_tend(name) do
+    case Process.whereis(Cluster.cluster_name(name)) do
+      nil -> :ok
+      pid -> send(pid, :tend)
+    end
   end
 
   defp send_info(commands, opts) do

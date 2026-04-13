@@ -6,7 +6,6 @@ defmodule Aerospike.Integration.PutPayloadTest do
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.Message
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
   alias Aerospike.Txn
   alias Aerospike.TxnOps
@@ -31,7 +30,7 @@ defmodule Aerospike.Integration.PutPayloadTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     {:ok, conn: name, host: host, port: port}
   end
@@ -176,24 +175,5 @@ defmodule Aerospike.Integration.PutPayloadTest do
     }
 
     IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
-  end
-
-  defp await_cluster_ready(name, attempts \\ 20)
-
-  defp await_cluster_ready(_name, 0), do: flunk("cluster did not become ready in time")
-
-  defp await_cluster_ready(name, n) do
-    meta = Tables.meta(name)
-
-    ready =
-      :ets.whereis(meta) != :undefined and
-        :ets.lookup(meta, Tables.ready_key()) == [{Tables.ready_key(), true}]
-
-    if ready do
-      :ok
-    else
-      Process.sleep(100)
-      await_cluster_ready(name, n - 1)
-    end
   end
 end

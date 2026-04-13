@@ -45,7 +45,7 @@ defmodule Aerospike.Integration.MultiNodeTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     {:ok, conn: name, host: host, port: port}
   end
@@ -327,7 +327,7 @@ defmodule Aerospike.Integration.MultiNodeTest do
       ]
 
       {:ok, _sup} = start_supervised({Aerospike, opts}, id: :failover_test)
-      await_cluster_ready(name)
+      Helpers.await_cluster_ready(name)
 
       nodes = :ets.tab2list(Tables.nodes(name))
       assert nodes != [], "should discover at least 1 node via fallback seed"
@@ -511,28 +511,6 @@ defmodule Aerospike.Integration.MultiNodeTest do
 
       _ ->
         false
-    end
-  end
-
-  defp await_cluster_ready(name, timeout \\ 10_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-
-    poll_until(deadline, timeout, "cluster #{name} not ready", fn ->
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
-    end)
-  end
-
-  defp poll_until(deadline, timeout, message, check_fn) do
-    cond do
-      check_fn.() ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("#{message} within #{timeout}ms")
-
-      true ->
-        Process.sleep(50)
-        poll_until(deadline, timeout, message, check_fn)
     end
   end
 end

@@ -129,8 +129,13 @@ defmodule Aerospike.Cluster do
       recv_timeout: Keyword.get(opts, :recv_timeout, @default_connect_timeout),
       tls: Keyword.get(opts, :tls, false),
       tls_opts: Keyword.get(opts, :tls_opts, []),
-      # Server-reported generation counters; nil until first successful tend.
-      partition_generation: nil,
+      # Per-node `partition-generation` values from each node's last successful
+      # replicas fetch. Each node's generation advances independently, so the
+      # tend loop must compare each node's server-reported value against its
+      # own stored value, not a cluster-wide scalar.
+      partition_generations: %{},
+      # Server-reported `peers-clear-std` generation counter; cluster-wide,
+      # distinct from `partition_generations`. Nil until first successful tend.
       peers_generation: nil,
       # Long-lived info-only connections kept open between tend cycles, keyed by node name.
       tend_conns: %{},
@@ -234,7 +239,7 @@ defmodule Aerospike.Cluster do
     with {:ok, conn, node_name, host, port} <- connect_first_seed(state),
          {:ok, pool_pid} <- ensure_node_pool(state, node_name, host, port),
          :ok <- insert_node_registry(state, node_name, host, port, pool_pid),
-         {:ok, conn, peers_gen} <- discover_peers(state, conn, node_name),
+         {:ok, state, conn, peers_gen} <- discover_peers(state, conn, node_name),
          {:ok, state} <- build_partition_map(state) do
       state = %{
         state
@@ -248,25 +253,46 @@ defmodule Aerospike.Cluster do
   end
 
   # Asks the seed node for its peer list via the `peers-clear-std` info command.
-  # Non-fatal: returns `{:ok, conn, nil}` if peer discovery is unavailable.
+  # Non-fatal: returns `{:ok, state, conn, nil}` if peer discovery is unavailable.
   defp discover_peers(state, conn, seed_node_name) do
     with {:ok, conn, info} <- Connection.request_info(conn, ["peers-clear-std"]),
          raw when is_binary(raw) <- Map.get(info, "peers-clear-std"),
          {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw) do
-      add_peer_nodes(state, peers, seed_node_name)
-      {:ok, conn, gen}
+      new_conns = add_peer_nodes(state, peers, seed_node_name)
+      {:ok, merge_tend_conns(state, new_conns), conn, gen}
     else
-      _ -> {:ok, conn, nil}
+      _ -> {:ok, state, conn, nil}
     end
   end
 
   # Registers each peer that isn't already known and isn't the seed itself.
+  # Returns a `%{node_name => tend_conn}` map of peers that handshook successfully;
+  # peers whose handshake fails are silently dropped so one bad peer cannot poison
+  # the rest of the discovery pass.
   defp add_peer_nodes(state, peers, seed_node_name) do
-    for %{node_name: node_name, host: host, port: port} <- peers,
-        node_name != seed_node_name,
-        not node_registered?(state, node_name) do
-      add_peer_node(state, node_name, host, port)
-    end
+    peers
+    |> Enum.filter(&new_peer?(state, &1, seed_node_name))
+    |> Enum.reduce(%{}, fn %{node_name: node_name, host: host, port: port}, acc ->
+      case add_peer_node(state, node_name, host, port) do
+        {:ok, conn} -> Map.put(acc, node_name, conn)
+        :error -> acc
+      end
+    end)
+  end
+
+  defp new_peer?(_state, %{node_name: node_name}, seed_node_name)
+       when node_name == seed_node_name,
+       do: false
+
+  defp new_peer?(state, %{node_name: node_name}, _seed_node_name),
+    do: not node_registered?(state, node_name)
+
+  # Merges newly-opened peer tend conns into `state.tend_conns`. New entries
+  # win on collision because `add_peer_nodes/3` filters via `node_registered?/2`,
+  # so the only way a key collision can happen is a stale entry the new conn
+  # should logically supersede.
+  defp merge_tend_conns(state, new_conns) when is_map(new_conns) do
+    %{state | tend_conns: Map.merge(state.tend_conns, new_conns)}
   end
 
   # Connects to a peer, verifies its node name matches what the seed reported,
@@ -308,26 +334,47 @@ defmodule Aerospike.Cluster do
   end
 
   # Rebuilds the full partition map by querying `replicas` from every known node.
-  # Clears existing partitions first so stale entries don't linger.
+  # Clears existing partitions first so stale entries don't linger. The
+  # per-node `partition_generations` map is also cleared so every node is
+  # reseeded from its own fresh response.
+  #
+  # Returns `{:error, :empty_partition_map}` when the full fanout produced
+  # zero partition rows — typically a cold-boot single-node cluster whose
+  # `replicas` reply is an empty bitmap. Partial success is still success:
+  # if any node contributed partition rows, the function returns `{:ok, state}`
+  # with that partial view and leaves the failed nodes' generation entries
+  # absent so the next tend tick re-fetches them.
   defp build_partition_map(state) do
     nodes = :ets.tab2list(Tables.nodes(state.name))
     :ets.delete_all_objects(Tables.partitions(state.name))
 
-    {conns, gen} =
-      Enum.reduce(nodes, {state.tend_conns, state.partition_generation}, fn
-        {node_name, %{host: host, port: port}}, {conns, gen} ->
+    {conns, generations} =
+      Enum.reduce(nodes, {state.tend_conns, %{}}, fn
+        {node_name, %{host: host, port: port}}, {conns, generations} ->
           case fetch_node_replicas(state, conns, node_name, host, port) do
             {:ok, conn, node_gen} ->
-              {Map.put(conns, node_name, conn), node_gen || gen}
+              {Map.put(conns, node_name, conn), put_node_gen(generations, node_name, node_gen)}
 
             :error ->
-              {conns, gen}
+              {conns, generations}
           end
       end)
 
     RuntimeMetrics.record_partition_map_update(state.name)
-    {:ok, %{state | tend_conns: conns, partition_generation: gen}}
+
+    if :ets.info(Tables.partitions(state.name), :size) == 0 do
+      {:error, :empty_partition_map}
+    else
+      {:ok, %{state | tend_conns: conns, partition_generations: generations}}
+    end
   end
+
+  # Only seed the per-node map when we actually parsed a fresh generation.
+  # Leaving the entry absent on nil keeps the next tend's comparison honest:
+  # "missing" means "we have never confirmed this node's gen" and forces a
+  # refetch on the next tick.
+  defp put_node_gen(generations, _node_name, nil), do: generations
+  defp put_node_gen(generations, node_name, gen), do: Map.put(generations, node_name, gen)
 
   # Fetches `partition-generation` and `replicas` info from a single node,
   # then inserts that node's partition ownership into ETS.
@@ -392,31 +439,49 @@ defmodule Aerospike.Cluster do
     |> tend_refresh_partitions()
   end
 
-  # Asks one tend connection for the current peer list; skips if generation hasn't changed.
+  # Iterates tend connections until one yields a usable `peers-clear-std`
+  # reply. Halts on `:advanced` (state updated from that conn) or `:same`
+  # (stable-cluster short-circuit — `peers_generation` is cluster-wide, so
+  # any healthy conn reporting the stored gen is authoritative). Continues
+  # past `:error` (dead conn, info failure, unparseable payload) so a single
+  # broken node does not mask topology updates visible to others.
   defp tend_refresh_peers(state) do
-    case Map.to_list(state.tend_conns) do
-      [] ->
-        state
+    state.tend_conns
+    |> Map.to_list()
+    |> Enum.reduce_while(state, fn {node_name, conn}, _acc ->
+      case try_refresh_peers_on(state, node_name, conn) do
+        {:advanced, new_state} -> {:halt, new_state}
+        :same -> {:halt, state}
+        :error -> {:cont, state}
+      end
+    end)
+  end
 
-      [{node_name, conn} | _] ->
-        do_tend_refresh_peers(state, node_name, conn)
+  # Per-conn helper. Always reasons about the *original* state so partial
+  # updates from an errored iteration cannot leak forward. Only the winning
+  # conn's entry is written back to `state.tend_conns`.
+  defp try_refresh_peers_on(state, node_name, conn) do
+    with {:ok, conn, info} <- Connection.request_info(conn, ["peers-clear-std"]),
+         raw when is_binary(raw) <- Map.get(info, "peers-clear-std"),
+         {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw) do
+      if gen == state.peers_generation do
+        :same
+      else
+        {:advanced, apply_refreshed_peers(state, node_name, conn, gen, peers)}
+      end
+    else
+      _ -> :error
     end
   end
 
-  defp do_tend_refresh_peers(state, node_name, conn) do
-    with {:ok, conn, info} <- Connection.request_info(conn, ["peers-clear-std"]),
-         raw when is_binary(raw) <- Map.get(info, "peers-clear-std"),
-         {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw),
-         true <- gen != state.peers_generation do
-      add_peer_nodes(state, peers, node_name)
+  defp apply_refreshed_peers(state, node_name, conn, gen, peers) do
+    new_conns = add_peer_nodes(state, peers, node_name)
 
-      state
-      |> prune_departed_peers(peers, node_name)
-      |> Map.put(:peers_generation, gen)
-      |> Map.update!(:tend_conns, &Map.put(&1, node_name, conn))
-    else
-      _ -> state
-    end
+    state
+    |> merge_tend_conns(new_conns)
+    |> prune_departed_peers(peers, node_name)
+    |> Map.put(:peers_generation, gen)
+    |> Map.update!(:tend_conns, &Map.put(&1, node_name, conn))
   end
 
   defp prune_departed_peers(state, peers, reporting_node_name) do
@@ -451,6 +516,11 @@ defmodule Aerospike.Cluster do
     :ets.delete(Tables.nodes(state.name), node_name)
     _ = :ets.select_delete(Tables.partitions(state.name), [{{:"$1", node_name}, [], [true]}])
 
+    # Drop the departed node's per-node generation so a node re-joining under
+    # the same name with a stale or lower value does not skip its first
+    # refetch by matching a leftover entry.
+    state = %{state | partition_generations: Map.delete(state.partition_generations, node_name)}
+
     case Map.pop(state.tend_conns, node_name) do
       {nil, tend_conns} ->
         %{state | tend_conns: tend_conns}
@@ -462,7 +532,10 @@ defmodule Aerospike.Cluster do
   end
 
   # Checks each node's partition-generation; only re-fetches replicas when the
-  # generation has advanced (meaning the cluster rebalanced).
+  # generation has advanced (meaning the cluster rebalanced). Each node is
+  # compared against its *own* last stored generation — never a cluster-wide
+  # scalar — so one node advancing does not short-circuit another node's
+  # refetch on the same reduce pass.
   defp tend_refresh_partitions(state) do
     Enum.reduce(state.tend_conns, state, fn {node_name, conn}, st ->
       case refresh_node(st, node_name, conn) do
@@ -470,7 +543,7 @@ defmodule Aerospike.Cluster do
           %{
             st
             | tend_conns: Map.put(st.tend_conns, node_name, conn2),
-              partition_generation: new_gen
+              partition_generations: put_node_gen(st.partition_generations, node_name, new_gen)
           }
 
         {:error, _} ->
@@ -490,23 +563,28 @@ defmodule Aerospike.Cluster do
     end
   end
 
-  defp check_partition_generation(state, conn, _node_name, nil) do
-    {:ok, conn, state.partition_generation}
+  defp check_partition_generation(state, conn, node_name, nil) do
+    {:ok, conn, Map.get(state.partition_generations, node_name)}
   end
 
   defp check_partition_generation(state, conn, node_name, gen_string) do
+    stored = Map.get(state.partition_generations, node_name)
+
     case PartitionMap.parse_partition_generation(gen_string) do
-      {:ok, gen} when gen != state.partition_generation ->
+      {:ok, gen} when gen != stored ->
         refetch_partition_map_for_node(state, conn, node_name)
 
       _ ->
-        {:ok, conn, state.partition_generation}
+        {:ok, conn, stored}
     end
   end
 
   # Re-queries `replicas` for one node and merges the result into the partitions table.
   # Unlike `build_partition_map/1`, this does not clear stale entries — it only overwrites
-  # partitions owned by this specific node.
+  # partitions owned by this specific node. Returns the node's freshly parsed
+  # generation so the caller can update `partition_generations` for that node.
+  # Falls back to the prior per-node value on parse failure, not to any
+  # cluster-wide scalar.
   defp refetch_partition_map_for_node(state, conn, node_name) do
     case Connection.request_info(conn, ["partition-generation", "replicas"]) do
       {:ok, conn, info} ->
@@ -516,7 +594,7 @@ defmodule Aerospike.Cluster do
         gen =
           case gen_s && PartitionMap.parse_partition_generation(gen_s) do
             {:ok, g} -> g
-            _ -> state.partition_generation
+            _ -> Map.get(state.partition_generations, node_name)
           end
 
         tuples = PartitionMap.parse_replicas_value(replicas, node_name)

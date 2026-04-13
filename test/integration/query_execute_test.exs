@@ -1,12 +1,11 @@
 defmodule Aerospike.Integration.QueryExecuteTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import Aerospike.Op
 
   alias Aerospike.ExecuteTask
   alias Aerospike.Filter
   alias Aerospike.Query
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
   @moduletag :integration
@@ -34,7 +33,7 @@ defmodule Aerospike.Integration.QueryExecuteTest do
          defaults: [query: [timeout: 60_000], write: [timeout: 5_000], read: [timeout: 5_000]]}
       )
 
-    await_cluster_ready(conn)
+    Helpers.await_cluster_ready(conn)
 
     udf_source = """
     function put_value(rec, bin_name, value)
@@ -165,24 +164,5 @@ defmodule Aerospike.Integration.QueryExecuteTest do
     assert results != []
     assert Enum.all?(results, &is_integer/1)
     assert Enum.sum(results) == 110
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_cluster_ready_loop(name, deadline)
-  end
-
-  defp await_cluster_ready_loop(name, deadline) do
-    cond do
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("cluster not ready within timeout")
-
-      true ->
-        Process.sleep(50)
-        await_cluster_ready_loop(name, deadline)
-    end
   end
 end

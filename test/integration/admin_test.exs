@@ -1,7 +1,7 @@
 defmodule Aerospike.Integration.AdminTest do
   use ExUnit.Case, async: false
 
-  alias Aerospike.Tables
+  alias Aerospike.Test.Helpers
 
   @moduletag :integration
 
@@ -20,7 +20,7 @@ defmodule Aerospike.Integration.AdminTest do
          tend_interval: 60_000}
       )
 
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
     {:ok, conn: name}
   end
 
@@ -100,6 +100,8 @@ defmodule Aerospike.Integration.AdminTest do
       assert {:ok, _} = Aerospike.get(conn, trunc_key)
       assert {:ok, _} = Aerospike.get(conn, keep_key)
 
+      Process.sleep(5)
+
       assert :ok = Aerospike.truncate(conn, "test", set)
 
       assert_eventually(
@@ -154,24 +156,5 @@ defmodule Aerospike.Integration.AdminTest do
 
   defp truncate_wait_timeout_ms do
     if System.get_env("CI") == "true", do: 30_000, else: 10_000
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_cluster_ready_loop(name, deadline)
-  end
-
-  defp await_cluster_ready_loop(name, deadline) do
-    cond do
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("cluster not ready within timeout")
-
-      true ->
-        Process.sleep(50)
-        await_cluster_ready_loop(name, deadline)
-    end
   end
 end

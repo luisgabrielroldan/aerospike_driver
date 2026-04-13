@@ -8,6 +8,7 @@ defmodule Aerospike.ClusterTest do
   alias Aerospike.NodeSupervisor
   alias Aerospike.Supervisor
   alias Aerospike.Tables
+  alias Aerospike.Test.Helpers
   alias Aerospike.Test.MockTcpServer
 
   setup do
@@ -61,6 +62,145 @@ defmodule Aerospike.ClusterTest do
       assert_await(fn -> match?([{"PEER_B", _}], :ets.lookup(Tables.nodes(name), "PEER_B")) end)
     end
 
+    test "tend cycle refreshes partitions for peers discovered after bootstrap",
+         %{name: name} do
+      # Regression for the post-bootstrap peer-tend gap: `add_peer_nodes/3`
+      # uses a `for` comprehension that discards the `{:ok, conn}` returned
+      # by `add_peer_node/4`, so peers discovered via the periodic tend loop
+      # land in `Tables.nodes/1` but never enter `state.tend_conns`. Because
+      # `tend_refresh_partitions/1` iterates `state.tend_conns`, the new
+      # peer's partitions are never fetched. Bootstrap survives this bug
+      # only because `build_partition_map/1` fans out across `Tables.nodes/1`
+      # — that fanout does not exist on the periodic path.
+      #
+      # This test boots a seed with an empty peer list, then mutates its
+      # `peers-clear-std` reply to advertise a second peer. The new peer
+      # owns a disjoint partition (#7). The convergence predicate spot-
+      # checks that specific row, so a stale-but-complete map cannot pass
+      # for the wrong reason.
+      late_peer = start_info_server("PEER_LATE", partition_generation: 1, partitions: [7])
+      on_exit(fn -> stop_info_server(late_peer) end)
+
+      seed = start_info_server("SEED_A", peers: peers_payload(1, []), partitions: [0])
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Sanity: only the seed's partitions are present pre-discovery.
+      assert [{{"test", 0, 0}, "SEED_A"}] = :ets.lookup(Tables.partitions(name), {"test", 0, 0})
+      assert [] = :ets.lookup(Tables.partitions(name), {"test", 7, 0})
+
+      update_info_server(
+        seed,
+        peers: peers_payload(2, [{"PEER_LATE", "127.0.0.1", late_peer.port}])
+      )
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 7, 0}) ==
+            [{{"test", 7, 0}, "PEER_LATE"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+    end
+
+    test "tend cycle discovers peers via non-first tend conn when first conn is broken",
+         %{name: name} do
+      # Regression for `tend_refresh_peers/1` consulting only the term-order-
+      # first tend conn and treating its reply as authoritative. If that conn's
+      # `peers-clear-std` reply is broken (parse failure, dead socket, or any
+      # non-`{:ok, _}` result), the whole tend pass silently no-ops — even if
+      # other tend conns would return a usable, advanced peers list. Topology
+      # updates from the rest of the cluster are masked until the broken conn
+      # is pruned or loses its term-order-first position.
+      #
+      # Repro: bootstrap with seed `A_STALE` (peers list contains `B_ADVANCED`)
+      # and peer `B_ADVANCED`. Names are chosen so `"A_STALE" < "B_ADVANCED"`
+      # in Erlang term order, making `A_STALE` the `Map.to_list/1`-first tend
+      # conn. After bootstrap, start `C_TARGET` (owning disjoint partition 7),
+      # then (a) break `A_STALE`'s `peers-clear-std` reply so it fails to
+      # parse, and (b) advance `B_ADVANCED`'s `peers-clear-std` to a higher
+      # generation that lists `A_STALE` and `C_TARGET`.
+      #
+      # Current code: `tend_refresh_peers/1` picks `A_STALE` via `hd`, its
+      # reply errors, the `with` chain falls through to `state`, and the
+      # iteration stops. `C_TARGET` is never discovered. The convergence
+      # predicate asserts the specific partition row so a stale-but-complete
+      # map cannot pass for the wrong reason.
+      #
+      # After Task 2: iteration skips `A_STALE`'s `:error`, consults
+      # `B_ADVANCED`, merges `C_TARGET` into `state.tend_conns`, and the
+      # same-tick `tend_refresh_partitions/1` pass writes partition 7 into
+      # ETS.
+      c_target = start_info_server("C_TARGET", partition_generation: 1, partitions: [7])
+      on_exit(fn -> stop_info_server(c_target) end)
+
+      b_advanced = start_info_server("B_ADVANCED", partition_generation: 1, partitions: [1])
+      on_exit(fn -> stop_info_server(b_advanced) end)
+
+      seed =
+        start_info_server(
+          "A_STALE",
+          peers: peers_payload(1, [{"B_ADVANCED", "127.0.0.1", b_advanced.port}]),
+          partitions: [0]
+        )
+
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Sanity: both bootstrapped nodes are present; C_TARGET is not.
+      assert [{{"test", 0, 0}, "A_STALE"}] = :ets.lookup(Tables.partitions(name), {"test", 0, 0})
+
+      assert [{{"test", 1, 0}, "B_ADVANCED"}] =
+               :ets.lookup(Tables.partitions(name), {"test", 1, 0})
+
+      assert [] = :ets.lookup(Tables.partitions(name), {"test", 7, 0})
+      assert [] = :ets.lookup(Tables.nodes(name), "C_TARGET")
+
+      # Break A_STALE's peers-clear-std reply so `parse_peers_clear_std/1`
+      # returns `:error`. Any subsequent tick that consults A_STALE falls
+      # through to the `else` arm as a plain error, *not* as a same-gen
+      # short-circuit.
+      update_info_server(seed, peers: "garbage not a valid peers payload")
+
+      # Advance B_ADVANCED's peers-clear-std to gen=2, listing A_STALE and
+      # C_TARGET (peers-clear-std conventionally excludes self, so B_ADVANCED
+      # is not in its own list).
+      update_info_server(
+        b_advanced,
+        peers:
+          peers_payload(
+            2,
+            [
+              {"A_STALE", "127.0.0.1", seed.port},
+              {"C_TARGET", "127.0.0.1", c_target.port}
+            ]
+          )
+      )
+
+      try do
+        Helpers.poll_until(
+          fn ->
+            :ets.lookup(Tables.partitions(name), {"test", 7, 0}) ==
+              [{{"test", 7, 0}, "C_TARGET"}]
+          end,
+          between: fn -> send_tend(name) end,
+          timeout: 2_000
+        )
+      rescue
+        ExUnit.AssertionError ->
+          flunk(
+            "C_TARGET partition 7 never appeared in ETS; " <>
+              "partition row = #{inspect(:ets.lookup(Tables.partitions(name), {"test", 7, 0}))}, " <>
+              "C_TARGET node row = #{inspect(:ets.lookup(Tables.nodes(name), "C_TARGET"))}"
+          )
+      end
+    end
+
     test "tend refresh updates partition table when generation changes", %{name: name} do
       seed = start_info_server("SEED_A", partition_generation: 1, partitions: [0])
       on_exit(fn -> stop_info_server(seed) end)
@@ -77,6 +217,163 @@ defmodule Aerospike.ClusterTest do
       assert_await(fn ->
         match?([{{"test", 1, 0}, "SEED_A"}], :ets.lookup(Tables.partitions(name), {"test", 1, 0}))
       end)
+    end
+
+    test "tend refresh re-fetches each node when its per-node generation advances",
+         %{name: name} do
+      # Regression for the scalar `partition_generation` bug: a sibling node
+      # can advance the shared scalar to value X earlier in a reduce pass,
+      # then the next node whose own generation is also X has its refetch
+      # short-circuited because the scalar matches — even though *this*
+      # node's partitions were stale under the old entry.
+      #
+      # Repro: two nodes start stable at gen=1. Advance NODE_A to gen=5 first
+      # and confirm its new partition is picked up (this also forces the
+      # scalar to stop being 1). Then advance NODE_B to the *same* gen=5 with
+      # a new partition. Under the scalar code, NODE_B's refetch is skipped
+      # because `check_partition_generation/4` sees B.gen == state.scalar.
+      peer = start_info_server("NODE_B", partition_generation: 1, partitions: [1])
+      on_exit(fn -> stop_info_server(peer) end)
+
+      seed =
+        start_info_server(
+          "NODE_A",
+          partition_generation: 1,
+          peers: peers_payload(1, [{"NODE_B", "127.0.0.1", peer.port}]),
+          partitions: [0]
+        )
+
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Bootstrap must have populated both nodes' base partitions.
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 0, 0}) == [{{"test", 0, 0}, "NODE_A"}] and
+            :ets.lookup(Tables.partitions(name), {"test", 1, 0}) == [{{"test", 1, 0}, "NODE_B"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Advance NODE_A's gen to 5, adding partition 2. Under either the buggy
+      # or fixed code, this should be picked up (A's gen differs from the
+      # stored value of 1). This poll is the precondition setup, not the
+      # bug repro itself.
+      update_info_server(seed, partition_generation: 5, partitions: [0, 2])
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 2, 0}) == [{{"test", 2, 0}, "NODE_A"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Now advance NODE_B to the SAME gen=5 with new partition 3. This is
+      # the bug trigger: the scalar code ends the previous tend pass with
+      # state.partition_generation == 5 (because NODE_A's refetch just wrote
+      # that value), so when NODE_B is probed and reports gen=5, the scalar
+      # comparison says "unchanged" and skips the refetch. The per-node fix
+      # keeps NODE_B's stored gen at 1 (its last successful refetch), so
+      # 5 != 1 triggers the needed refetch.
+      update_info_server(peer, partition_generation: 5, partitions: [1, 3])
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 3, 0}) == [{{"test", 3, 0}, "NODE_B"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+    end
+
+    test "tend refetches a re-joined peer whose partition-generation matches its stale entry",
+         %{name: name} do
+      # Regression for the per-node-generation cleanup added in
+      # `prune_departed_peer/2` (parent plan
+      # `docs/plans/cluster-per-node-partition-gen/` Task 2, step 8).
+      #
+      # The skip path that the cleanup prevents only triggers when the
+      # rejoined peer reports the *same* `partition-generation` it had when it
+      # departed. `check_partition_generation/4` uses `gen != stored`, so a
+      # rejoin with a *different* gen (higher or lower) refetches via the
+      # normal comparison and proves nothing about the cleanup. Keep this test
+      # at "equal gen" — do not "fix" it back to "lower gen". See
+      # `docs/plans/cluster-peer-tend-gap/notes.md` for the full rationale.
+      #
+      # Repro: bootstrap B_PEER at gen=7 with partitions=[1]. Drop B_PEER from
+      # the seed's `peers-clear-std` reply and drive tend until the prune
+      # path runs. Re-advertise B_PEER with the *same* gen=7 but a new
+      # partition set [2]. Without the `Map.delete(state.partition_generations,
+      # node_name)` line in `prune_departed_peer/2`, the per-node entry for
+      # B_PEER stays at 7, so the next `check_partition_generation/4` sees
+      # `7 != 7 -> false` and skips refetch — partition 2 never appears in
+      # ETS. With the cleanup, the entry is gone, so `7 != nil -> true`
+      # forces the refetch.
+      #
+      # Node names are chosen so the seed sorts before the peer in Erlang
+      # term order (`"A_SEED" < "B_PEER"`). `tend_refresh_peers/1` reads only
+      # the first entry of `Map.to_list(state.tend_conns)`, and small-map
+      # iteration follows term order — so this naming guarantees the seed is
+      # the node whose `peers-clear-std` drives the depart-and-rejoin
+      # transitions, mirroring the existing prune test convention.
+      peer = start_info_server("B_PEER", partition_generation: 7, partitions: [1])
+      on_exit(fn -> stop_info_server(peer) end)
+
+      seed =
+        start_info_server(
+          "A_SEED",
+          peers: peers_payload(1, [{"B_PEER", "127.0.0.1", peer.port}]),
+          partitions: [0]
+        )
+
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Bootstrap must have populated B_PEER's base partition and seeded its
+      # per-node `partition_generations` entry to 7.
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 1, 0}) == [{{"test", 1, 0}, "B_PEER"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Depart B_PEER by dropping it from the seed's peer list. Drive tend
+      # until the prune path removes it from `Tables.nodes/1`. The peer
+      # mock keeps running so the rejoin handshake can succeed below.
+      update_info_server(seed, peers: peers_payload(2, []))
+
+      Helpers.poll_until(
+        fn -> :ets.lookup(Tables.nodes(name), "B_PEER") == [] end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Re-advertise B_PEER with a *new* partition set ([2]) and the *same*
+      # `partition-generation` (7) it had on departure. The new partition
+      # gives the assertion a visible signal that refetch ran; the equal gen
+      # exercises the skip path that the cleanup prevents.
+      update_info_server(peer, partitions: [2])
+
+      update_info_server(
+        seed,
+        peers: peers_payload(3, [{"B_PEER", "127.0.0.1", peer.port}])
+      )
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 2, 0}) == [{{"test", 2, 0}, "B_PEER"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
     end
 
     test "tend removes peers no longer reported by peers-clear-std", %{name: name} do
@@ -106,6 +403,44 @@ defmodule Aerospike.ClusterTest do
           [] == :ets.lookup(Tables.partitions(name), {"test", 1, 0}) and
           not tend_connection_present?(name, "B_PEER")
       end)
+    end
+
+    test "cold start with empty replicas bitmap keeps cluster not ready", %{name: name} do
+      # Regression for the empty-partition-map premature-ready bug. A cold
+      # single-node cluster where the seed replies to `replicas` with an
+      # empty bitmap parses into zero partition rows in ETS, yet today's
+      # `build_partition_map/1` returns `{:ok, state}` unconditionally, so
+      # `do_initial_tend/1` flips `ready_key` to `true`. Routing then sends
+      # user-data writes into a partitions ETS table that owns nothing, and
+      # the first `put!/4` raises `invalid_cluster_partition_map`.
+      #
+      # Oracle: drive tend until the seed is registered in `Tables.nodes/1`
+      # (proof that `do_initial_tend/1` synchronously ran through
+      # `insert_node_registry` and therefore through `build_partition_map`
+      # and the `mark_cluster_ready` call site within the same `with`
+      # chain). At that point the partitions ETS table must still be empty
+      # and `ready_key` must remain unset. Under the current bug, `ready_key`
+      # is already `true` by the time the seed row appears, so this test
+      # fails. After the Task 2 fix, `build_partition_map/1` returns
+      # `{:error, :empty_partition_map}`, the `with` chain falls through
+      # before `mark_cluster_ready` runs, and the assertion holds.
+      seed = start_info_server("SEED_A", partitions: [])
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+
+      Helpers.poll_until(
+        fn -> match?([{"SEED_A", _}], :ets.lookup(Tables.nodes(name), "SEED_A")) end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      assert :ets.info(Tables.partitions(name), :size) == 0
+
+      refute match?(
+               [{_, true}],
+               :ets.lookup(Tables.meta(name), Tables.ready_key())
+             )
     end
 
     test "unreachable seeds keep cluster not ready", %{name: name} do

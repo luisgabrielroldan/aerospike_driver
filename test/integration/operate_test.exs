@@ -6,7 +6,6 @@ defmodule Aerospike.Integration.OperateTest do
   alias Aerospike.Op.HLL, as: HLLOp
   alias Aerospike.Op.List, as: ListOp
   alias Aerospike.Op.Map, as: MapOp
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
   @moduletag :integration
@@ -30,32 +29,9 @@ defmodule Aerospike.Integration.OperateTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     {:ok, conn: name, host: host, port: port}
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_cluster_ready_loop(name, deadline)
-  end
-
-  defp await_cluster_ready_loop(name, deadline) do
-    cond do
-      cluster_ready?(name) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("cluster not ready")
-
-      true ->
-        Process.sleep(50)
-        await_cluster_ready_loop(name, deadline)
-    end
-  end
-
-  defp cluster_ready?(name) do
-    match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
   end
 
   defp contains_ext_tuple?({:ext, _, _}), do: true

@@ -2,7 +2,6 @@ defmodule Aerospike.Integration.UDFTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Error
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
   @moduletag :integration
@@ -26,7 +25,7 @@ defmodule Aerospike.Integration.UDFTest do
          tend_interval: 60_000}
       )
 
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     # Remove leftover package from a previous run; ignore error if not present.
     Aerospike.remove_udf(name, @server_name)
@@ -198,25 +197,6 @@ defmodule Aerospike.Integration.UDFTest do
     else
       Process.sleep(interval)
       assert_eventually_loop(fun, deadline, interval, message)
-    end
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_cluster_ready_loop(name, deadline)
-  end
-
-  defp await_cluster_ready_loop(name, deadline) do
-    cond do
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("cluster not ready within timeout")
-
-      true ->
-        Process.sleep(50)
-        await_cluster_ready_loop(name, deadline)
     end
   end
 end

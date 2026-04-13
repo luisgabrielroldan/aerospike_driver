@@ -45,7 +45,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
     assert_security_ready!(name)
 
     {:ok,
@@ -279,25 +279,6 @@ defmodule Aerospike.Integration.SecurityAdminTest do
     end
   end
 
-  defp await_cluster_ready(name, timeout \\ 10_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_cluster_ready_loop(name, deadline, timeout)
-  end
-
-  defp await_cluster_ready_loop(name, deadline, timeout) do
-    cond do
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key())) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("secured cluster not ready within #{timeout}ms")
-
-      true ->
-        Process.sleep(100)
-        await_cluster_ready_loop(name, deadline, timeout)
-    end
-  end
-
   defp assert_eventually(message, fun, timeout \\ 10_000, interval \\ 200)
        when is_binary(message) and is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout
@@ -345,7 +326,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
   end
 
   defp run_security_conn_fun(temp_conn, fun) when is_atom(temp_conn) and is_function(fun, 1) do
-    await_cluster_ready(temp_conn)
+    Helpers.await_cluster_ready(temp_conn)
     {:ok, fun.(temp_conn)}
   after
     Aerospike.close(temp_conn)
