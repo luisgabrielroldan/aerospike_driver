@@ -452,6 +452,28 @@ defmodule Aerospike.ScanOps do
     end)
   end
 
+  @spec query_execute_node(atom(), String.t(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_execute_node(conn_name, node_name, %Query{} = query, ops, opts \\ [])
+      when is_atom(conn_name) and is_binary(node_name) and is_list(ops) and is_list(opts) do
+    merged = Policy.merge_defaults(conn_name, :query, opts)
+    task_id = background_task_id()
+
+    with_scan_telemetry(:query_execute_node, conn_name, query, fn ->
+      run_background_query_node(
+        conn_name,
+        node_name,
+        query,
+        Keyword.put(merged, :task_id, task_id),
+        task_id,
+        :query_execute,
+        fn q, node_partitions, run_opts ->
+          ScanQuery.build_query_execute(q, node_partitions, ops, run_opts)
+        end
+      )
+    end)
+  end
+
   @spec query_udf(atom(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, ExecuteTask.t()} | {:error, Error.t()}
   def query_udf(conn_name, %Query{} = query, package, function, args, opts \\ [])
@@ -463,6 +485,29 @@ defmodule Aerospike.ScanOps do
     with_scan_telemetry(:query_udf, conn_name, query, fn ->
       run_background_query(
         conn_name,
+        query,
+        Keyword.put(merged, :task_id, task_id),
+        task_id,
+        :query_udf,
+        fn q, node_partitions, run_opts ->
+          ScanQuery.build_query_udf(q, node_partitions, package, function, args, run_opts)
+        end
+      )
+    end)
+  end
+
+  @spec query_udf_node(atom(), String.t(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_udf_node(conn_name, node_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_atom(conn_name) and is_binary(node_name) and is_binary(package) and
+             is_binary(function) and is_list(args) and is_list(opts) do
+    merged = Policy.merge_defaults(conn_name, :query, opts)
+    task_id = background_task_id()
+
+    with_scan_telemetry(:query_udf_node, conn_name, query, fn ->
+      run_background_query_node(
+        conn_name,
+        node_name,
         query,
         Keyword.put(merged, :task_id, task_id),
         task_id,
@@ -1614,6 +1659,37 @@ defmodule Aerospike.ScanOps do
          set: query.set,
          task_id: task_id,
          kind: kind
+       }}
+    end
+  end
+
+  defp run_background_query_node(conn_name, node_name, query, opts, task_id, kind, wire_builder)
+       when is_function(wire_builder, 3) do
+    distribute_fn = fn total, n ->
+      case total do
+        t when is_integer(t) and t > 0 -> distribute_record_max(t, n)
+        _ -> List.duplicate(0, n)
+      end
+    end
+
+    with {:ok, prepared} <-
+           prepare_single_node_fanout(
+             conn_name,
+             node_name,
+             query,
+             opts,
+             distribute_fn,
+             wire_builder
+           ),
+         :ok <- run_background_node_writes(conn_name, prepared.node_wires, opts) do
+      {:ok,
+       %ExecuteTask{
+         conn: conn_name,
+         namespace: query.namespace,
+         set: query.set,
+         task_id: task_id,
+         kind: kind,
+         node_name: node_name
        }}
     end
   end
