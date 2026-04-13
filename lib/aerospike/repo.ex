@@ -45,6 +45,8 @@ defmodule Aerospike.Repo do
   @data_delegates [
     {:put, [:key, :bins, {:opts, []}]},
     {:put!, [:key, :bins, {:opts, []}]},
+    {:put_payload, [:key, :payload, {:opts, []}]},
+    {:put_payload!, [:key, :payload, {:opts, []}]},
     {:get, [:key, {:opts, []}]},
     {:get!, [:key, {:opts, []}]},
     {:delete, [:key, {:opts, []}]},

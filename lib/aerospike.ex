@@ -308,6 +308,72 @@ defmodule Aerospike do
   end
 
   @doc """
+  Sends a caller-built write or delete wire message for a single record.
+
+  > #### Advanced / escape hatch {: .warning}
+  >
+  > This function is intended for advanced use cases (replaying captured writes,
+  > proxy/shim scenarios, specialized tooling). Prefer `put/4`, `delete/3`, or
+  > `operate/4` for normal application code.
+
+  `payload` must be a **complete**, correctly-encoded Aerospike wire message for
+  a single-record write or delete command. The client does not parse, validate,
+  resize, or rewrite the payload — it is forwarded byte-for-byte to the node
+  that owns the write partition for `key`, and the standard write response
+  header is read back and mapped to `:ok | {:error, %Aerospike.Error{}}`.
+
+  Callers own payload correctness. The only client-side check is that `payload`
+  is a `binary()`. Misuse can produce server errors or subtle data corruption
+  that the client cannot prevent.
+
+  ## Multi-record transactions (MRT)
+
+  Unlike `put/4`, `put_payload/4` **does not** register `key` with the active
+  transaction monitor, even when `:txn` is passed in `opts`. This matches the
+  Go client's `PutPayload`, which deliberately skips `txnMonitor.addKey` because
+  the caller's payload already carries its own MRT fields. Callers that need
+  MRT participation must build those fields into the payload themselves.
+
+  ## Options
+
+  Accepts the same write-policy options as `put/4`: `:ttl`, `:timeout`,
+  `:generation`, `:gen_policy`, `:exists`, `:send_key`, `:durable_delete`,
+  `:filter`, `:pool_checkout_timeout`, `:replica`, `:txn`. These are validated
+  like any write, but the option values are **only** used for routing (e.g.
+  `:replica`, `:pool_checkout_timeout`, `:timeout`). Policy flags embedded in
+  the payload itself (write flags, generation, TTL) are what the server honors
+  for the actual write.
+  """
+  @spec put_payload(conn, Key.key_input(), binary(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def put_payload(conn, key, payload, opts \\ [])
+      when is_atom(conn) and is_binary(payload) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key),
+         {:ok, call_opts} <- Policy.validate_write(opts) do
+      CRUD.put_payload(conn, key, payload, call_opts)
+    else
+      {:error, %Error{} = e} ->
+        {:error, e}
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Same as `put_payload/4` but returns `:ok` or raises `Aerospike.Error`.
+  """
+  @spec put_payload!(conn, Key.key_input(), binary(), keyword()) :: :ok
+  def put_payload!(conn, key, payload, opts \\ [])
+      when is_atom(conn) and is_binary(payload) and is_list(opts) do
+    case put_payload(conn, key, payload, opts) do
+      :ok -> :ok
+      {:error, %Error{} = e} -> raise e
+    end
+  end
+
+  @doc """
   Reads a record for the key.
 
   Accepts tuple keys; see `put/4`.
