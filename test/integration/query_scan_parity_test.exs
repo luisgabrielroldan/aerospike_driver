@@ -58,7 +58,7 @@ defmodule Aerospike.Integration.QueryScanParityTest do
 
     on_exit(fn ->
       Enum.each(keys, &Helpers.cleanup_key(&1, host: host, port: port))
-      safe_drop_index(conn, @namespace, index_name)
+      Helpers.cleanup_index(@namespace, index_name, host: host, port: port)
     end)
 
     assert {:ok, task} =
@@ -101,7 +101,7 @@ defmodule Aerospike.Integration.QueryScanParityTest do
 
     on_exit(fn ->
       Enum.each(keys, &Helpers.cleanup_key(&1, host: host, port: port))
-      safe_drop_index(conn, @namespace, index_name)
+      Helpers.cleanup_index(@namespace, index_name, host: host, port: port)
     end)
 
     assert {:ok, task} =
@@ -207,8 +207,8 @@ defmodule Aerospike.Integration.QueryScanParityTest do
 
     on_exit(fn ->
       Enum.each(keys, &Helpers.cleanup_key(&1, host: host, port: port))
-      safe_drop_index(conn, @namespace, @geo_point_index)
-      safe_drop_index(conn, @namespace, @geo_region_index)
+      Helpers.cleanup_index(@namespace, @geo_point_index, host: host, port: port)
+      Helpers.cleanup_index(@namespace, @geo_region_index, host: host, port: port)
     end)
 
     assert {:ok, point_task} =
@@ -283,14 +283,6 @@ defmodule Aerospike.Integration.QueryScanParityTest do
       end
 
     {keys, set_name, index_name}
-  end
-
-  defp safe_drop_index(conn, namespace, index_name) do
-    if :ets.whereis(Tables.meta(conn)) != :undefined do
-      _ = Aerospike.drop_index(conn, namespace, index_name)
-    end
-
-    :ok
   end
 
   defp geo_box(center_lng, center_lat, half_deg) do

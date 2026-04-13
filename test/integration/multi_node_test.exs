@@ -212,9 +212,7 @@ defmodule Aerospike.Integration.MultiNodeTest do
       end
 
       on_exit(fn ->
-        if :ets.whereis(Tables.meta(conn)) != :undefined do
-          _ = Aerospike.drop_index(conn, "test", index_name)
-        end
+        Helpers.cleanup_index("test", index_name, host: host, port: port)
       end)
 
       assert {:ok, task} =
@@ -267,7 +265,7 @@ defmodule Aerospike.Integration.MultiNodeTest do
       target_node = hd(node_names)
       query = indexed_bucket_query(set_name, index_name)
 
-      create_numeric_index!(conn, set_name, index_name)
+      create_numeric_index!(conn, set_name, index_name, host, port)
 
       assert {:ok, %ExecuteTask{} = task} =
                Aerospike.query_execute_node(conn, target_node, query, [put("state", "executed")])
@@ -298,8 +296,8 @@ defmodule Aerospike.Integration.MultiNodeTest do
       target_node = hd(node_names)
       query = indexed_bucket_query(set_name, index_name)
 
-      create_numeric_index!(conn, set_name, index_name)
-      register_put_value_udf!(conn, package, server_name)
+      create_numeric_index!(conn, set_name, index_name, host, port)
+      register_put_value_udf!(conn, package, server_name, host, port)
 
       assert {:ok, %ExecuteTask{} = task} =
                Aerospike.query_udf_node(conn, target_node, query, package, "put_value", [
@@ -464,11 +462,9 @@ defmodule Aerospike.Integration.MultiNodeTest do
     |> Query.max_records(10)
   end
 
-  defp create_numeric_index!(conn, set_name, index_name) do
+  defp create_numeric_index!(conn, set_name, index_name, host, port) do
     on_exit(fn ->
-      if :ets.whereis(Tables.meta(conn)) != :undefined do
-        _ = Aerospike.drop_index(conn, "test", index_name)
-      end
+      Helpers.cleanup_index("test", index_name, host: host, port: port)
     end)
 
     assert {:ok, task} =
@@ -482,7 +478,7 @@ defmodule Aerospike.Integration.MultiNodeTest do
     Process.sleep(500)
   end
 
-  defp register_put_value_udf!(conn, package, server_name) do
+  defp register_put_value_udf!(conn, package, server_name, host, port) do
     udf_source = """
     function put_value(rec, bin_name, value)
       rec[bin_name] = value
@@ -491,11 +487,7 @@ defmodule Aerospike.Integration.MultiNodeTest do
     end
     """
 
-    on_exit(fn ->
-      if :ets.whereis(Tables.meta(conn)) != :undefined do
-        _ = Aerospike.remove_udf(conn, server_name)
-      end
-    end)
+    on_exit(fn -> Helpers.cleanup_udf(server_name, host: host, port: port) end)
 
     assert {:ok, task} = Aerospike.register_udf(conn, udf_source, server_name)
     assert :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000, poll_interval: 200)

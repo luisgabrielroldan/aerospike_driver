@@ -43,6 +43,43 @@ defmodule Aerospike.Test.Helpers do
   end
 
   @doc """
+  Best-effort secondary index drop for test cleanup. Opens a fresh connection
+  because `on_exit` runs after the supervised client is torn down, so calling
+  `Aerospike.drop_index/3` with the test's conn name would fail.
+  """
+  @spec cleanup_index(String.t(), String.t(), keyword()) :: :ok
+  def cleanup_index(namespace, index_name, opts \\ [])
+      when is_binary(namespace) and is_binary(index_name) do
+    send_info(["sindex-delete:ns=#{namespace};indexname=#{index_name}"], opts)
+  end
+
+  @doc """
+  Best-effort UDF removal for test cleanup. Same motivation as `cleanup_index/3`:
+  `on_exit` cannot use the supervised client since it's already torn down.
+  """
+  @spec cleanup_udf(String.t(), keyword()) :: :ok
+  def cleanup_udf(udf_name, opts \\ []) when is_binary(udf_name) do
+    send_info(["udf-remove:filename=#{udf_name};"], opts)
+  end
+
+  defp send_info(commands, opts) do
+    host = Keyword.get(opts, :host, "127.0.0.1")
+    port = Keyword.get(opts, :port, 3000)
+
+    case Connection.connect(host: host, port: port) do
+      {:ok, conn} ->
+        {:ok, conn} = Connection.login(conn)
+        _ = Connection.request_info(conn, commands)
+        Connection.close(conn)
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+
+  @doc """
   Sends a wire message and decodes the AS_MSG response.
 
   Returns `{:ok, conn, msg}` where `conn` has refreshed idle deadline and `msg` is the decoded AsmMsg.
