@@ -188,7 +188,10 @@ instead of raising from the router path.
 
 Phase 2 also adds query-wide UDF entry points:
 
-- [`Aerospike.query_udf/6`](Aerospike.html#query_udf/6) applies a record UDF in the background across query matches and returns an [`Aerospike.ExecuteTask`](Aerospike.ExecuteTask.html).
+- [`Aerospike.query_udf/6`](Aerospike.html#query_udf/6) and
+  [`Aerospike.query_udf_node/7`](Aerospike.html#query_udf_node/7) apply a record
+  UDF in the background across query matches and return an
+  [`Aerospike.ExecuteTask`](Aerospike.ExecuteTask.html).
 - [`Aerospike.query_aggregate/6`](Aerospike.html#query_aggregate/6) streams aggregate values from a query-wide stream UDF.
 
 ```elixir
@@ -213,10 +216,32 @@ aggregate_values =
   |> Enum.to_list()
 ```
 
+```elixir
+alias Aerospike.{ExecuteTask, Filter, Query}
+
+node_name = MyApp.Repo.node_names() |> hd()
+
+query =
+  Query.new("test", "users")
+  |> Query.where(Filter.range("score", 50, 500))
+
+{:ok, task} =
+  MyApp.Repo.query_udf_node(
+    node_name,
+    query,
+    "leaderboard",
+    "mark_active",
+    ["bronze"]
+  )
+
+:ok = ExecuteTask.wait(task, timeout: 15_000)
+```
+
 `query_udf/6` is for background mutation over query matches. If you want to
 apply normal write operations instead of a Lua function, use
-[`Aerospike.query_execute/4`](Aerospike.html#query_execute/4) from the query
-guide; it returns the same task type and wait semantics.
+[`Aerospike.query_execute/4`](Aerospike.html#query_execute/4) or
+[`Aerospike.query_execute_node/5`](Aerospike.html#query_execute_node/5) from
+the query guide; both return the same task type and wait semantics.
 
 ### Current aggregation limitation
 
