@@ -28,6 +28,7 @@ Connects directly over the Aerospike binary wire protocol — pure Elixir, no NI
 - **Policy defaults** — configure defaults for read, write, delete, exists, touch, operate, batch, scan, and query; override per call
 - **Admin & info operations** — raw `info`, per-node `info_node`, node listing, and `truncate`
 - **Security administration** — manage users, PKI users, roles, privileges, whitelists, and quotas on secured Enterprise clusters
+- **Operational APIs** — client-managed metrics (`enable_metrics`, `disable_metrics`, `metrics_enabled?`), runtime stats snapshot (`stats`), connection-pool warmup (`warm_up`), and XDR filter management (`set_xdr_filter`)
 - **TLS support** — optional TLS and mTLS for node connections
 - **Circuit breaker** — per-node error-rate rejection with telemetry
 - **Telemetry** — emits `[:aerospike, :command, :start | :stop | :exception]` events
@@ -289,6 +290,57 @@ in-memory credential source for future reconnects, but a restarted client still
 depends on the credentials supplied in `:auth_opts`.
 See [Security Administration](guides/security-administration.md) for the complete flow
 and test-environment requirements.
+
+### Operational APIs
+
+Phase 5 adds client-managed metrics, a runtime stats snapshot, connection-pool
+warmup, and XDR filter management.
+
+Metrics collection is opt-in and separate from the always-active `[:aerospike, :command]`
+Telemetry events:
+
+```elixir
+:ok = MyApp.Repo.enable_metrics()
+true = MyApp.Repo.metrics_enabled?()
+stats = MyApp.Repo.stats()
+# %{
+#   metrics_enabled: true,
+#   cluster_ready: true,
+#   nodes_total: 3,
+#   nodes_active: 3,
+#   open_connections: 30,
+#   commands_total: 500,
+#   commands_ok: 495,
+#   commands_error: 5,
+#   cluster: %{...},
+#   nodes: %{"BB90000000A4202" => %{...}, ...}
+# }
+:ok = MyApp.Repo.disable_metrics()
+```
+
+Warmup exercises the current discovered node pools to reduce first-request latency:
+
+```elixir
+{:ok, result} = MyApp.Repo.warm_up()
+# %{status: :ok, total_requested: 30, total_warmed: 30, nodes_ok: 3, ...}
+
+{:ok, result} = MyApp.Repo.warm_up(count: 5)
+```
+
+XDR filter management requires Aerospike Enterprise Edition with XDR configured.
+Pass `nil` to clear the current server-side filter:
+
+```elixir
+import Aerospike.Exp
+
+filter = and_(eq(int_bin("status"), int_val(1)), gt(int_bin("score"), int_val(50)))
+
+:ok = MyApp.Repo.set_xdr_filter("dc-west", "test", filter)
+:ok = MyApp.Repo.set_xdr_filter("dc-west", "test", nil)
+```
+
+See [Observability and Runtime Operations](guides/observability.md) for the full API
+reference, stats shape, warmup semantics, and XDR coverage notes.
 
 ### Writing Records
 
