@@ -79,6 +79,11 @@ defmodule Aerospike.Exp do
   @spec from_wire(binary()) :: t()
   def from_wire(wire) when is_binary(wire), do: %__MODULE__{wire: wire}
 
+  @doc false
+  @spec base64(t()) :: {:ok, String.t()} | {:error, :empty}
+  def base64(%__MODULE__{wire: ""}), do: {:error, :empty}
+  def base64(%__MODULE__{wire: wire}) when is_binary(wire), do: {:ok, Base.encode64(wire)}
+
   # ---------------------------------------------------------------------------
   # Literal values
   # ---------------------------------------------------------------------------

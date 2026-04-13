@@ -325,6 +325,15 @@ defmodule Aerospike.Policy do
   end
 
   @doc false
+  def validate_xdr_filter(datacenter, namespace, filter)
+      when is_binary(datacenter) and is_binary(namespace) do
+    with :ok <- validate_info_identifier(:datacenter, datacenter),
+         :ok <- validate_info_identifier(:namespace, namespace) do
+      validate_xdr_filter_expression(filter)
+    end
+  end
+
+  @doc false
   def validate_info(opts), do: NimbleOptions.validate(opts, @info_schema)
 
   @doc false
@@ -391,16 +400,51 @@ defmodule Aerospike.Policy do
     end
   end
 
-  defp validate_expression_index_wire(%Exp{wire: wire}) when is_binary(wire) do
+  defp validate_expression_index_wire(%Exp{} = expression) do
+    validate_expression_wire(
+      expression,
+      :expression,
+      "must be a non-empty Aerospike.Exp for expression-backed indexes"
+    )
+  end
+
+  defp validate_xdr_filter_expression(nil), do: :ok
+
+  defp validate_xdr_filter_expression(%Exp{} = expression) do
+    validate_expression_wire(
+      expression,
+      :filter,
+      "must be nil or a non-empty Aerospike.Exp for XDR filters"
+    )
+  end
+
+  defp validate_xdr_filter_expression(value) do
+    {:error,
+     validation_error(
+       :filter,
+       value,
+       "must be nil or a non-empty Aerospike.Exp for XDR filters"
+     )}
+  end
+
+  defp validate_expression_wire(%Exp{wire: wire}, key, message) when is_binary(wire) do
     if wire == "" do
-      {:error,
-       validation_error(
-         :expression,
-         wire,
-         "must be a non-empty Aerospike.Exp for expression-backed indexes"
-       )}
+      {:error, validation_error(key, wire, message)}
     else
       :ok
+    end
+  end
+
+  defp validate_info_identifier(key, value) when is_binary(value) do
+    if value != "" and not String.contains?(value, [";", "=", "\n", "\r", "\t"]) do
+      :ok
+    else
+      {:error,
+       validation_error(
+         key,
+         value,
+         "must be a non-empty string without ';', '=', tabs, or newlines"
+       )}
     end
   end
 

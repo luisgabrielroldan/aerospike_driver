@@ -106,6 +106,35 @@ defmodule Aerospike.AdminTest do
     end
   end
 
+  describe "Policy.validate_xdr_filter/3" do
+    test "accepts nil and Aerospike.Exp filters" do
+      assert :ok = Policy.validate_xdr_filter("dc-west", "test", nil)
+
+      assert :ok =
+               Policy.validate_xdr_filter(
+                 "dc-west",
+                 "test",
+                 Exp.eq(Exp.int_bin("age"), Exp.int(21))
+               )
+    end
+
+    test "rejects empty or delimiter-bearing identifiers" do
+      assert {:error, %NimbleOptions.ValidationError{key: :datacenter}} =
+               Policy.validate_xdr_filter("", "test", nil)
+
+      assert {:error, %NimbleOptions.ValidationError{key: :namespace}} =
+               Policy.validate_xdr_filter("dc-west", "test;users", nil)
+    end
+
+    test "rejects empty expression wire and non-expression filters" do
+      assert {:error, %NimbleOptions.ValidationError{key: :filter}} =
+               Policy.validate_xdr_filter("dc-west", "test", Exp.from_wire(""))
+
+      assert {:error, %NimbleOptions.ValidationError{key: :filter}} =
+               Policy.validate_xdr_filter("dc-west", "test", :invalid)
+    end
+  end
+
   describe "Aerospike facade info validation" do
     test "rejects bad opts and returns parameter_error" do
       assert {:error, %Aerospike.Error{code: :parameter_error}} =
@@ -332,6 +361,81 @@ defmodule Aerospike.AdminTest do
 
       assert message ==
                "expression-backed secondary indexes require Aerospike server 8.1.0 or newer"
+
+      Task.await(server)
+    end
+  end
+
+  describe "set_xdr_filter/4" do
+    setup do
+      name = :"admin_xdr_filter_#{System.unique_integer([:positive, :monotonic])}"
+      start_ets(name)
+      {:ok, name: name}
+    end
+
+    test "encodes Aerospike.Exp as the xdr-set-filter exp payload", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+
+          assert body ==
+                   "xdr-set-filter:dc=dc-west;namespace=test;exp=kwGTUQKjYmluVQ==\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "xdr-set-filter:dc=dc-west;namespace=test;exp=kwGTUQKjYmluVQ==\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_030)
+
+      assert :ok =
+               Admin.set_xdr_filter(
+                 name,
+                 "dc-west",
+                 "test",
+                 Exp.eq(Exp.int_bin("bin"), Exp.int(85))
+               )
+
+      Task.await(server)
+    end
+
+    test "uses exp=null when clearing the XDR filter", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "xdr-set-filter:dc=dc-west;namespace=test;exp=null\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "xdr-set-filter:dc=dc-west;namespace=test;exp=null\tOK\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_031)
+
+      assert :ok = Admin.set_xdr_filter(name, "dc-west", "test", nil)
+      Task.await(server)
+    end
+
+    test "wraps non-OK info responses as server_error", %{name: name} do
+      {:ok, pool_pid, server} =
+        start_pool_with_server(name, fn client ->
+          {:ok, _header, body} = MockTcpServer.recv_message(client)
+          assert body == "xdr-set-filter:dc=dc-west;namespace=test;exp=null\n"
+
+          MockTcpServer.send_info_response(
+            client,
+            "xdr-set-filter:dc=dc-west;namespace=test;exp=null\tERROR::unsupported feature\n"
+          )
+        end)
+
+      register_node(name, pool_pid, 3_032)
+
+      assert {:error, %Aerospike.Error{code: :server_error, message: message}} =
+               Admin.set_xdr_filter(name, "dc-west", "test", nil)
+
+      assert message == ~s(unexpected info response: "ERROR::unsupported feature")
 
       Task.await(server)
     end

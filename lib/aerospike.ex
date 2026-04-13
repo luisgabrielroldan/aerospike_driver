@@ -1863,6 +1863,32 @@ defmodule Aerospike do
   end
 
   @doc """
+  Sets or clears the XDR filter for one datacenter/namespace pair.
+
+  Pass `nil` as `filter` to clear the current server-side filter.
+
+  Validation is local and explicit:
+
+  * `datacenter` and `namespace` must be non-empty strings without info-command delimiters.
+  * `filter` must be `nil` or a non-empty `%Aerospike.Exp{}`.
+
+  This API sends the cluster-wide `xdr-set-filter` info command to one node. The
+  receiving node distributes the change across the cluster.
+  """
+  @spec set_xdr_filter(conn(), String.t(), String.t(), Exp.t() | nil) :: :ok | {:error, Error.t()}
+  def set_xdr_filter(conn, datacenter, namespace, filter)
+      when is_atom(conn) and is_binary(datacenter) and is_binary(namespace) do
+    case Policy.validate_xdr_filter(datacenter, namespace, filter) do
+      :ok ->
+        Admin.set_xdr_filter(conn, datacenter, namespace, filter)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
   Creates a password-authenticated security user.
 
   `password` is accepted as cleartext at the facade boundary and hashed before
