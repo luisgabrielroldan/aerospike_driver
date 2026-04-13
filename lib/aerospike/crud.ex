@@ -102,6 +102,29 @@ defmodule Aerospike.CRUD do
     end)
   end
 
+  @doc """
+  Sends a caller-built write/delete wire message for `key`.
+
+  The payload is forwarded to the node that owns the write partition for `key`
+  without any encoding, validation, or rewriting. Unlike `put/4`, this path
+  does **not** register the key with the active transaction monitor, matching
+  Go's `PutPayload` semantics — callers that need MRT participation must embed
+  the MRT fields inside the payload themselves.
+
+  See the [Raw payload writes](raw-payload-write.md) guide for user-facing
+  documentation; public callers should use `Aerospike.put_payload/4`.
+  """
+  @spec put_payload(atom(), Key.t(), binary(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def put_payload(conn, %Key{} = key, payload, opts \\ [])
+      when is_atom(conn) and is_binary(payload) and is_list(opts) do
+    merged = Policy.merge_defaults(conn, :write, opts)
+
+    with_telemetry(:put_payload, key, conn, fn ->
+      router_then_decode(conn, key, payload, merged, &finish_write/2)
+    end)
+  end
+
   defp run_write(conn, key, bins, merged, op_type) do
     txn = Keyword.get(merged, :txn)
 

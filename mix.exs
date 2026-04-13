@@ -264,6 +264,7 @@ defmodule Aerospike.MixProject do
         "guides/queries-and-scanning.md",
         "guides/expressions.md",
         "guides/policies.md",
+        "guides/raw-payload-write.md",
         "guides/security-administration.md",
         "guides/transactions.md",
         "guides/secondary-indexes.md",
