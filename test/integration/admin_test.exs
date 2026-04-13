@@ -100,6 +100,8 @@ defmodule Aerospike.Integration.AdminTest do
       assert {:ok, _} = Aerospike.get(conn, trunc_key)
       assert {:ok, _} = Aerospike.get(conn, keep_key)
 
+      Process.sleep(5)
+
       assert :ok = Aerospike.truncate(conn, "test", set)
 
       assert_eventually(
