@@ -106,6 +106,101 @@ defmodule Aerospike.ClusterTest do
       )
     end
 
+    test "tend cycle discovers peers via non-first tend conn when first conn is broken",
+         %{name: name} do
+      # Regression for `tend_refresh_peers/1` consulting only the term-order-
+      # first tend conn and treating its reply as authoritative. If that conn's
+      # `peers-clear-std` reply is broken (parse failure, dead socket, or any
+      # non-`{:ok, _}` result), the whole tend pass silently no-ops — even if
+      # other tend conns would return a usable, advanced peers list. Topology
+      # updates from the rest of the cluster are masked until the broken conn
+      # is pruned or loses its term-order-first position.
+      #
+      # Repro: bootstrap with seed `A_STALE` (peers list contains `B_ADVANCED`)
+      # and peer `B_ADVANCED`. Names are chosen so `"A_STALE" < "B_ADVANCED"`
+      # in Erlang term order, making `A_STALE` the `Map.to_list/1`-first tend
+      # conn. After bootstrap, start `C_TARGET` (owning disjoint partition 7),
+      # then (a) break `A_STALE`'s `peers-clear-std` reply so it fails to
+      # parse, and (b) advance `B_ADVANCED`'s `peers-clear-std` to a higher
+      # generation that lists `A_STALE` and `C_TARGET`.
+      #
+      # Current code: `tend_refresh_peers/1` picks `A_STALE` via `hd`, its
+      # reply errors, the `with` chain falls through to `state`, and the
+      # iteration stops. `C_TARGET` is never discovered. The convergence
+      # predicate asserts the specific partition row so a stale-but-complete
+      # map cannot pass for the wrong reason.
+      #
+      # After Task 2: iteration skips `A_STALE`'s `:error`, consults
+      # `B_ADVANCED`, merges `C_TARGET` into `state.tend_conns`, and the
+      # same-tick `tend_refresh_partitions/1` pass writes partition 7 into
+      # ETS.
+      c_target = start_info_server("C_TARGET", partition_generation: 1, partitions: [7])
+      on_exit(fn -> stop_info_server(c_target) end)
+
+      b_advanced = start_info_server("B_ADVANCED", partition_generation: 1, partitions: [1])
+      on_exit(fn -> stop_info_server(b_advanced) end)
+
+      seed =
+        start_info_server(
+          "A_STALE",
+          peers: peers_payload(1, [{"B_ADVANCED", "127.0.0.1", b_advanced.port}]),
+          partitions: [0]
+        )
+
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Sanity: both bootstrapped nodes are present; C_TARGET is not.
+      assert [{{"test", 0, 0}, "A_STALE"}] = :ets.lookup(Tables.partitions(name), {"test", 0, 0})
+
+      assert [{{"test", 1, 0}, "B_ADVANCED"}] =
+               :ets.lookup(Tables.partitions(name), {"test", 1, 0})
+
+      assert [] = :ets.lookup(Tables.partitions(name), {"test", 7, 0})
+      assert [] = :ets.lookup(Tables.nodes(name), "C_TARGET")
+
+      # Break A_STALE's peers-clear-std reply so `parse_peers_clear_std/1`
+      # returns `:error`. Any subsequent tick that consults A_STALE falls
+      # through to the `else` arm as a plain error, *not* as a same-gen
+      # short-circuit.
+      update_info_server(seed, peers: "garbage not a valid peers payload")
+
+      # Advance B_ADVANCED's peers-clear-std to gen=2, listing A_STALE and
+      # C_TARGET (peers-clear-std conventionally excludes self, so B_ADVANCED
+      # is not in its own list).
+      update_info_server(
+        b_advanced,
+        peers:
+          peers_payload(
+            2,
+            [
+              {"A_STALE", "127.0.0.1", seed.port},
+              {"C_TARGET", "127.0.0.1", c_target.port}
+            ]
+          )
+      )
+
+      try do
+        Helpers.poll_until(
+          fn ->
+            :ets.lookup(Tables.partitions(name), {"test", 7, 0}) ==
+              [{{"test", 7, 0}, "C_TARGET"}]
+          end,
+          between: fn -> send_tend(name) end,
+          timeout: 2_000
+        )
+      rescue
+        ExUnit.AssertionError ->
+          flunk(
+            "C_TARGET partition 7 never appeared in ETS; " <>
+              "partition row = #{inspect(:ets.lookup(Tables.partitions(name), {"test", 7, 0}))}, " <>
+              "C_TARGET node row = #{inspect(:ets.lookup(Tables.nodes(name), "C_TARGET"))}"
+          )
+      end
+    end
+
     test "tend refresh updates partition table when generation changes", %{name: name} do
       seed = start_info_server("SEED_A", partition_generation: 1, partitions: [0])
       on_exit(fn -> stop_info_server(seed) end)
