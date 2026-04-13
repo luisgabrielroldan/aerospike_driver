@@ -31,9 +31,14 @@ defmodule Aerospike.Integration.IndexTest do
   end
 
   describe "create_index/4 and drop_index/3" do
-    test "creates a numeric index and returns an IndexTask", %{conn: conn} do
+    test "creates a numeric index and returns an IndexTask", %{
+      conn: conn,
+      host: host,
+      port: port
+    } do
       set = "idx_test_#{System.unique_integer([:positive])}"
       index_name = "age_idx_#{System.unique_integer([:positive])}"
+      on_exit(fn -> Helpers.cleanup_index("test", index_name, host: host, port: port) end)
 
       assert {:ok, %IndexTask{} = task} =
                Aerospike.create_index(conn, "test", set,
@@ -45,13 +50,16 @@ defmodule Aerospike.Integration.IndexTest do
       assert task.conn == conn
       assert task.namespace == "test"
       assert task.index_name == index_name
-
-      :ok = Aerospike.drop_index(conn, "test", index_name)
     end
 
-    test "IndexTask.wait/2 blocks until index is complete", %{conn: conn} do
+    test "IndexTask.wait/2 blocks until index is complete", %{
+      conn: conn,
+      host: host,
+      port: port
+    } do
       set = "idx_wait_#{System.unique_integer([:positive])}"
       index_name = "wait_idx_#{System.unique_integer([:positive])}"
+      on_exit(fn -> Helpers.cleanup_index("test", index_name, host: host, port: port) end)
 
       for i <- 1..10 do
         key = Aerospike.key("test", set, "r#{i}")
@@ -74,8 +82,6 @@ defmodule Aerospike.Integration.IndexTest do
         timeout: 5_000,
         interval: 200
       )
-
-      :ok = Aerospike.drop_index(conn, "test", index_name)
     end
 
     test "drop_index/3 returns :ok for non-existent index", %{conn: conn} do
@@ -87,9 +93,10 @@ defmodule Aerospike.Integration.IndexTest do
                )
     end
 
-    test "creates a string index", %{conn: conn} do
+    test "creates a string index", %{conn: conn, host: host, port: port} do
       set = "idx_str_#{System.unique_integer([:positive])}"
       index_name = "name_idx_#{System.unique_integer([:positive])}"
+      on_exit(fn -> Helpers.cleanup_index("test", index_name, host: host, port: port) end)
 
       assert {:ok, %IndexTask{}} =
                Aerospike.create_index(conn, "test", set,
@@ -97,13 +104,12 @@ defmodule Aerospike.Integration.IndexTest do
                  name: index_name,
                  type: :string
                )
-
-      :ok = Aerospike.drop_index(conn, "test", index_name)
     end
 
-    test "creates a list collection index", %{conn: conn} do
+    test "creates a list collection index", %{conn: conn, host: host, port: port} do
       set = "idx_list_#{System.unique_integer([:positive])}"
       index_name = "tags_idx_#{System.unique_integer([:positive])}"
+      on_exit(fn -> Helpers.cleanup_index("test", index_name, host: host, port: port) end)
 
       assert {:ok, %IndexTask{}} =
                Aerospike.create_index(conn, "test", set,
@@ -112,8 +118,6 @@ defmodule Aerospike.Integration.IndexTest do
                  type: :string,
                  collection: :list
                )
-
-      :ok = Aerospike.drop_index(conn, "test", index_name)
     end
 
     test "returns error for invalid opts", %{conn: conn} do
@@ -150,7 +154,7 @@ defmodule Aerospike.Integration.IndexTest do
 
       on_exit(fn ->
         Enum.each(keys, &Helpers.cleanup_key(&1, host: host, port: port))
-        _ = Aerospike.drop_index(conn, "test", index_name)
+        Helpers.cleanup_index("test", index_name, host: host, port: port)
       end)
 
       assert {:ok, %IndexTask{} = task} =
@@ -204,7 +208,7 @@ defmodule Aerospike.Integration.IndexTest do
 
       on_exit(fn ->
         Enum.each(keys, &Helpers.cleanup_key(&1, host: host, port: port))
-        _ = Aerospike.drop_index(conn, "test", index_name)
+        Helpers.cleanup_index("test", index_name, host: host, port: port)
       end)
 
       expression = Exp.int_bin("age")

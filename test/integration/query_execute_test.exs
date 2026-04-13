@@ -79,11 +79,8 @@ defmodule Aerospike.Integration.QueryExecuteTest do
 
     on_exit(fn ->
       Enum.each(keys, &Helpers.cleanup_key(&1, host: host, port: port))
-
-      if :ets.whereis(Tables.meta(conn)) != :undefined do
-        _ = Aerospike.drop_index(conn, @namespace, index_name)
-        _ = Aerospike.remove_udf(conn, server_name)
-      end
+      Helpers.cleanup_index(@namespace, index_name, host: host, port: port)
+      Helpers.cleanup_udf(server_name, host: host, port: port)
     end)
 
     {:ok, conn: conn, set: set, package: package, keys: keys}

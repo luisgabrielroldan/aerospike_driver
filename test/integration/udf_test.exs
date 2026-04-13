@@ -34,6 +34,8 @@ defmodule Aerospike.Integration.UDFTest do
     {:ok, task} = Aerospike.register_udf(name, @udf_fixture, @server_name)
     :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000)
 
+    on_exit(fn -> Helpers.cleanup_udf(@server_name, host: host, port: port) end)
+
     {:ok, conn: name, host: host, port: port}
   end
 
@@ -145,7 +147,7 @@ defmodule Aerospike.Integration.UDFTest do
 
       on_exit(fn ->
         Helpers.cleanup_key(key, host: host, port: port)
-        maybe_remove_udf(conn, server_name)
+        Helpers.cleanup_udf(server_name, host: host, port: port)
       end)
 
       assert {:ok, task} = Aerospike.register_udf(conn, source, server_name)
@@ -165,14 +167,6 @@ defmodule Aerospike.Integration.UDFTest do
   defp unique_key do
     suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
     Aerospike.key("test", "udf_itest", suffix)
-  end
-
-  defp maybe_remove_udf(conn, server_name) do
-    if :ets.whereis(Tables.meta(conn)) != :undefined do
-      _ = Aerospike.remove_udf(conn, server_name)
-    end
-
-    :ok
   end
 
   defp assert_eventually(fun, opts) when is_function(fun, 0) and is_list(opts) do
