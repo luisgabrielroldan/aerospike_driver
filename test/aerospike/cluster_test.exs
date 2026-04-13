@@ -62,6 +62,50 @@ defmodule Aerospike.ClusterTest do
       assert_await(fn -> match?([{"PEER_B", _}], :ets.lookup(Tables.nodes(name), "PEER_B")) end)
     end
 
+    test "tend cycle refreshes partitions for peers discovered after bootstrap",
+         %{name: name} do
+      # Regression for the post-bootstrap peer-tend gap: `add_peer_nodes/3`
+      # uses a `for` comprehension that discards the `{:ok, conn}` returned
+      # by `add_peer_node/4`, so peers discovered via the periodic tend loop
+      # land in `Tables.nodes/1` but never enter `state.tend_conns`. Because
+      # `tend_refresh_partitions/1` iterates `state.tend_conns`, the new
+      # peer's partitions are never fetched. Bootstrap survives this bug
+      # only because `build_partition_map/1` fans out across `Tables.nodes/1`
+      # — that fanout does not exist on the periodic path.
+      #
+      # This test boots a seed with an empty peer list, then mutates its
+      # `peers-clear-std` reply to advertise a second peer. The new peer
+      # owns a disjoint partition (#7). The convergence predicate spot-
+      # checks that specific row, so a stale-but-complete map cannot pass
+      # for the wrong reason.
+      late_peer = start_info_server("PEER_LATE", partition_generation: 1, partitions: [7])
+      on_exit(fn -> stop_info_server(late_peer) end)
+
+      seed = start_info_server("SEED_A", peers: peers_payload(1, []), partitions: [0])
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Sanity: only the seed's partitions are present pre-discovery.
+      assert [{{"test", 0, 0}, "SEED_A"}] = :ets.lookup(Tables.partitions(name), {"test", 0, 0})
+      assert [] = :ets.lookup(Tables.partitions(name), {"test", 7, 0})
+
+      update_info_server(
+        seed,
+        peers: peers_payload(2, [{"PEER_LATE", "127.0.0.1", late_peer.port}])
+      )
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 7, 0}) ==
+            [{{"test", 7, 0}, "PEER_LATE"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+    end
+
     test "tend refresh updates partition table when generation changes", %{name: name} do
       seed = start_info_server("SEED_A", partition_generation: 1, partitions: [0])
       on_exit(fn -> stop_info_server(seed) end)

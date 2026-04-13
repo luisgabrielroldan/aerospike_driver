@@ -239,7 +239,7 @@ defmodule Aerospike.Cluster do
     with {:ok, conn, node_name, host, port} <- connect_first_seed(state),
          {:ok, pool_pid} <- ensure_node_pool(state, node_name, host, port),
          :ok <- insert_node_registry(state, node_name, host, port, pool_pid),
-         {:ok, conn, peers_gen} <- discover_peers(state, conn, node_name),
+         {:ok, state, conn, peers_gen} <- discover_peers(state, conn, node_name),
          {:ok, state} <- build_partition_map(state) do
       state = %{
         state
@@ -253,25 +253,46 @@ defmodule Aerospike.Cluster do
   end
 
   # Asks the seed node for its peer list via the `peers-clear-std` info command.
-  # Non-fatal: returns `{:ok, conn, nil}` if peer discovery is unavailable.
+  # Non-fatal: returns `{:ok, state, conn, nil}` if peer discovery is unavailable.
   defp discover_peers(state, conn, seed_node_name) do
     with {:ok, conn, info} <- Connection.request_info(conn, ["peers-clear-std"]),
          raw when is_binary(raw) <- Map.get(info, "peers-clear-std"),
          {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw) do
-      add_peer_nodes(state, peers, seed_node_name)
-      {:ok, conn, gen}
+      new_conns = add_peer_nodes(state, peers, seed_node_name)
+      {:ok, merge_tend_conns(state, new_conns), conn, gen}
     else
-      _ -> {:ok, conn, nil}
+      _ -> {:ok, state, conn, nil}
     end
   end
 
   # Registers each peer that isn't already known and isn't the seed itself.
+  # Returns a `%{node_name => tend_conn}` map of peers that handshook successfully;
+  # peers whose handshake fails are silently dropped so one bad peer cannot poison
+  # the rest of the discovery pass.
   defp add_peer_nodes(state, peers, seed_node_name) do
-    for %{node_name: node_name, host: host, port: port} <- peers,
-        node_name != seed_node_name,
-        not node_registered?(state, node_name) do
-      add_peer_node(state, node_name, host, port)
-    end
+    peers
+    |> Enum.filter(&new_peer?(state, &1, seed_node_name))
+    |> Enum.reduce(%{}, fn %{node_name: node_name, host: host, port: port}, acc ->
+      case add_peer_node(state, node_name, host, port) do
+        {:ok, conn} -> Map.put(acc, node_name, conn)
+        :error -> acc
+      end
+    end)
+  end
+
+  defp new_peer?(_state, %{node_name: node_name}, seed_node_name)
+       when node_name == seed_node_name,
+       do: false
+
+  defp new_peer?(state, %{node_name: node_name}, _seed_node_name),
+    do: not node_registered?(state, node_name)
+
+  # Merges newly-opened peer tend conns into `state.tend_conns`. New entries
+  # win on collision because `add_peer_nodes/3` filters via `node_registered?/2`,
+  # so the only way a key collision can happen is a stale entry the new conn
+  # should logically supersede.
+  defp merge_tend_conns(state, new_conns) when is_map(new_conns) do
+    %{state | tend_conns: Map.merge(state.tend_conns, new_conns)}
   end
 
   # Connects to a peer, verifies its node name matches what the seed reported,
@@ -422,9 +443,10 @@ defmodule Aerospike.Cluster do
          raw when is_binary(raw) <- Map.get(info, "peers-clear-std"),
          {:ok, %{generation: gen, peers: peers}} <- Peers.parse_peers_clear_std(raw),
          true <- gen != state.peers_generation do
-      add_peer_nodes(state, peers, node_name)
+      new_conns = add_peer_nodes(state, peers, node_name)
 
       state
+      |> merge_tend_conns(new_conns)
       |> prune_departed_peers(peers, node_name)
       |> Map.put(:peers_generation, gen)
       |> Map.update!(:tend_conns, &Map.put(&1, node_name, conn))
