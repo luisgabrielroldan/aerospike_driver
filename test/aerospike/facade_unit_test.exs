@@ -417,6 +417,17 @@ defmodule Aerospike.FacadeUnitTest do
                Aerospike.set_xdr_filter(:nonexistent, "dc-west", "test", Exp.from_wire(""))
     end
 
+    test "phase 5 enable_metrics and warm_up reject unknown opts" do
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.enable_metrics(:nonexistent, bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.warm_up(:nonexistent, bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.warm_up(:nonexistent, count: -1)
+    end
+
     test "udf wrappers cover opts variants and key coercion error", %{key: key} do
       conn = :"facade_udf_#{System.unique_integer([:positive, :monotonic])}"
       meta = Tables.meta(conn)
