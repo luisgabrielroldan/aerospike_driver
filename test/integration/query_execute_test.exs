@@ -1,5 +1,5 @@
 defmodule Aerospike.Integration.QueryExecuteTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import Aerospike.Op
 

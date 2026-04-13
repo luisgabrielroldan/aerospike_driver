@@ -1,5 +1,5 @@
 defmodule Aerospike.Integration.IndexTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Aerospike.Ctx
   alias Aerospike.Exp
