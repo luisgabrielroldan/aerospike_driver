@@ -35,6 +35,7 @@ defmodule Aerospike.NodeSupervisor do
   """
   @spec start_pool(pid() | atom(), keyword()) :: DynamicSupervisor.on_start_child()
   def start_pool(supervisor, opts) when is_list(opts) do
+    conn_name = Keyword.get(opts, :conn_name)
     pool_size = Keyword.fetch!(opts, :pool_size)
     connect_opts = Keyword.fetch!(opts, :connect_opts)
     auth_opts = Keyword.get(opts, :auth_opts, [])
@@ -46,7 +47,12 @@ defmodule Aerospike.NodeSupervisor do
         {NimblePool, :start_link,
          [
            [
-             worker: {Aerospike.NodePool, connect_opts: connect_opts, auth_opts: auth_opts},
+             worker:
+               {Aerospike.NodePool,
+                connect_opts: connect_opts,
+                auth_opts: auth_opts,
+                conn_name: conn_name,
+                node_name: node_name},
              pool_size: pool_size
            ]
          ]},

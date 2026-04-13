@@ -8,6 +8,7 @@ defmodule Aerospike.NodePool do
   @behaviour NimblePool
 
   alias Aerospike.Connection
+  alias Aerospike.RuntimeMetrics
 
   # Pool state is the keyword opts passed at pool start (connect_opts, auth_opts).
   @impl NimblePool
@@ -21,15 +22,26 @@ defmodule Aerospike.NodePool do
   def init_worker(pool_state) when is_list(pool_state) do
     connect_opts = Keyword.fetch!(pool_state, :connect_opts)
     auth_opts = Keyword.get(pool_state, :auth_opts, [])
+    conn_name = Keyword.get(pool_state, :conn_name)
+    node_name = Keyword.get(pool_state, :node_name)
+
+    RuntimeMetrics.record_connection_attempt(conn_name, node_name)
 
     case Connection.connect(connect_opts) do
       {:ok, conn} ->
         case Connection.login(conn, auth_opts) do
-          {:ok, conn2} -> {:ok, conn2, pool_state}
-          {:error, reason} -> {:cancel, reason, pool_state}
+          {:ok, conn2} ->
+            RuntimeMetrics.record_connection_success(conn_name, node_name)
+            {:ok, conn2, pool_state}
+
+          {:error, reason} ->
+            _ = Connection.close(conn)
+            RuntimeMetrics.record_connection_failure(conn_name, node_name)
+            {:cancel, reason, pool_state}
         end
 
       {:error, reason} ->
+        RuntimeMetrics.record_connection_failure(conn_name, node_name)
         {:cancel, reason, pool_state}
     end
   end
@@ -38,11 +50,26 @@ defmodule Aerospike.NodePool do
   @impl NimblePool
   def handle_checkout(:checkout, _from, conn, pool_state) do
     if Connection.idle?(conn) do
+      RuntimeMetrics.record_connection_drop(
+        Keyword.get(pool_state, :conn_name),
+        Keyword.get(pool_state, :node_name),
+        :idle
+      )
+
       {:remove, :idle, pool_state}
     else
       case Connection.transport_peername(conn) do
-        {:ok, _} -> {:ok, conn, conn, pool_state}
-        {:error, _} -> {:remove, :dead, pool_state}
+        {:ok, _} ->
+          {:ok, conn, conn, pool_state}
+
+        {:error, _} ->
+          RuntimeMetrics.record_connection_drop(
+            Keyword.get(pool_state, :conn_name),
+            Keyword.get(pool_state, :node_name),
+            :dead
+          )
+
+          {:remove, :dead, pool_state}
       end
     end
   end
@@ -61,6 +88,11 @@ defmodule Aerospike.NodePool do
 
   @impl NimblePool
   def terminate_worker(_reason, conn, pool_state) do
+    RuntimeMetrics.record_connection_closed(
+      Keyword.get(pool_state, :conn_name),
+      Keyword.get(pool_state, :node_name)
+    )
+
     _ = Connection.close(conn)
     {:ok, pool_state}
   end

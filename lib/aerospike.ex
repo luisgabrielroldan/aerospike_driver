@@ -64,6 +64,7 @@ defmodule Aerospike do
   alias Aerospike.Query
   alias Aerospike.RegisterTask
   alias Aerospike.Role
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Scan
   alias Aerospike.ScanOps
   alias Aerospike.Supervisor, as: AeroSupervisor
@@ -1792,6 +1793,44 @@ defmodule Aerospike do
   """
   @spec node_names(conn()) :: {:ok, [String.t()]} | {:error, Error.t()}
   def node_names(conn) when is_atom(conn), do: Admin.node_names(conn)
+
+  @doc """
+  Returns whether client-managed command metrics are enabled for `conn`.
+  """
+  @spec metrics_enabled?(conn()) :: boolean()
+  def metrics_enabled?(conn) when is_atom(conn), do: RuntimeMetrics.metrics_enabled?(conn)
+
+  @doc """
+  Enables client-managed command metrics collection for `conn`.
+
+  ## Options
+
+  * `:reset` — when `true`, clears previously collected command metrics before enabling.
+
+  """
+  @spec enable_metrics(conn(), keyword()) :: :ok | {:error, Error.t()}
+  def enable_metrics(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case NimbleOptions.validate(opts, reset: [type: :boolean]) do
+      {:ok, call_opts} ->
+        RuntimeMetrics.enable(conn, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Disables client-managed command metrics collection for `conn`.
+  """
+  @spec disable_metrics(conn()) :: :ok | {:error, Error.t()}
+  def disable_metrics(conn) when is_atom(conn), do: RuntimeMetrics.disable(conn)
+
+  @doc """
+  Returns runtime stats for `conn` with top-level summary fields plus nested cluster and node sections.
+  """
+  @spec stats(conn()) :: map()
+  def stats(conn) when is_atom(conn), do: RuntimeMetrics.stats(conn)
 
   @doc """
   Creates a password-authenticated security user.

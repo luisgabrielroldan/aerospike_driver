@@ -21,6 +21,7 @@ defmodule Aerospike.Cluster do
   alias Aerospike.NodeSupervisor
   alias Aerospike.Protocol.PartitionMap
   alias Aerospike.Protocol.Peers
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Tables
 
   @default_connect_timeout 5_000
@@ -91,6 +92,11 @@ defmodule Aerospike.Cluster do
       {:breaker_config, %{max_error_rate: max_error_rate, error_rate_window: error_rate_window}}
     )
 
+    RuntimeMetrics.init(name,
+      pool_size: Keyword.get(opts, :pool_size, @default_pool_size),
+      tend_interval: Keyword.get(opts, :tend_interval, @default_tend_interval)
+    )
+
     state = %{
       name: name,
       # Parsed seed addresses as `{host, port}` tuples.
@@ -120,6 +126,7 @@ defmodule Aerospike.Cluster do
 
   @impl true
   def terminate(_reason, state) do
+    RuntimeMetrics.detach(state.name)
     Enum.each(state.tend_conns, fn {_node, conn} -> Connection.close(conn) end)
     :ok
   end
@@ -139,10 +146,13 @@ defmodule Aerospike.Cluster do
 
       case do_initial_tend(state) do
         {:ok, new_state} ->
+          RuntimeMetrics.record_tend(state.name, :ok)
           _ = schedule_tend(new_state)
           {:noreply, %{new_state | bootstrapped: true}}
 
         {:error, reason} ->
+          RuntimeMetrics.record_tend(state.name, :error)
+
           Logger.warning(
             "Cluster #{state.name}: seed connection failed (#{inspect(reason)}), retrying"
           )
@@ -158,11 +168,13 @@ defmodule Aerospike.Cluster do
   def handle_info(:tend, %{bootstrapped: false} = state) do
     case do_initial_tend(state) do
       {:ok, new_state} ->
+        RuntimeMetrics.record_tend(state.name, :ok)
         Logger.info("Cluster #{state.name}: seed connected, cluster ready")
         _ = schedule_tend(new_state)
         {:noreply, %{new_state | bootstrapped: true}}
 
       {:error, _reason} ->
+        RuntimeMetrics.record_tend(state.name, :error)
         _ = schedule_tend(state)
         {:noreply, state}
     end
@@ -174,6 +186,7 @@ defmodule Aerospike.Cluster do
     state = %{state | tend_tick: state.tend_tick + 1}
     CircuitBreaker.maybe_reset_window(state.name, state.tend_tick, state.error_rate_window)
     new_state = do_periodic_tend(state)
+    RuntimeMetrics.record_tend(state.name, :ok)
     _ = schedule_tend(new_state)
     {:noreply, new_state}
   end
@@ -292,6 +305,7 @@ defmodule Aerospike.Cluster do
           end
       end)
 
+    RuntimeMetrics.record_partition_map_update(state.name)
     {:ok, %{state | tend_conns: conns, partition_generation: gen}}
   end
 
@@ -408,6 +422,7 @@ defmodule Aerospike.Cluster do
     case :ets.lookup(Tables.nodes(state.name), node_name) do
       [{^node_name, %{pool_pid: pool_pid}}] when is_pid(pool_pid) ->
         _ = stop_pool_and_wait(state.node_supervisor, pool_pid)
+        RuntimeMetrics.record_node_removed(state.name, node_name)
 
       _ ->
         :ok
@@ -490,6 +505,7 @@ defmodule Aerospike.Cluster do
           :ets.insert(Tables.partitions(state.name), {{ns, pid, ridx}, nn})
         end)
 
+        RuntimeMetrics.record_partition_map_update(state.name)
         {:ok, conn, gen}
 
       {:error, _} = err ->
@@ -539,6 +555,7 @@ defmodule Aerospike.Cluster do
   # Starts a NimblePool for the node, or returns the existing one if already running.
   defp ensure_node_pool(state, node_name, host, port) do
     opts = [
+      conn_name: state.name,
       node_name: node_name,
       pool_size: state.pool_size,
       connect_opts: connection_opts(state, host, port),
@@ -656,6 +673,10 @@ defmodule Aerospike.Cluster do
   # this to look up pool PIDs when routing requests.
   @spec insert_node_registry(map(), String.t(), String.t(), non_neg_integer(), pid()) :: :ok
   defp insert_node_registry(state, node_name, host, port, pool_pid) do
+    if :ets.lookup(Tables.nodes(state.name), node_name) == [] do
+      RuntimeMetrics.record_node_added(state.name, node_name)
+    end
+
     row = node_registry_row(host, port, pool_pid)
     :ets.insert(Tables.nodes(state.name), {node_name, row})
     :ok
