@@ -12,7 +12,7 @@ defmodule Aerospike.Integration.SCQueryTest do
 
       mix test --include integration --include enterprise
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Aerospike.Connection
   alias Aerospike.Exp
@@ -29,7 +29,7 @@ defmodule Aerospike.Integration.SCQueryTest do
   @set "sc_query_bug"
   @index_name "idx_age_sc_query"
 
-  setup do
+  setup_all do
     host = System.get_env("AEROSPIKE_EE_HOST", "127.0.0.1")
     port = System.get_env("AEROSPIKE_EE_PORT", "3100") |> String.to_integer()
 
