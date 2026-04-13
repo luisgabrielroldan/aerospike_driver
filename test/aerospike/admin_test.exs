@@ -13,6 +13,11 @@ defmodule Aerospike.AdminTest do
   alias Aerospike.Test.MockTcpServer
   alias Aerospike.User
 
+  @hash_secret PasswordHash.hash("secret")
+  @hash_oldsecret PasswordHash.hash("oldsecret")
+  @hash_newsecret PasswordHash.hash("newsecret")
+  @hash_admin_secret PasswordHash.hash("admin-secret")
+
   defp start_ets(name) do
     :ets.new(Tables.nodes(name), [:set, :public, :named_table, read_concurrency: true])
     :ets.new(Tables.meta(name), [:set, :public, :named_table])
@@ -468,7 +473,7 @@ defmodule Aerospike.AdminTest do
           assert command_id(body) == 1
           fields = decode_fields(body)
           assert Map.fetch!(fields, 0) == "ada"
-          assert Map.fetch!(fields, 1) == PasswordHash.hash("secret")
+          assert Map.fetch!(fields, 1) == @hash_secret
           MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
         end)
 
@@ -497,7 +502,7 @@ defmodule Aerospike.AdminTest do
     end
 
     test "change_password uses the self-service command when the auth user matches", %{name: name} do
-      old_credential = PasswordHash.hash("oldsecret")
+      old_credential = @hash_oldsecret
 
       {:ok, pool_pid, server} =
         start_pool_with_server(
@@ -512,7 +517,7 @@ defmodule Aerospike.AdminTest do
             fields = decode_fields(body)
             assert Map.fetch!(fields, 0) == "alice"
             assert Map.fetch!(fields, 2) == old_credential
-            assert Map.fetch!(fields, 1) == PasswordHash.hash("newsecret")
+            assert Map.fetch!(fields, 1) == @hash_newsecret
             MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
           end,
           user: "alice",
@@ -525,12 +530,12 @@ defmodule Aerospike.AdminTest do
       assert :ok = Admin.change_password(name, "alice", "newsecret", [])
 
       assert [{:auth_opts, auth_opts}] = :ets.lookup(Tables.meta(name), :auth_opts)
-      assert Keyword.fetch!(auth_opts, :credential) == PasswordHash.hash("newsecret")
+      assert Keyword.fetch!(auth_opts, :credential) == @hash_newsecret
       Task.await(server)
     end
 
     test "change_password uses the admin set-password command for non-self changes", %{name: name} do
-      caller_credential = PasswordHash.hash("admin-secret")
+      caller_credential = @hash_admin_secret
 
       {:ok, pool_pid, server} =
         start_pool_with_server(
@@ -544,7 +549,7 @@ defmodule Aerospike.AdminTest do
             assert command_id(body) == 3
             fields = decode_fields(body)
             assert Map.fetch!(fields, 0) == "bob"
-            assert Map.fetch!(fields, 1) == PasswordHash.hash("newsecret")
+            assert Map.fetch!(fields, 1) == @hash_newsecret
             refute Map.has_key?(fields, 2)
             MockTcpServer.send_admin_response(client, :binary.copy(<<0>>, 16))
           end,
@@ -563,7 +568,7 @@ defmodule Aerospike.AdminTest do
     end
 
     test "change_password does not rotate auth state when self-change fails", %{name: name} do
-      old_credential = PasswordHash.hash("oldsecret")
+      old_credential = @hash_oldsecret
 
       {:ok, pool_pid, server} =
         start_pool_with_server(
@@ -578,7 +583,7 @@ defmodule Aerospike.AdminTest do
             fields = decode_fields(body)
             assert Map.fetch!(fields, 0) == "alice"
             assert Map.fetch!(fields, 2) == old_credential
-            assert Map.fetch!(fields, 1) == PasswordHash.hash("newsecret")
+            assert Map.fetch!(fields, 1) == @hash_newsecret
             MockTcpServer.send_admin_response(client, admin_record(64, []))
           end,
           user: "alice",
