@@ -4,7 +4,6 @@ defmodule Aerospike.Integration.BatchTest do
   import Aerospike.Op
 
   alias Aerospike.Batch
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
   defmodule TelemetryForwarder do
@@ -45,7 +44,7 @@ defmodule Aerospike.Integration.BatchTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     {:ok, conn: name, host: host, port: port}
   end
@@ -266,16 +265,5 @@ defmodule Aerospike.Integration.BatchTest do
     assert_receive {:telemetry_cmd, :stop, stop_meta}
     assert stop_meta.result == :ok
     assert stop_meta.batch_size == 1
-  end
-
-  defp await_cluster_ready(name, attempts \\ 50)
-
-  defp await_cluster_ready(_name, 0), do: flunk("cluster not ready")
-
-  defp await_cluster_ready(name, n) do
-    case :ets.lookup(Tables.meta(name), Tables.ready_key()) do
-      [{_, true}] -> :ok
-      _ -> Process.sleep(20) && await_cluster_ready(name, n - 1)
-    end
   end
 end

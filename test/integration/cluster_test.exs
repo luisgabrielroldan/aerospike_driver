@@ -26,7 +26,7 @@ defmodule Aerospike.Integration.ClusterTest do
     ]
 
     {:ok, sup} = start_supervised({Aerospike.Supervisor, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     {:ok, name: name, sup: sup, host: host, port: port}
   end
@@ -106,7 +106,7 @@ defmodule Aerospike.Integration.ClusterTest do
     assert :ets.info(Tables.partitions(name)) != :undefined
     assert :ets.info(Tables.meta(name)) != :undefined
 
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     wire_put = Helpers.put_wire(key, %{"x" => 99})
     assert {:ok, body, _node} = Router.run(name, key, wire_put, pool_checkout_timeout: 5_000)
@@ -126,7 +126,7 @@ defmodule Aerospike.Integration.ClusterTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike.Supervisor, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     node_count_before = :ets.info(Tables.nodes(name), :size)
     part_count_before = :ets.info(Tables.partitions(name), :size)
@@ -150,7 +150,7 @@ defmodule Aerospike.Integration.ClusterTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike.Supervisor, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
     assert [{_, true}] = :ets.lookup(Tables.meta(name), Tables.ready_key())
   end
 
@@ -284,12 +284,6 @@ defmodule Aerospike.Integration.ClusterTest do
         |> String.to_integer()
 
       {node_name, gen}
-    end)
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    poll_until(timeout, "cluster not ready", fn ->
-      match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
     end)
   end
 

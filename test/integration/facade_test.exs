@@ -2,7 +2,6 @@ defmodule Aerospike.Integration.FacadeTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Exp
-  alias Aerospike.Tables
   alias Aerospike.Test.Helpers
 
   defmodule TelemetryForwarder do
@@ -42,7 +41,7 @@ defmodule Aerospike.Integration.FacadeTest do
     ]
 
     {:ok, _sup} = start_supervised({Aerospike, opts})
-    await_cluster_ready(name)
+    Helpers.await_cluster_ready(name)
 
     {:ok, conn: name, host: host, port: port}
   end
@@ -492,29 +491,6 @@ defmodule Aerospike.Integration.FacadeTest do
     assert {:ok, pid} = Aerospike.start_link(opts)
     assert is_pid(pid)
     :ok = Aerospike.close(name)
-  end
-
-  defp await_cluster_ready(name, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_cluster_ready_loop(name, deadline)
-  end
-
-  defp await_cluster_ready_loop(name, deadline) do
-    cond do
-      cluster_ready?(name) ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("cluster not ready")
-
-      true ->
-        Process.sleep(50)
-        await_cluster_ready_loop(name, deadline)
-    end
-  end
-
-  defp cluster_ready?(name) do
-    match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))
   end
 
   defp assert_eventually(fun, retries \\ 20, interval \\ 200) do
