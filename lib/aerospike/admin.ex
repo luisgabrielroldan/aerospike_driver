@@ -3,6 +3,7 @@ defmodule Aerospike.Admin do
 
   alias Aerospike.Admin.PasswordHash
   alias Aerospike.Cluster
+  alias Aerospike.Command
   alias Aerospike.Connection
   alias Aerospike.Error
   alias Aerospike.Exp
@@ -1044,15 +1045,10 @@ defmodule Aerospike.Admin do
   defp with_telemetry(command, conn, fun) when is_atom(command) and is_atom(conn) do
     meta = %{command: command, conn: conn}
 
-    :telemetry.span([:aerospike, :command], meta, fn ->
+    Command.run(meta, fn ->
       {result, node} = fun.()
-      stop = %{result: telemetry_result(result)}
-      stop = if node, do: Map.put(stop, :node, node), else: stop
+      stop = if node, do: %{node: node}, else: %{}
       {result, stop}
     end)
   end
-
-  defp telemetry_result(:ok), do: :ok
-  defp telemetry_result({:ok, _}), do: :ok
-  defp telemetry_result({:error, %Error{code: code}}), do: {:error, code}
 end

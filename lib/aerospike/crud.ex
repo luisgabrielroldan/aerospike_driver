@@ -13,6 +13,7 @@ defmodule Aerospike.CRUD do
   # 5. Decode the response, track transaction state, and emit telemetry.
 
   alias Aerospike.CircuitBreaker
+  alias Aerospike.Command
   alias Aerospike.Error
   alias Aerospike.Exp
   alias Aerospike.Key
@@ -426,17 +427,12 @@ defmodule Aerospike.CRUD do
   defp with_telemetry(command, key, conn, fun) when is_atom(command) and is_atom(conn) do
     meta = %{command: command, namespace: key.namespace, set: key.set, conn: conn}
 
-    :telemetry.span([:aerospike, :command], meta, fn ->
+    Command.run(meta, fn ->
       {result, node} = fun.()
-      stop = %{result: telemetry_result(result)}
-      stop = if node, do: Map.put(stop, :node, node), else: stop
+      stop = if node, do: %{node: node}, else: %{}
       {result, stop}
     end)
   end
-
-  defp telemetry_result(:ok), do: :ok
-  defp telemetry_result({:ok, _}), do: :ok
-  defp telemetry_result({:error, %Error{code: code}}), do: {:error, code}
 
   defp encode_write(conn, key, bins, merged, op_type) do
     ops = Value.encode_bin_operations(bins, op_type)

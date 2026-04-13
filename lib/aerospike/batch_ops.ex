@@ -5,6 +5,7 @@ defmodule Aerospike.BatchOps do
 
   alias Aerospike.Batch
   alias Aerospike.CircuitBreaker
+  alias Aerospike.Command
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Policy
@@ -266,14 +267,12 @@ defmodule Aerospike.BatchOps do
   defp with_telemetry(command, conn, keys_or_ops, fun) when is_atom(command) and is_atom(conn) do
     {namespace, set} = telemetry_ns_set(keys_or_ops)
     meta = %{command: command, namespace: namespace, set: set, conn: conn}
+    bs = batch_size(keys_or_ops)
 
-    :telemetry.span([:aerospike, :command], meta, fn ->
+    Command.run(meta, fn ->
       case fun.() do
-        {:ok, _} = ok ->
-          {ok, Map.merge(meta, %{result: :ok, batch_size: batch_size(keys_or_ops)})}
-
-        {:error, %Error{code: code}} = err ->
-          {err, Map.merge(meta, %{result: {:error, code}, batch_size: batch_size(keys_or_ops)})}
+        {:ok, _} = ok -> {ok, %{batch_size: bs}}
+        {:error, %Error{code: _}} = err -> {err, %{batch_size: bs}}
       end
     end)
   end

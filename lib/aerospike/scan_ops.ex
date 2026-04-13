@@ -4,6 +4,7 @@ defmodule Aerospike.ScanOps do
   # Scan/query orchestration: partition routing, per-node wire build, fan-out, streaming.
 
   alias Aerospike.CircuitBreaker
+  alias Aerospike.Command
   alias Aerospike.Connection
   alias Aerospike.Cursor
   alias Aerospike.Error
@@ -534,13 +535,7 @@ defmodule Aerospike.ScanOps do
         parent = self()
         checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
         meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
-        t0 = :erlang.monotonic_time()
-
-        :telemetry.execute(
-          [:aerospike, :command, :start],
-          %{monotonic_time: t0},
-          meta
-        )
+        telemetry = Command.emit_start(meta)
 
         producer =
           spawn_link(fn ->
@@ -564,20 +559,14 @@ defmodule Aerospike.ScanOps do
           producer: producer,
           monitor_ref: monitor_ref,
           done: false,
-          telemetry: %{t0: t0, meta: meta}
+          telemetry: telemetry
         }
 
       {:error, %Error{} = err} ->
-        t0 = :erlang.monotonic_time()
         meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
+        telemetry = Command.emit_start(meta)
 
-        :telemetry.execute(
-          [:aerospike, :command, :start],
-          %{monotonic_time: t0},
-          meta
-        )
-
-        %{failed: err, telemetry: %{t0: t0, meta: meta}}
+        %{failed: err, telemetry: telemetry}
     end
   end
 
@@ -611,13 +600,7 @@ defmodule Aerospike.ScanOps do
         parent = self()
         checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
         meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
-        t0 = :erlang.monotonic_time()
-
-        :telemetry.execute(
-          [:aerospike, :command, :start],
-          %{monotonic_time: t0},
-          meta
-        )
+        telemetry = Command.emit_start(meta)
 
         producer =
           spawn_link(fn ->
@@ -639,31 +622,19 @@ defmodule Aerospike.ScanOps do
           producer: producer,
           monitor_ref: monitor_ref,
           done: false,
-          telemetry: %{t0: t0, meta: meta}
+          telemetry: telemetry
         }
 
       {:error, %Error{} = err} ->
-        t0 = :erlang.monotonic_time()
         meta = stream_telemetry_meta(command, conn_name, scannable, ns, set)
+        telemetry = Command.emit_start(meta)
 
-        :telemetry.execute(
-          [:aerospike, :command, :start],
-          %{monotonic_time: t0},
-          meta
-        )
-
-        %{failed: err, telemetry: %{t0: t0, meta: meta}}
+        %{failed: err, telemetry: telemetry}
     end
   end
 
-  defp next_stream(%{failed: %Error{} = e, telemetry: %{t0: t0, meta: meta}}) do
-    duration = :erlang.monotonic_time() - t0
-
-    :telemetry.execute(
-      [:aerospike, :command, :exception],
-      %{duration: duration, monotonic_time: :erlang.monotonic_time()},
-      Map.put(meta, :kind, :error)
-    )
+  defp next_stream(%{failed: %Error{} = e, telemetry: telemetry}) do
+    Command.emit_exception(telemetry, :error, e, [])
 
     raise e
   end
@@ -719,14 +690,8 @@ defmodule Aerospike.ScanOps do
 
   defp maybe_emit_stream_stop(%{failed: _}), do: :ok
 
-  defp maybe_emit_stream_stop(%{telemetry: %{t0: t0, meta: meta}}) do
-    duration = :erlang.monotonic_time() - t0
-
-    :telemetry.execute(
-      [:aerospike, :command, :stop],
-      %{duration: duration, monotonic_time: :erlang.monotonic_time()},
-      meta
-    )
+  defp maybe_emit_stream_stop(%{telemetry: telemetry}) do
+    Command.emit_stop(telemetry, %{}, :ok)
   end
 
   defp maybe_emit_stream_stop(_), do: :ok
@@ -1620,15 +1585,11 @@ defmodule Aerospike.ScanOps do
       kind: scan_query_kind(scannable)
     }
 
-    :telemetry.span([:aerospike, :command], meta, fn ->
+    Command.run(meta, fn ->
       result = fun.()
-      stop = %{result: telemetry_scan_result(result)}
-      {result, stop}
+      {result, %{}}
     end)
   end
-
-  defp telemetry_scan_result({:ok, _}), do: :ok
-  defp telemetry_scan_result({:error, %Error{code: code}}), do: {:error, code}
 
   defp maybe_record_device_overload(
          conn_name,

@@ -147,7 +147,6 @@ defmodule Aerospike.Cluster do
 
   @impl true
   def terminate(_reason, state) do
-    RuntimeMetrics.detach(state.name)
     Enum.each(state.tend_conns, fn {_node, conn} -> Connection.close(conn) end)
     :ok
   end

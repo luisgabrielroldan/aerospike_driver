@@ -3,8 +3,6 @@ defmodule Aerospike.RuntimeMetricsTest do
 
   alias Aerospike.Tables
 
-  @command_stop_event [:aerospike, :command, :stop]
-
   setup do
     conn = :"runtime_metrics_#{System.unique_integer([:positive, :monotonic])}"
     meta = Tables.meta(conn)
@@ -19,8 +17,6 @@ defmodule Aerospike.RuntimeMetricsTest do
     :ets.insert(nodes, {"node-a", %{host: "127.0.0.1", port: 3000, active: true}})
 
     on_exit(fn ->
-      Aerospike.RuntimeMetrics.detach(conn)
-
       for table <- [meta, nodes, parts] do
         try do
           :ets.delete(table)
@@ -91,30 +87,8 @@ defmodule Aerospike.RuntimeMetricsTest do
     assert stats.nodes["node-a"].connections.open == 1
   end
 
-  defp emit_command_stop(conn, command, result, node_name, duration_us) do
-    duration_native = System.convert_time_unit(duration_us, :microsecond, :native)
-    span_ctx = make_ref()
-
-    :telemetry.execute(
-      [:aerospike, :command, :start],
-      %{monotonic_time: System.monotonic_time(), system_time: System.system_time()},
-      %{
-        conn: conn,
-        command: command,
-        telemetry_span_context: span_ctx,
-        namespace: "test",
-        set: "users"
-      }
-    )
-
-    :telemetry.execute(
-      @command_stop_event,
-      %{duration: duration_native},
-      %{
-        result: result,
-        node: node_name,
-        telemetry_span_context: span_ctx
-      }
-    )
+  defp emit_command_stop(conn, command, result, node_name, _duration_us) do
+    start_mono = System.monotonic_time()
+    Aerospike.RuntimeMetrics.record(conn, command, start_mono, result, node_name)
   end
 end
