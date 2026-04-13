@@ -185,6 +185,29 @@ defmodule Aerospike.Integration.ClusterTest do
     refute Aerospike.metrics_enabled?(name)
   end
 
+  test "warm_up exercises the current discovered node pools", %{name: name} do
+    stats = Aerospike.stats(name)
+
+    assert {:ok, result} = Aerospike.warm_up(name, count: 10, pool_checkout_timeout: 5_000)
+
+    assert result.status == :ok
+    assert result.nodes_total == stats.nodes_total
+    assert result.requested_per_node == stats.cluster.config.pool_size
+    assert result.total_requested == result.nodes_total * result.requested_per_node
+    assert result.total_warmed == result.total_requested
+    assert result.nodes_ok == result.nodes_total
+    assert result.nodes_partial == 0
+    assert result.nodes_error == 0
+    assert map_size(result.nodes) == result.nodes_total
+
+    assert Enum.all?(result.nodes, fn {_node_name, node_result} ->
+             node_result.status == :ok and
+               node_result.requested == result.requested_per_node and
+               node_result.warmed == result.requested_per_node and
+               is_nil(node_result.error)
+           end)
+  end
+
   defp await_cluster_ready(name, timeout \\ 5_000) do
     poll_until(timeout, "cluster not ready", fn ->
       match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))

@@ -44,6 +44,7 @@ defmodule Aerospike.NodePoolTest do
   defp pool_child_spec(port, overrides \\ []) do
     idle_timeout = Keyword.get(overrides, :idle_timeout, 55_000)
     auth_opts = Keyword.get(overrides, :auth_opts, [])
+    pool_size = Keyword.get(overrides, :pool_size, 1)
 
     {NimblePool,
      worker:
@@ -55,7 +56,7 @@ defmodule Aerospike.NodePoolTest do
           idle_timeout: idle_timeout
         ],
         auth_opts: auth_opts},
-     pool_size: 1}
+     pool_size: pool_size}
   end
 
   # ── init_worker ──
@@ -200,6 +201,24 @@ defmodule Aerospike.NodePoolTest do
         end)
 
       assert result == :alive
+    end
+  end
+
+  describe "warm_up" do
+    test "checks out the requested number of pooled connections" do
+      mock = start_mock(2)
+      on_exit(fn -> stop_mock(mock) end)
+
+      pool = start_supervised!(pool_child_spec(mock.port, pool_size: 2))
+
+      assert {:ok, 2} = NodePool.warm_up(pool, 2, 3_000)
+    end
+
+    test "returns a pool_timeout error when the pool cannot serve the checkout" do
+      {:ok, pool} =
+        start_supervised({NimblePool, worker: {Aerospike.Test.SlowPoolWorker, []}, pool_size: 1})
+
+      assert {:error, %Aerospike.Error{code: :pool_timeout}, 0} = NodePool.warm_up(pool, 1, 10)
     end
   end
 

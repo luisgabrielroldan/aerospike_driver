@@ -113,6 +113,7 @@ defmodule Aerospike.Repo do
     {:enable_metrics, [{:opts, []}]},
     {:disable_metrics, []},
     {:stats, []},
+    {:warm_up, [{:opts, []}]},
     {:create_index, [:namespace, :set, :opts]},
     {:create_expression_index, [:namespace, :set, :expression, :opts]},
     {:drop_index, [:namespace, :index_name]},

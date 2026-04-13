@@ -50,6 +50,7 @@ defmodule Aerospike do
   alias Aerospike.Admin
   alias Aerospike.Batch
   alias Aerospike.BatchOps
+  alias Aerospike.Cluster
   alias Aerospike.CRUD
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
@@ -1831,6 +1832,35 @@ defmodule Aerospike do
   """
   @spec stats(conn()) :: map()
   def stats(conn) when is_atom(conn), do: RuntimeMetrics.stats(conn)
+
+  @doc """
+  Exercises the current discovered node pools for `conn` to reduce first-request latency.
+
+  Warmup performs real pool checkouts/checkins against the active topology. In
+  the current eager-pool design, this verifies or refreshes pooled connections
+  rather than allocating workers beyond the configured pool size.
+
+  ## Options
+
+  * `:count` — number of pooled connections to warm per node. `0` means the full configured pool size.
+  * `:pool_checkout_timeout` — pool checkout timeout in milliseconds.
+
+  """
+  @spec warm_up(conn(), keyword()) :: {:ok, map()} | {:error, Error.t()}
+  def warm_up(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case NimbleOptions.validate(
+           opts,
+           count: [type: :non_neg_integer, default: 0],
+           pool_checkout_timeout: [type: :non_neg_integer, default: 5_000]
+         ) do
+      {:ok, call_opts} ->
+        Cluster.warm_up(conn, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
 
   @doc """
   Creates a password-authenticated security user.
