@@ -62,6 +62,53 @@ defmodule Aerospike.Test.Helpers do
     send_info(["udf-remove:filename=#{udf_name};"], opts)
   end
 
+  @doc """
+  Polls `fun` until it returns a truthy value or the deadline elapses.
+
+  Returns the truthy value on success. Raises `ExUnit.AssertionError` on
+  timeout, naming the last observed value so flakes surface as clear
+  assertion failures instead of silent `false` returns.
+
+  ## Options
+
+    * `:timeout` — total budget in milliseconds (default `10_000`). The
+      deadline is captured once at call time, so clock jitter cannot
+      shorten the convergence window.
+    * `:interval` — sleep between failed checks in milliseconds (default
+      `50`).
+    * `:between` — optional zero-arity callback invoked after each failed
+      check (before the interval sleep). Useful for driving an external
+      loop — e.g. `between: fn -> send(pid, :tend) end` — between polls.
+
+  """
+  @spec poll_until((-> any()), keyword()) :: any()
+  def poll_until(fun, opts \\ []) when is_function(fun, 0) do
+    timeout = Keyword.get(opts, :timeout, 10_000)
+    interval = Keyword.get(opts, :interval, 50)
+    between = Keyword.get(opts, :between)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    poll_until_loop(fun, deadline, timeout, interval, between)
+  end
+
+  defp poll_until_loop(fun, deadline, timeout, interval, between) do
+    result = fun.()
+
+    cond do
+      result ->
+        result
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        ExUnit.Assertions.flunk(
+          "poll_until/2 timed out after #{timeout}ms; last value: #{inspect(result)}"
+        )
+
+      true ->
+        if is_function(between, 0), do: between.()
+        Process.sleep(interval)
+        poll_until_loop(fun, deadline, timeout, interval, between)
+    end
+  end
+
   defp send_info(commands, opts) do
     host = Keyword.get(opts, :host, "127.0.0.1")
     port = Keyword.get(opts, :port, 3000)
