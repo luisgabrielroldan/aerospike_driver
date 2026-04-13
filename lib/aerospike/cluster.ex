@@ -337,6 +337,13 @@ defmodule Aerospike.Cluster do
   # Clears existing partitions first so stale entries don't linger. The
   # per-node `partition_generations` map is also cleared so every node is
   # reseeded from its own fresh response.
+  #
+  # Returns `{:error, :empty_partition_map}` when the full fanout produced
+  # zero partition rows — typically a cold-boot single-node cluster whose
+  # `replicas` reply is an empty bitmap. Partial success is still success:
+  # if any node contributed partition rows, the function returns `{:ok, state}`
+  # with that partial view and leaves the failed nodes' generation entries
+  # absent so the next tend tick re-fetches them.
   defp build_partition_map(state) do
     nodes = :ets.tab2list(Tables.nodes(state.name))
     :ets.delete_all_objects(Tables.partitions(state.name))
@@ -354,7 +361,12 @@ defmodule Aerospike.Cluster do
       end)
 
     RuntimeMetrics.record_partition_map_update(state.name)
-    {:ok, %{state | tend_conns: conns, partition_generations: generations}}
+
+    if :ets.info(Tables.partitions(state.name), :size) == 0 do
+      {:error, :empty_partition_map}
+    else
+      {:ok, %{state | tend_conns: conns, partition_generations: generations}}
+    end
   end
 
   # Only seed the per-node map when we actually parsed a fresh generation.
