@@ -73,11 +73,33 @@ defmodule Aerospike.RepoTest do
     def query_execute!(conn, query, ops, opts \\ []),
       do: record(:query_execute!, [conn, query, ops, opts], :execute_task)
 
+    def query_execute_node(conn, node_name, query, ops, opts \\ []),
+      do: record(:query_execute_node, [conn, node_name, query, ops, opts], {:ok, :execute_task})
+
+    def query_execute_node!(conn, node_name, query, ops, opts \\ []),
+      do: record(:query_execute_node!, [conn, node_name, query, ops, opts], :execute_task)
+
     def query_udf(conn, query, package, function, args, opts \\ []),
       do: record(:query_udf, [conn, query, package, function, args, opts], {:ok, :execute_task})
 
     def query_udf!(conn, query, package, function, args, opts \\ []),
       do: record(:query_udf!, [conn, query, package, function, args, opts], :execute_task)
+
+    def query_udf_node(conn, node_name, query, package, function, args, opts \\ []),
+      do:
+        record(
+          :query_udf_node,
+          [conn, node_name, query, package, function, args, opts],
+          {:ok, :execute_task}
+        )
+
+    def query_udf_node!(conn, node_name, query, package, function, args, opts \\ []),
+      do:
+        record(
+          :query_udf_node!,
+          [conn, node_name, query, package, function, args, opts],
+          :execute_task
+        )
 
     def query_aggregate(conn, query, package, function, args, opts \\ []),
       do:
@@ -242,9 +264,21 @@ defmodule Aerospike.RepoTest do
       assert :execute_task = NamedRepo.query_execute!(scannable, [:op], timeout: 2_000)
 
       assert {:ok, :execute_task} =
+               NamedRepo.query_execute_node("node-a", scannable, [:op], timeout: 2_000)
+
+      assert :execute_task =
+               NamedRepo.query_execute_node!("node-a", scannable, [:op], timeout: 2_000)
+
+      assert {:ok, :execute_task} =
                NamedRepo.query_udf(scannable, "pkg", "fn", [], timeout: 2_000)
 
       assert :execute_task = NamedRepo.query_udf!(scannable, "pkg", "fn", [], timeout: 2_000)
+
+      assert {:ok, :execute_task} =
+               NamedRepo.query_udf_node("node-a", scannable, "pkg", "fn", [], timeout: 2_000)
+
+      assert :execute_task =
+               NamedRepo.query_udf_node!("node-a", scannable, "pkg", "fn", [], timeout: 2_000)
 
       assert {:ok, :agg_stream} =
                NamedRepo.query_aggregate(scannable, "pkg", "fn", [], timeout: 2_000)
@@ -275,9 +309,14 @@ defmodule Aerospike.RepoTest do
       assert {:stream!, [:repo_conn, ^scannable, [timeout: 2_000]]} =
                Enum.at(FakeAdapter.calls(), 17)
 
-      assert {:transaction_2, [:repo_conn, _fun]} = Enum.at(FakeAdapter.calls(), 30)
-      assert {:commit, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 32)
-      assert {:abort, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 33)
+      assert {:query_execute_node, [:repo_conn, "node-a", scannable, [:op], [timeout: 2_000]]} in FakeAdapter.calls()
+
+      assert {:query_udf_node,
+              [:repo_conn, "node-a", scannable, "pkg", "fn", [], [timeout: 2_000]]} in FakeAdapter.calls()
+
+      assert {:transaction_2, [:repo_conn, _fun]} = Enum.at(FakeAdapter.calls(), 34)
+      assert {:commit, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 36)
+      assert {:abort, [:repo_conn, ^txn]} = Enum.at(FakeAdapter.calls(), 37)
     end
   end
 

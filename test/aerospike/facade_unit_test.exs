@@ -547,6 +547,41 @@ defmodule Aerospike.FacadeUnitTest do
       assert err.code == :invalid_node
     end
 
+    test "phase 4.5 node-targeted background query APIs expose missing-node errors" do
+      conn = :"facade_phase45_#{System.unique_integer([:positive, :monotonic])}"
+      query = Query.new("test", "users")
+      setup_ready_tables(conn)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.query_execute_node(:nonexistent, "node-a", query, [put("visits", 1)],
+                 bad_opt: true
+               )
+
+      assert_raise Aerospike.Error, fn ->
+        Aerospike.query_udf_node!(:nonexistent, "node-a", query, "pkg", "fn", [], bad_opt: true)
+      end
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.query_execute_node(conn, "missing-node", query, [put("visits", 1)])
+
+      assert {:error, %Aerospike.Error{code: :invalid_node}} =
+               Aerospike.query_udf_node(conn, "missing-node", query, "pkg", "fn", [])
+
+      err =
+        assert_raise Aerospike.Error, fn ->
+          Aerospike.query_execute_node!(conn, "missing-node", query, [put("visits", 1)])
+        end
+
+      assert err.code == :invalid_node
+
+      err =
+        assert_raise Aerospike.Error, fn ->
+          Aerospike.query_udf_node!(conn, "missing-node", query, "pkg", "fn", [])
+        end
+
+      assert err.code == :invalid_node
+    end
+
     test "phase 4 node-targeted scan APIs do not widen to other nodes when the target has no partitions" do
       conn = :"facade_phase4_scan_scope_#{System.unique_integer([:positive, :monotonic])}"
       setup_ready_tables(conn)
@@ -600,6 +635,36 @@ defmodule Aerospike.FacadeUnitTest do
 
       assert {:ok, stream} = Aerospike.query_stream_node(conn, target_node, query)
       assert [] = Enum.to_list(stream)
+    end
+
+    test "phase 4.5 node-targeted background query APIs do not widen to other nodes when the target has no partitions" do
+      conn = :"facade_phase45_query_scope_#{System.unique_integer([:positive, :monotonic])}"
+      setup_ready_tables(conn)
+
+      target_node = "node-a"
+      other_node = "node-b"
+      part_id = 126
+
+      :ets.insert(Tables.nodes(conn), {target_node, %{pool_pid: self(), active: true}})
+      :ets.insert(Tables.nodes(conn), {other_node, %{pool_pid: self(), active: true}})
+      :ets.insert(Tables.partitions(conn), {{"test", part_id, 0}, other_node})
+
+      query =
+        Query.new("test", "users")
+        |> Query.partition_filter(PartitionFilter.by_id(part_id))
+        |> Query.max_records(5)
+
+      assert {:ok, %Aerospike.ExecuteTask{} = execute_task} =
+               Aerospike.query_execute_node(conn, target_node, query, [put("visits", 1)])
+
+      assert execute_task.node_name == target_node
+      assert execute_task.kind == :query_execute
+
+      assert {:ok, %Aerospike.ExecuteTask{} = udf_task} =
+               Aerospike.query_udf_node(conn, target_node, query, "pkg", "fn", [])
+
+      assert udf_task.node_name == target_node
+      assert udf_task.kind == :query_udf
     end
 
     test "transaction wrappers delegate to TxnRoll variants" do

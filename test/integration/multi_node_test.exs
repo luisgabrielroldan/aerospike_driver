@@ -10,6 +10,9 @@ defmodule Aerospike.Integration.MultiNodeTest do
 
   use ExUnit.Case, async: false
 
+  import Aerospike.Op
+
+  alias Aerospike.ExecuteTask
   alias Aerospike.Filter
   alias Aerospike.Page
   alias Aerospike.Query
@@ -247,6 +250,70 @@ defmodule Aerospike.Integration.MultiNodeTest do
 
       assert_records_belong_to_node(conn, stream_records, target_node)
     end
+
+    test "query_execute_node stays on the selected node and returns a waitable task", %{
+      conn: conn,
+      host: host,
+      port: port
+    } do
+      node_names =
+        :ets.tab2list(Tables.nodes(conn))
+        |> Enum.map(fn {name, _} -> name end)
+
+      set_name = "query_execute_node_itest_#{System.unique_integer([:positive])}"
+      index_name = "qeni_#{System.unique_integer([:positive])}"
+
+      keys_by_node = seed_node_owned_query_records(conn, node_names, set_name, host, port)
+      target_node = hd(node_names)
+      query = indexed_bucket_query(set_name, index_name)
+
+      create_numeric_index!(conn, set_name, index_name)
+
+      assert {:ok, %ExecuteTask{} = task} =
+               Aerospike.query_execute_node(conn, target_node, query, [put("state", "executed")])
+
+      assert task.kind == :query_execute
+      assert task.node_name == target_node
+      assert :ok = ExecuteTask.wait(task, timeout: 30_000, poll_interval: 200)
+      assert {:ok, :complete} = ExecuteTask.status(task)
+
+      assert_only_target_node_changed(conn, keys_by_node, target_node, "executed")
+    end
+
+    test "query_udf_node stays on the selected node and returns a waitable task", %{
+      conn: conn,
+      host: host,
+      port: port
+    } do
+      node_names =
+        :ets.tab2list(Tables.nodes(conn))
+        |> Enum.map(fn {name, _} -> name end)
+
+      set_name = "query_udf_node_itest_#{System.unique_integer([:positive])}"
+      index_name = "quni_#{System.unique_integer([:positive])}"
+      package = "query_udf_node_#{System.unique_integer([:positive])}"
+      server_name = "#{package}.lua"
+
+      keys_by_node = seed_node_owned_query_records(conn, node_names, set_name, host, port)
+      target_node = hd(node_names)
+      query = indexed_bucket_query(set_name, index_name)
+
+      create_numeric_index!(conn, set_name, index_name)
+      register_put_value_udf!(conn, package, server_name)
+
+      assert {:ok, %ExecuteTask{} = task} =
+               Aerospike.query_udf_node(conn, target_node, query, package, "put_value", [
+                 "state",
+                 "udf"
+               ])
+
+      assert task.kind == :query_udf
+      assert task.node_name == target_node
+      assert :ok = ExecuteTask.wait(task, timeout: 30_000, poll_interval: 200)
+      assert {:ok, :complete} = ExecuteTask.status(task)
+
+      assert_only_target_node_changed(conn, keys_by_node, target_node, "udf")
+    end
   end
 
   describe "seed failover" do
@@ -365,6 +432,82 @@ defmodule Aerospike.Integration.MultiNodeTest do
     Enum.each(records, fn record ->
       assert record.bins["owner_node"] == target_node
       assert {:ok, _partition_id, ^target_node} = route_key(conn, record.key)
+    end)
+  end
+
+  defp seed_node_owned_query_records(conn, node_names, set_name, host, port) do
+    keys_by_node =
+      conn
+      |> find_keys_for_nodes(node_names, set_name)
+      |> Map.new()
+
+    assert map_size(keys_by_node) == length(node_names),
+           "expected one routed key per node, got #{inspect(keys_by_node)}"
+
+    for {node_name, key} <- keys_by_node do
+      on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+      assert :ok =
+               Aerospike.put(conn, key, %{
+                 "owner_node" => node_name,
+                 "bucket" => 1,
+                 "state" => "new"
+               })
+    end
+
+    keys_by_node
+  end
+
+  defp indexed_bucket_query(set_name, index_name) do
+    Query.new("test", set_name)
+    |> Query.where(Filter.range("bucket", 1, 1) |> Filter.using_index(index_name))
+    |> Query.max_records(10)
+  end
+
+  defp create_numeric_index!(conn, set_name, index_name) do
+    on_exit(fn ->
+      if :ets.whereis(Tables.meta(conn)) != :undefined do
+        _ = Aerospike.drop_index(conn, "test", index_name)
+      end
+    end)
+
+    assert {:ok, task} =
+             Aerospike.create_index(conn, "test", set_name,
+               bin: "bucket",
+               name: index_name,
+               type: :numeric
+             )
+
+    assert :ok = Aerospike.IndexTask.wait(task, timeout: 30_000, poll_interval: 200)
+    Process.sleep(500)
+  end
+
+  defp register_put_value_udf!(conn, package, server_name) do
+    udf_source = """
+    function put_value(rec, bin_name, value)
+      rec[bin_name] = value
+      aerospike:update(rec)
+      return value
+    end
+    """
+
+    on_exit(fn ->
+      if :ets.whereis(Tables.meta(conn)) != :undefined do
+        _ = Aerospike.remove_udf(conn, server_name)
+      end
+    end)
+
+    assert {:ok, task} = Aerospike.register_udf(conn, udf_source, server_name)
+    assert :ok = Aerospike.RegisterTask.wait(task, timeout: 10_000, poll_interval: 200)
+    package
+  end
+
+  defp assert_only_target_node_changed(conn, keys_by_node, target_node, target_state) do
+    Enum.each(keys_by_node, fn {node_name, key} ->
+      assert {:ok, record} = Aerospike.get(conn, key)
+      expected_state = if node_name == target_node, do: target_state, else: "new"
+      assert record.bins["owner_node"] == node_name
+      assert record.bins["state"] == expected_state
     end)
   end
 
