@@ -222,6 +222,9 @@ guide; it returns the same task type and wait semantics.
 
 [`query_aggregate/6`](Aerospike.html#query_aggregate/6) does not yet embed a local Lua runtime to perform a final client-side reduction across partial values from multiple nodes. That means the enumerable may yield more than one aggregate value for a single logical query. If your aggregate UDF is naturally reducible to one final answer, reduce the returned values in Elixir for now.
 
+Aggregate execution is also currently cluster-wide only. The shipped public API
+does not include `query_aggregate_node`.
+
 ## Error Handling
 
 ### UDF Runtime Errors
