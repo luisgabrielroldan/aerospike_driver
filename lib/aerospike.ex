@@ -50,6 +50,7 @@ defmodule Aerospike do
   alias Aerospike.Admin
   alias Aerospike.Batch
   alias Aerospike.BatchOps
+  alias Aerospike.Cluster
   alias Aerospike.CRUD
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
@@ -64,6 +65,7 @@ defmodule Aerospike do
   alias Aerospike.Query
   alias Aerospike.RegisterTask
   alias Aerospike.Role
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Scan
   alias Aerospike.ScanOps
   alias Aerospike.Supervisor, as: AeroSupervisor
@@ -1792,6 +1794,99 @@ defmodule Aerospike do
   """
   @spec node_names(conn()) :: {:ok, [String.t()]} | {:error, Error.t()}
   def node_names(conn) when is_atom(conn), do: Admin.node_names(conn)
+
+  @doc """
+  Returns whether client-managed command metrics are enabled for `conn`.
+  """
+  @spec metrics_enabled?(conn()) :: boolean()
+  def metrics_enabled?(conn) when is_atom(conn), do: RuntimeMetrics.metrics_enabled?(conn)
+
+  @doc """
+  Enables client-managed command metrics collection for `conn`.
+
+  ## Options
+
+  * `:reset` — when `true`, clears previously collected command metrics before enabling.
+
+  """
+  @spec enable_metrics(conn(), keyword()) :: :ok | {:error, Error.t()}
+  def enable_metrics(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case NimbleOptions.validate(opts, reset: [type: :boolean]) do
+      {:ok, call_opts} ->
+        RuntimeMetrics.enable(conn, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Disables client-managed command metrics collection for `conn`.
+  """
+  @spec disable_metrics(conn()) :: :ok | {:error, Error.t()}
+  def disable_metrics(conn) when is_atom(conn), do: RuntimeMetrics.disable(conn)
+
+  @doc """
+  Returns runtime stats for `conn` with top-level summary fields plus nested cluster and node sections.
+  """
+  @spec stats(conn()) :: map()
+  def stats(conn) when is_atom(conn), do: RuntimeMetrics.stats(conn)
+
+  @doc """
+  Exercises the current discovered node pools for `conn` to reduce first-request latency.
+
+  Warmup performs real pool checkouts/checkins against the active topology. In
+  the current eager-pool design, this verifies or refreshes pooled connections
+  rather than allocating workers beyond the configured pool size.
+
+  ## Options
+
+  * `:count` — number of pooled connections to warm per node. `0` means the full configured pool size.
+  * `:pool_checkout_timeout` — pool checkout timeout in milliseconds.
+
+  """
+  @spec warm_up(conn(), keyword()) :: {:ok, map()} | {:error, Error.t()}
+  def warm_up(conn, opts \\ []) when is_atom(conn) and is_list(opts) do
+    case NimbleOptions.validate(
+           opts,
+           count: [type: :non_neg_integer, default: 0],
+           pool_checkout_timeout: [type: :non_neg_integer, default: 5_000]
+         ) do
+      {:ok, call_opts} ->
+        Cluster.warm_up(conn, call_opts)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
+
+  @doc """
+  Sets or clears the XDR filter for one datacenter/namespace pair.
+
+  Pass `nil` as `filter` to clear the current server-side filter.
+
+  Validation is local and explicit:
+
+  * `datacenter` and `namespace` must be non-empty strings without info-command delimiters.
+  * `filter` must be `nil` or a non-empty `%Aerospike.Exp{}`.
+
+  This API sends the cluster-wide `xdr-set-filter` info command to one node. The
+  receiving node distributes the change across the cluster.
+  """
+  @spec set_xdr_filter(conn(), String.t(), String.t(), Exp.t() | nil) :: :ok | {:error, Error.t()}
+  def set_xdr_filter(conn, datacenter, namespace, filter)
+      when is_atom(conn) and is_binary(datacenter) and is_binary(namespace) do
+    case Policy.validate_xdr_filter(datacenter, namespace, filter) do
+      :ok ->
+        Admin.set_xdr_filter(conn, datacenter, namespace, filter)
+
+      {:error, %NimbleOptions.ValidationError{} = e} ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: Policy.validation_error_message(e))}
+    end
+  end
 
   @doc """
   Creates a password-authenticated security user.

@@ -18,9 +18,12 @@ defmodule Aerospike.Cluster do
 
   alias Aerospike.CircuitBreaker
   alias Aerospike.Connection
+  alias Aerospike.Error
+  alias Aerospike.NodePool
   alias Aerospike.NodeSupervisor
   alias Aerospike.Protocol.PartitionMap
   alias Aerospike.Protocol.Peers
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Tables
 
   @default_connect_timeout 5_000
@@ -72,6 +75,25 @@ defmodule Aerospike.Cluster do
     end
   end
 
+  @doc false
+  @spec warm_up(atom(), keyword()) :: {:ok, map()} | {:error, Error.t()}
+  def warm_up(name, opts \\ []) when is_atom(name) and is_list(opts) do
+    with true <- cluster_ready?(name),
+         {:ok, pool_size} <- configured_pool_size(name),
+         {:ok, node_rows} <- current_node_rows(name) do
+      requested_count = normalize_warm_up_count(Keyword.get(opts, :count, 0), pool_size)
+      checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, 5_000)
+
+      {:ok, warm_up_result(node_rows, requested_count, checkout_timeout)}
+    else
+      false ->
+        {:error, Error.from_result_code(:cluster_not_ready)}
+
+      {:error, %Error{} = error} ->
+        {:error, error}
+    end
+  end
+
   @impl true
   def init(opts) when is_list(opts) do
     Process.flag(:trap_exit, true)
@@ -89,6 +111,11 @@ defmodule Aerospike.Cluster do
     :ets.insert(
       Tables.meta(name),
       {:breaker_config, %{max_error_rate: max_error_rate, error_rate_window: error_rate_window}}
+    )
+
+    RuntimeMetrics.init(name,
+      pool_size: Keyword.get(opts, :pool_size, @default_pool_size),
+      tend_interval: Keyword.get(opts, :tend_interval, @default_tend_interval)
     )
 
     state = %{
@@ -120,6 +147,7 @@ defmodule Aerospike.Cluster do
 
   @impl true
   def terminate(_reason, state) do
+    RuntimeMetrics.detach(state.name)
     Enum.each(state.tend_conns, fn {_node, conn} -> Connection.close(conn) end)
     :ok
   end
@@ -139,10 +167,13 @@ defmodule Aerospike.Cluster do
 
       case do_initial_tend(state) do
         {:ok, new_state} ->
+          RuntimeMetrics.record_tend(state.name, :ok)
           _ = schedule_tend(new_state)
           {:noreply, %{new_state | bootstrapped: true}}
 
         {:error, reason} ->
+          RuntimeMetrics.record_tend(state.name, :error)
+
           Logger.warning(
             "Cluster #{state.name}: seed connection failed (#{inspect(reason)}), retrying"
           )
@@ -158,11 +189,13 @@ defmodule Aerospike.Cluster do
   def handle_info(:tend, %{bootstrapped: false} = state) do
     case do_initial_tend(state) do
       {:ok, new_state} ->
+        RuntimeMetrics.record_tend(state.name, :ok)
         Logger.info("Cluster #{state.name}: seed connected, cluster ready")
         _ = schedule_tend(new_state)
         {:noreply, %{new_state | bootstrapped: true}}
 
       {:error, _reason} ->
+        RuntimeMetrics.record_tend(state.name, :error)
         _ = schedule_tend(state)
         {:noreply, state}
     end
@@ -174,6 +207,7 @@ defmodule Aerospike.Cluster do
     state = %{state | tend_tick: state.tend_tick + 1}
     CircuitBreaker.maybe_reset_window(state.name, state.tend_tick, state.error_rate_window)
     new_state = do_periodic_tend(state)
+    RuntimeMetrics.record_tend(state.name, :ok)
     _ = schedule_tend(new_state)
     {:noreply, new_state}
   end
@@ -292,6 +326,7 @@ defmodule Aerospike.Cluster do
           end
       end)
 
+    RuntimeMetrics.record_partition_map_update(state.name)
     {:ok, %{state | tend_conns: conns, partition_generation: gen}}
   end
 
@@ -408,6 +443,7 @@ defmodule Aerospike.Cluster do
     case :ets.lookup(Tables.nodes(state.name), node_name) do
       [{^node_name, %{pool_pid: pool_pid}}] when is_pid(pool_pid) ->
         _ = stop_pool_and_wait(state.node_supervisor, pool_pid)
+        RuntimeMetrics.record_node_removed(state.name, node_name)
 
       _ ->
         :ok
@@ -490,6 +526,7 @@ defmodule Aerospike.Cluster do
           :ets.insert(Tables.partitions(state.name), {{ns, pid, ridx}, nn})
         end)
 
+        RuntimeMetrics.record_partition_map_update(state.name)
         {:ok, conn, gen}
 
       {:error, _} = err ->
@@ -539,6 +576,7 @@ defmodule Aerospike.Cluster do
   # Starts a NimblePool for the node, or returns the existing one if already running.
   defp ensure_node_pool(state, node_name, host, port) do
     opts = [
+      conn_name: state.name,
       node_name: node_name,
       pool_size: state.pool_size,
       connect_opts: connection_opts(state, host, port),
@@ -656,6 +694,10 @@ defmodule Aerospike.Cluster do
   # this to look up pool PIDs when routing requests.
   @spec insert_node_registry(map(), String.t(), String.t(), non_neg_integer(), pid()) :: :ok
   defp insert_node_registry(state, node_name, host, port, pool_pid) do
+    if :ets.lookup(Tables.nodes(state.name), node_name) == [] do
+      RuntimeMetrics.record_node_added(state.name, node_name)
+    end
+
     row = node_registry_row(host, port, pool_pid)
     :ets.insert(Tables.nodes(state.name), {node_name, row})
     :ok
@@ -685,6 +727,121 @@ defmodule Aerospike.Cluster do
   defp schedule_tend(state) do
     Process.send_after(self(), :tend, state.tend_interval)
   end
+
+  defp cluster_ready?(name) do
+    meta = Tables.meta(name)
+
+    if :ets.whereis(meta) == :undefined do
+      false
+    else
+      match?([{_, true}], :ets.lookup(meta, Tables.ready_key()))
+    end
+  end
+
+  defp configured_pool_size(name) do
+    meta = Tables.meta(name)
+
+    if :ets.whereis(meta) == :undefined do
+      {:error, Error.from_result_code(:cluster_not_ready)}
+    else
+      case :ets.lookup(meta, {:runtime, :config, :pool_size}) do
+        [{{:runtime, :config, :pool_size}, pool_size}]
+        when is_integer(pool_size) and pool_size > 0 ->
+          {:ok, pool_size}
+
+        _ ->
+          {:error, Error.from_result_code(:cluster_not_ready)}
+      end
+    end
+  end
+
+  defp current_node_rows(name) do
+    nodes = Tables.nodes(name)
+
+    cond do
+      :ets.whereis(nodes) == :undefined ->
+        {:error, Error.from_result_code(:cluster_not_ready)}
+
+      :ets.info(nodes, :size) == 0 ->
+        {:error, Error.from_result_code(:cluster_not_ready)}
+
+      true ->
+        {:ok, :ets.tab2list(nodes)}
+    end
+  end
+
+  defp normalize_warm_up_count(0, pool_size), do: pool_size
+  defp normalize_warm_up_count(count, pool_size) when count >= pool_size, do: pool_size
+  defp normalize_warm_up_count(count, _pool_size) when count > 0, do: count
+
+  defp warm_up_result(node_rows, requested_count, checkout_timeout) do
+    node_results =
+      Map.new(node_rows, fn node_row ->
+        warm_up_node(node_row, requested_count, checkout_timeout)
+      end)
+
+    nodes_total = map_size(node_results)
+    total_requested = requested_count * nodes_total
+    total_warmed = Enum.reduce(node_results, 0, &sum_warmed_connections/2)
+    nodes_ok = count_node_results(node_results, :ok)
+    nodes_partial = count_node_results(node_results, :partial)
+    nodes_error = count_node_results(node_results, :error)
+
+    %{
+      status: warm_up_status(nodes_ok, nodes_partial, nodes_error),
+      requested_per_node: requested_count,
+      total_requested: total_requested,
+      total_warmed: total_warmed,
+      nodes_total: nodes_total,
+      nodes_ok: nodes_ok,
+      nodes_partial: nodes_partial,
+      nodes_error: nodes_error,
+      nodes: node_results
+    }
+  end
+
+  defp warm_up_node(
+         {node_name, %{pool_pid: pool_pid, host: host, port: port}},
+         requested_count,
+         checkout_timeout
+       ) do
+    case NodePool.warm_up(pool_pid, requested_count, checkout_timeout) do
+      {:ok, warmed} ->
+        {node_name,
+         %{
+           host: host,
+           port: port,
+           requested: requested_count,
+           warmed: warmed,
+           status: :ok,
+           error: nil
+         }}
+
+      {:error, %Error{} = error, warmed} ->
+        {node_name,
+         %{
+           host: host,
+           port: port,
+           requested: requested_count,
+           warmed: warmed,
+           status: warm_up_node_status(warmed),
+           error: error
+         }}
+    end
+  end
+
+  defp warm_up_node_status(0), do: :error
+  defp warm_up_node_status(_warmed), do: :partial
+
+  defp sum_warmed_connections({_node_name, %{warmed: warmed}}, acc), do: acc + warmed
+
+  defp count_node_results(node_results, status) do
+    Enum.count(node_results, fn {_node_name, result} -> result.status == status end)
+  end
+
+  defp warm_up_status(nodes_ok, 0, 0) when nodes_ok > 0, do: :ok
+  defp warm_up_status(0, 0, nodes_error) when nodes_error > 0, do: :error
+  defp warm_up_status(_nodes_ok, _nodes_partial, _nodes_error), do: :partial
 
   defp connection_opts(state, host, port) do
     [

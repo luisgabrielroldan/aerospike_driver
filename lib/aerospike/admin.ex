@@ -102,6 +102,15 @@ defmodule Aerospike.Admin do
   end
 
   @doc false
+  @spec set_xdr_filter(atom(), String.t(), String.t(), Exp.t() | nil) :: :ok | {:error, Error.t()}
+  def set_xdr_filter(conn_name, datacenter, namespace, filter)
+      when is_atom(conn_name) and is_binary(datacenter) and is_binary(namespace) do
+    with {:ok, command} <- build_xdr_filter_command(datacenter, namespace, filter) do
+      execute_ok_info_command(conn_name, :set_xdr_filter, command)
+    end
+  end
+
+  @doc false
   @spec create_user(atom(), String.t(), String.t(), [String.t()], keyword()) ::
           :ok | {:error, Error.t()}
   def create_user(conn_name, user_name, password, roles, opts)
@@ -509,11 +518,15 @@ defmodule Aerospike.Admin do
       |> maybe_append_set(set)
       |> Kernel.<>(";indexname=#{Keyword.fetch!(opts, :name)}")
       |> maybe_append_context(Keyword.get(opts, :ctx))
-      |> maybe_append_expression(expression)
-      |> maybe_append_collection(Keyword.get(opts, :collection))
-      |> append_index_source(server_version, opts, expression)
 
-    {:ok, command}
+    with {:ok, command} <- maybe_append_expression(command, expression) do
+      command =
+        command
+        |> maybe_append_collection(Keyword.get(opts, :collection))
+        |> append_index_source(server_version, opts, expression)
+
+      {:ok, command}
+    end
   end
 
   defp index_type_string(:numeric), do: "NUMERIC"
@@ -566,10 +579,16 @@ defmodule Aerospike.Admin do
     command <> ";context=" <> encode_index_context(ctx)
   end
 
-  defp maybe_append_expression(command, nil), do: command
+  defp maybe_append_expression(command, nil), do: {:ok, command}
 
-  defp maybe_append_expression(command, %Exp{wire: wire}) when is_binary(wire) do
-    command <> ";exp=" <> Base.encode64(wire)
+  defp maybe_append_expression(command, %Exp{} = expression) do
+    with {:ok, encoded} <-
+           encode_expression_base64(
+             expression,
+             "expression-backed secondary indexes require a non-empty Aerospike.Exp"
+           ) do
+      {:ok, command <> ";exp=" <> encoded}
+    end
   end
 
   defp maybe_append_collection(command, nil), do: command
@@ -696,6 +715,45 @@ defmodule Aerospike.Admin do
     case Keyword.get(opts, :before) do
       nil -> base
       %DateTime{} = dt -> base <> ";lut=#{DateTime.to_unix(dt, :nanosecond)}"
+    end
+  end
+
+  defp execute_ok_info_command(conn_name, telemetry_command, command)
+       when is_atom(conn_name) and is_atom(telemetry_command) and is_binary(command) do
+    with_telemetry(telemetry_command, conn_name, fn ->
+      with {:ok, pool_pid, node_name} <- Router.random_node_pool(conn_name),
+           {:ok, map} <- Router.checkout_and_info(pool_pid, [command], @default_checkout_timeout) do
+        {parse_ok_response(map, command), node_name}
+      else
+        {:error, %Error{} = e} -> {{:error, e}, nil}
+      end
+    end)
+  end
+
+  defp build_xdr_filter_command(datacenter, namespace, nil)
+       when is_binary(datacenter) and is_binary(namespace) do
+    {:ok, "xdr-set-filter:dc=#{datacenter};namespace=#{namespace};exp=null"}
+  end
+
+  defp build_xdr_filter_command(datacenter, namespace, %Exp{} = filter)
+       when is_binary(datacenter) and is_binary(namespace) do
+    with {:ok, encoded} <-
+           encode_expression_base64(
+             filter,
+             "XDR filters require a non-empty Aerospike.Exp when filter is not nil"
+           ) do
+      {:ok, "xdr-set-filter:dc=#{datacenter};namespace=#{namespace};exp=#{encoded}"}
+    end
+  end
+
+  defp encode_expression_base64(%Exp{} = expression, error_message)
+       when is_binary(error_message) do
+    case Exp.base64(expression) do
+      {:ok, encoded} ->
+        {:ok, encoded}
+
+      {:error, :empty} ->
+        {:error, Error.from_result_code(:parameter_error, message: error_message)}
     end
   end
 

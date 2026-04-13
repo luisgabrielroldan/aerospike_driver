@@ -267,7 +267,8 @@ defmodule Aerospike.MixProject do
         "guides/security-administration.md",
         "guides/transactions.md",
         "guides/secondary-indexes.md",
-        "guides/udfs.md"
+        "guides/udfs.md",
+        "guides/observability.md"
       ],
       groups_for_extras: [
         Tutorials: ~r/guides\/.*/

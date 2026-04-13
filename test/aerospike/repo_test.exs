@@ -163,6 +163,16 @@ defmodule Aerospike.RepoTest do
 
     def query_roles(conn, opts \\ []),
       do: record(:query_roles, [conn, opts], {:ok, []})
+
+    # Phase 5 operational APIs
+    def metrics_enabled?(conn), do: record(:metrics_enabled?, [conn], false)
+    def enable_metrics(conn, opts \\ []), do: record(:enable_metrics, [conn, opts], :ok)
+    def disable_metrics(conn), do: record(:disable_metrics, [conn], :ok)
+    def stats(conn), do: record(:stats, [conn], %{metrics_enabled: false})
+    def warm_up(conn, opts \\ []), do: record(:warm_up, [conn, opts], {:ok, %{status: :ok}})
+
+    def set_xdr_filter(conn, datacenter, namespace, filter),
+      do: record(:set_xdr_filter, [conn, datacenter, namespace, filter], :ok)
   end
 
   defmodule DefaultRepo do
@@ -288,6 +298,25 @@ defmodule Aerospike.RepoTest do
       assert {:ok, :tx_ok} = NamedRepo.transaction([timeout: 5_000], fn _ -> :ok end)
       assert {:ok, :committed} = NamedRepo.commit(txn)
       assert {:ok, :aborted} = NamedRepo.abort(txn)
+
+      # Phase 5 operational APIs delegate to the adapter with the bound conn
+      refute NamedRepo.metrics_enabled?()
+      assert :ok = NamedRepo.enable_metrics()
+      assert :ok = NamedRepo.enable_metrics(reset: false)
+      assert :ok = NamedRepo.disable_metrics()
+      assert %{metrics_enabled: false} = NamedRepo.stats()
+      assert {:ok, %{status: :ok}} = NamedRepo.warm_up()
+      assert {:ok, %{status: :ok}} = NamedRepo.warm_up(count: 2)
+      assert :ok = NamedRepo.set_xdr_filter("dc-west", "test", nil)
+
+      assert {:metrics_enabled?, [:repo_conn]} in FakeAdapter.calls()
+      assert {:enable_metrics, [:repo_conn, []]} in FakeAdapter.calls()
+      assert {:enable_metrics, [:repo_conn, [reset: false]]} in FakeAdapter.calls()
+      assert {:disable_metrics, [:repo_conn]} in FakeAdapter.calls()
+      assert {:stats, [:repo_conn]} in FakeAdapter.calls()
+      assert {:warm_up, [:repo_conn, []]} in FakeAdapter.calls()
+      assert {:warm_up, [:repo_conn, [count: 2]]} in FakeAdapter.calls()
+      assert {:set_xdr_filter, [:repo_conn, "dc-west", "test", nil]} in FakeAdapter.calls()
 
       assert {:put, [:repo_conn, ^key, %{"n" => 1}, [timeout: 100]]} =
                Enum.at(FakeAdapter.calls(), 0)

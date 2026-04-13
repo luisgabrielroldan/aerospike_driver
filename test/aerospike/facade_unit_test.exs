@@ -4,6 +4,7 @@ defmodule Aerospike.FacadeUnitTest do
   import Aerospike.Op
 
   alias Aerospike.Batch
+  alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.PartitionFilter
   alias Aerospike.Query
@@ -401,6 +402,30 @@ defmodule Aerospike.FacadeUnitTest do
 
       assert {:error, %Aerospike.Error{code: :parameter_error}} =
                Aerospike.create_index(:nonexistent, "test", "users", bad_opt: true)
+    end
+
+    test "phase 5 XDR filter API rejects malformed local inputs" do
+      assert {:error, %Aerospike.Error{code: :parameter_error, message: message}} =
+               Aerospike.set_xdr_filter(:nonexistent, "", "test", nil)
+
+      assert message == "must be a non-empty string without ';', '=', tabs, or newlines"
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.set_xdr_filter(:nonexistent, "dc-west", "test;users", nil)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.set_xdr_filter(:nonexistent, "dc-west", "test", Exp.from_wire(""))
+    end
+
+    test "phase 5 enable_metrics and warm_up reject unknown opts" do
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.enable_metrics(:nonexistent, bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.warm_up(:nonexistent, bad_opt: true)
+
+      assert {:error, %Aerospike.Error{code: :parameter_error}} =
+               Aerospike.warm_up(:nonexistent, count: -1)
     end
 
     test "udf wrappers cover opts variants and key coercion error", %{key: key} do

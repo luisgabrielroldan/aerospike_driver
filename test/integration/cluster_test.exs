@@ -153,6 +153,61 @@ defmodule Aerospike.Integration.ClusterTest do
     assert [{_, true}] = :ets.lookup(Tables.meta(name), Tables.ready_key())
   end
 
+  test "stats expose runtime counters and metrics toggle", %{name: name, host: host, port: port} do
+    initial_stats = Aerospike.stats(name)
+
+    refute initial_stats.metrics_enabled
+    assert initial_stats.cluster_ready
+    assert initial_stats.nodes_total >= 1
+    assert initial_stats.cluster.tends.total >= 1
+    assert initial_stats.cluster.partition_map_updates >= 1
+
+    assert :ok = Aerospike.enable_metrics(name)
+    assert Aerospike.metrics_enabled?(name)
+
+    key = Helpers.unique_key("test", "cluster_stats")
+    on_exit(fn -> Helpers.cleanup_key(key, host: host, port: port) end)
+
+    assert :ok = Aerospike.put(name, key, %{"x" => 1})
+    assert {:ok, record} = Aerospike.get(name, key)
+    assert record.bins["x"] == 1
+
+    stats = Aerospike.stats(name)
+
+    assert stats.commands_total >= 2
+    assert stats.commands_ok >= 2
+    assert stats.open_connections >= 1
+    assert stats.cluster.commands.by_command.put.total >= 1
+    assert stats.cluster.commands.by_command.get.total >= 1
+    assert map_size(stats.nodes) >= 1
+
+    assert :ok = Aerospike.disable_metrics(name)
+    refute Aerospike.metrics_enabled?(name)
+  end
+
+  test "warm_up exercises the current discovered node pools", %{name: name} do
+    stats = Aerospike.stats(name)
+
+    assert {:ok, result} = Aerospike.warm_up(name, count: 10, pool_checkout_timeout: 5_000)
+
+    assert result.status == :ok
+    assert result.nodes_total == stats.nodes_total
+    assert result.requested_per_node == stats.cluster.config.pool_size
+    assert result.total_requested == result.nodes_total * result.requested_per_node
+    assert result.total_warmed == result.total_requested
+    assert result.nodes_ok == result.nodes_total
+    assert result.nodes_partial == 0
+    assert result.nodes_error == 0
+    assert map_size(result.nodes) == result.nodes_total
+
+    assert Enum.all?(result.nodes, fn {_node_name, node_result} ->
+             node_result.status == :ok and
+               node_result.requested == result.requested_per_node and
+               node_result.warmed == result.requested_per_node and
+               is_nil(node_result.error)
+           end)
+  end
+
   defp await_cluster_ready(name, timeout \\ 5_000) do
     poll_until(timeout, "cluster not ready", fn ->
       match?([{_, true}], :ets.lookup(Tables.meta(name), Tables.ready_key()))

@@ -12,6 +12,7 @@ defmodule Aerospike.Router do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.PartitionFilter
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Tables
 
   @doc """
@@ -290,6 +291,7 @@ defmodule Aerospike.Router do
 
           {:error, reason} ->
             maybe_record_breaker(breaker_ctx, :network_error)
+            maybe_record_runtime_checkout_failure(breaker_ctx, :network_error)
             e = Error.from_result_code(:network_error, message: inspect(reason))
             {{:error, e}, :close}
         end
@@ -317,6 +319,7 @@ defmodule Aerospike.Router do
 
           {:error, reason} ->
             maybe_record_breaker(breaker_ctx, :network_error)
+            maybe_record_runtime_checkout_failure(breaker_ctx, :network_error)
             e = Error.from_result_code(:network_error, message: inspect(reason))
             {{:error, e}, :close}
         end
@@ -345,6 +348,7 @@ defmodule Aerospike.Router do
 
           {:error, reason} ->
             maybe_record_breaker(breaker_ctx, :network_error)
+            maybe_record_runtime_checkout_failure(breaker_ctx, :network_error)
             e = Error.from_result_code(:network_error, message: inspect(reason))
             {{:error, e}, :close}
         end
@@ -363,6 +367,7 @@ defmodule Aerospike.Router do
   catch
     :exit, {:timeout, {NimblePool, :checkout, _}} ->
       maybe_record_breaker(breaker_ctx, :pool_timeout)
+      maybe_record_runtime_checkout_failure(breaker_ctx, :pool_timeout)
       {:error, Error.from_result_code(:pool_timeout)}
 
     :exit, {:noproc, {NimblePool, :checkout, _}} ->
@@ -370,6 +375,7 @@ defmodule Aerospike.Router do
 
     :exit, reason ->
       maybe_record_breaker(breaker_ctx, :network_error)
+      maybe_record_runtime_checkout_failure(breaker_ctx, :network_error)
       {:error, Error.from_result_code(:network_error, message: inspect(reason))}
   end
 
@@ -377,6 +383,12 @@ defmodule Aerospike.Router do
 
   defp maybe_record_breaker({conn_name, node_name}, reason) do
     CircuitBreaker.record_error(conn_name, node_name, reason)
+  end
+
+  defp maybe_record_runtime_checkout_failure(nil, _reason), do: :ok
+
+  defp maybe_record_runtime_checkout_failure({conn_name, node_name}, reason) do
+    RuntimeMetrics.record_checkout_failure(conn_name, node_name, reason)
   end
 
   defp routing_opts(opts) when is_list(opts) do
