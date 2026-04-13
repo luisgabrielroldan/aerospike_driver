@@ -110,6 +110,9 @@ defmodule Aerospike.CRUD do
   does **not** register the key with the active transaction monitor, matching
   Go's `PutPayload` semantics — callers that need MRT participation must embed
   the MRT fields inside the payload themselves.
+
+  See the [Raw payload writes](raw-payload-write.md) guide for user-facing
+  documentation; public callers should use `Aerospike.put_payload/4`.
   """
   @spec put_payload(atom(), Key.t(), binary(), keyword()) ::
           :ok | {:error, Error.t()}

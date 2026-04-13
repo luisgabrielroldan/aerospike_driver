@@ -45,6 +45,13 @@ defmodule Aerospike do
   Tuple keys are a convenience for user-key flows. For digest-only workflows,
   call `key_digest/3` explicitly.
 
+  ## Advanced: raw payload writes
+
+  For rare tooling or proxy scenarios, `put_payload/4` sends a caller-built
+  write/delete wire buffer for a single key. It is an explicit escape hatch;
+  see the [Raw payload writes](raw-payload-write.md) guide and the `put_payload/4`
+  reference below. Normal code should use `put/4`, `delete/3`, or `operate/4`.
+
   """
 
   alias Aerospike.Admin
@@ -343,6 +350,9 @@ defmodule Aerospike do
   `:replica`, `:pool_checkout_timeout`, `:timeout`). Policy flags embedded in
   the payload itself (write flags, generation, TTL) are what the server honors
   for the actual write.
+
+  See the [Raw payload writes](raw-payload-write.md) guide for narrative context,
+  MRT caveats, and intended use cases.
   """
   @spec put_payload(conn, Key.key_input(), binary(), keyword()) ::
           :ok | {:error, Error.t()}

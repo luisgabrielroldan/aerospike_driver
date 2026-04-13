@@ -147,6 +147,10 @@ key = Aerospike.key("test", "users", "user:1001")
 {:ok, record} = Aerospike.get(:aero, key)
 ```
 
+### Advanced: raw payload writes
+
+[`Aerospike.put_payload/4`](https://hexdocs.pm/aerospike_driver/Aerospike.html#put_payload/4) (and the matching `Repo.put_payload/3`) sends a **caller-built** single-record write or delete wire message. The client only routes the bytes and decodes the standard write response — it does not validate payload contents beyond `is_binary/1`, and it **does not** register keys with the transaction monitor even when `:txn` is passed (callers own any MRT fields inside the payload). This is an advanced escape hatch for replay, proxy, or tooling scenarios; see the [Raw payload writes](guides/raw-payload-write.md) guide and prefer normal `put/4` / `delete/3` for application code.
+
 ### Batch Convenience and Node-Targeted Reads
 
 Phase 4 adds first-class wrappers for the common homogeneous batch cases and

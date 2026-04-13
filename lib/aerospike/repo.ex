@@ -38,6 +38,9 @@ defmodule Aerospike.Repo do
 
   Use this wrapper for normal application code. `Aerospike` remains the
   canonical low-level API when you need explicit connection control.
+
+  Advanced raw wire sends (`put_payload/3`) mirror `Aerospike.put_payload/4`;
+  see the [Raw payload writes](raw-payload-write.md) guide before using them.
   """
 
   @type t :: module()
