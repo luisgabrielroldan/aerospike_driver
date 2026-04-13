@@ -129,8 +129,13 @@ defmodule Aerospike.Cluster do
       recv_timeout: Keyword.get(opts, :recv_timeout, @default_connect_timeout),
       tls: Keyword.get(opts, :tls, false),
       tls_opts: Keyword.get(opts, :tls_opts, []),
-      # Server-reported generation counters; nil until first successful tend.
-      partition_generation: nil,
+      # Per-node `partition-generation` values from each node's last successful
+      # replicas fetch. Each node's generation advances independently, so the
+      # tend loop must compare each node's server-reported value against its
+      # own stored value, not a cluster-wide scalar.
+      partition_generations: %{},
+      # Server-reported `peers-clear-std` generation counter; cluster-wide,
+      # distinct from `partition_generations`. Nil until first successful tend.
       peers_generation: nil,
       # Long-lived info-only connections kept open between tend cycles, keyed by node name.
       tend_conns: %{},
@@ -308,26 +313,35 @@ defmodule Aerospike.Cluster do
   end
 
   # Rebuilds the full partition map by querying `replicas` from every known node.
-  # Clears existing partitions first so stale entries don't linger.
+  # Clears existing partitions first so stale entries don't linger. The
+  # per-node `partition_generations` map is also cleared so every node is
+  # reseeded from its own fresh response.
   defp build_partition_map(state) do
     nodes = :ets.tab2list(Tables.nodes(state.name))
     :ets.delete_all_objects(Tables.partitions(state.name))
 
-    {conns, gen} =
-      Enum.reduce(nodes, {state.tend_conns, state.partition_generation}, fn
-        {node_name, %{host: host, port: port}}, {conns, gen} ->
+    {conns, generations} =
+      Enum.reduce(nodes, {state.tend_conns, %{}}, fn
+        {node_name, %{host: host, port: port}}, {conns, generations} ->
           case fetch_node_replicas(state, conns, node_name, host, port) do
             {:ok, conn, node_gen} ->
-              {Map.put(conns, node_name, conn), node_gen || gen}
+              {Map.put(conns, node_name, conn), put_node_gen(generations, node_name, node_gen)}
 
             :error ->
-              {conns, gen}
+              {conns, generations}
           end
       end)
 
     RuntimeMetrics.record_partition_map_update(state.name)
-    {:ok, %{state | tend_conns: conns, partition_generation: gen}}
+    {:ok, %{state | tend_conns: conns, partition_generations: generations}}
   end
+
+  # Only seed the per-node map when we actually parsed a fresh generation.
+  # Leaving the entry absent on nil keeps the next tend's comparison honest:
+  # "missing" means "we have never confirmed this node's gen" and forces a
+  # refetch on the next tick.
+  defp put_node_gen(generations, _node_name, nil), do: generations
+  defp put_node_gen(generations, node_name, gen), do: Map.put(generations, node_name, gen)
 
   # Fetches `partition-generation` and `replicas` info from a single node,
   # then inserts that node's partition ownership into ETS.
@@ -451,6 +465,11 @@ defmodule Aerospike.Cluster do
     :ets.delete(Tables.nodes(state.name), node_name)
     _ = :ets.select_delete(Tables.partitions(state.name), [{{:"$1", node_name}, [], [true]}])
 
+    # Drop the departed node's per-node generation so a node re-joining under
+    # the same name with a stale or lower value does not skip its first
+    # refetch by matching a leftover entry.
+    state = %{state | partition_generations: Map.delete(state.partition_generations, node_name)}
+
     case Map.pop(state.tend_conns, node_name) do
       {nil, tend_conns} ->
         %{state | tend_conns: tend_conns}
@@ -462,7 +481,10 @@ defmodule Aerospike.Cluster do
   end
 
   # Checks each node's partition-generation; only re-fetches replicas when the
-  # generation has advanced (meaning the cluster rebalanced).
+  # generation has advanced (meaning the cluster rebalanced). Each node is
+  # compared against its *own* last stored generation — never a cluster-wide
+  # scalar — so one node advancing does not short-circuit another node's
+  # refetch on the same reduce pass.
   defp tend_refresh_partitions(state) do
     Enum.reduce(state.tend_conns, state, fn {node_name, conn}, st ->
       case refresh_node(st, node_name, conn) do
@@ -470,7 +492,7 @@ defmodule Aerospike.Cluster do
           %{
             st
             | tend_conns: Map.put(st.tend_conns, node_name, conn2),
-              partition_generation: new_gen
+              partition_generations: put_node_gen(st.partition_generations, node_name, new_gen)
           }
 
         {:error, _} ->
@@ -490,23 +512,28 @@ defmodule Aerospike.Cluster do
     end
   end
 
-  defp check_partition_generation(state, conn, _node_name, nil) do
-    {:ok, conn, state.partition_generation}
+  defp check_partition_generation(state, conn, node_name, nil) do
+    {:ok, conn, Map.get(state.partition_generations, node_name)}
   end
 
   defp check_partition_generation(state, conn, node_name, gen_string) do
+    stored = Map.get(state.partition_generations, node_name)
+
     case PartitionMap.parse_partition_generation(gen_string) do
-      {:ok, gen} when gen != state.partition_generation ->
+      {:ok, gen} when gen != stored ->
         refetch_partition_map_for_node(state, conn, node_name)
 
       _ ->
-        {:ok, conn, state.partition_generation}
+        {:ok, conn, stored}
     end
   end
 
   # Re-queries `replicas` for one node and merges the result into the partitions table.
   # Unlike `build_partition_map/1`, this does not clear stale entries — it only overwrites
-  # partitions owned by this specific node.
+  # partitions owned by this specific node. Returns the node's freshly parsed
+  # generation so the caller can update `partition_generations` for that node.
+  # Falls back to the prior per-node value on parse failure, not to any
+  # cluster-wide scalar.
   defp refetch_partition_map_for_node(state, conn, node_name) do
     case Connection.request_info(conn, ["partition-generation", "replicas"]) do
       {:ok, conn, info} ->
@@ -516,7 +543,7 @@ defmodule Aerospike.Cluster do
         gen =
           case gen_s && PartitionMap.parse_partition_generation(gen_s) do
             {:ok, g} -> g
-            _ -> state.partition_generation
+            _ -> Map.get(state.partition_generations, node_name)
           end
 
         tuples = PartitionMap.parse_replicas_value(replicas, node_name)
