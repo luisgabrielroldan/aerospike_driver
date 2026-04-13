@@ -8,6 +8,7 @@ defmodule Aerospike.ClusterTest do
   alias Aerospike.NodeSupervisor
   alias Aerospike.Supervisor
   alias Aerospike.Tables
+  alias Aerospike.Test.Helpers
   alias Aerospike.Test.MockTcpServer
 
   setup do
@@ -77,6 +78,77 @@ defmodule Aerospike.ClusterTest do
       assert_await(fn ->
         match?([{{"test", 1, 0}, "SEED_A"}], :ets.lookup(Tables.partitions(name), {"test", 1, 0}))
       end)
+    end
+
+    test "tend refresh re-fetches each node when its per-node generation advances",
+         %{name: name} do
+      # Regression for the scalar `partition_generation` bug: a sibling node
+      # can advance the shared scalar to value X earlier in a reduce pass,
+      # then the next node whose own generation is also X has its refetch
+      # short-circuited because the scalar matches — even though *this*
+      # node's partitions were stale under the old entry.
+      #
+      # Repro: two nodes start stable at gen=1. Advance NODE_A to gen=5 first
+      # and confirm its new partition is picked up (this also forces the
+      # scalar to stop being 1). Then advance NODE_B to the *same* gen=5 with
+      # a new partition. Under the scalar code, NODE_B's refetch is skipped
+      # because `check_partition_generation/4` sees B.gen == state.scalar.
+      peer = start_info_server("NODE_B", partition_generation: 1, partitions: [1])
+      on_exit(fn -> stop_info_server(peer) end)
+
+      seed =
+        start_info_server(
+          "NODE_A",
+          partition_generation: 1,
+          peers: peers_payload(1, [{"NODE_B", "127.0.0.1", peer.port}]),
+          partitions: [0]
+        )
+
+      on_exit(fn -> stop_info_server(seed) end)
+
+      {:ok, _sup} = start_supervised({Supervisor, base_opts(name, seed.port)})
+      await_cluster_ready(name)
+
+      # Bootstrap must have populated both nodes' base partitions.
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 0, 0}) == [{{"test", 0, 0}, "NODE_A"}] and
+            :ets.lookup(Tables.partitions(name), {"test", 1, 0}) == [{{"test", 1, 0}, "NODE_B"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Advance NODE_A's gen to 5, adding partition 2. Under either the buggy
+      # or fixed code, this should be picked up (A's gen differs from the
+      # stored value of 1). This poll is the precondition setup, not the
+      # bug repro itself.
+      update_info_server(seed, partition_generation: 5, partitions: [0, 2])
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 2, 0}) == [{{"test", 2, 0}, "NODE_A"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
+
+      # Now advance NODE_B to the SAME gen=5 with new partition 3. This is
+      # the bug trigger: the scalar code ends the previous tend pass with
+      # state.partition_generation == 5 (because NODE_A's refetch just wrote
+      # that value), so when NODE_B is probed and reports gen=5, the scalar
+      # comparison says "unchanged" and skips the refetch. The per-node fix
+      # keeps NODE_B's stored gen at 1 (its last successful refetch), so
+      # 5 != 1 triggers the needed refetch.
+      update_info_server(peer, partition_generation: 5, partitions: [1, 3])
+
+      Helpers.poll_until(
+        fn ->
+          :ets.lookup(Tables.partitions(name), {"test", 3, 0}) == [{{"test", 3, 0}, "NODE_B"}]
+        end,
+        between: fn -> send_tend(name) end,
+        timeout: 2_000
+      )
     end
 
     test "tend removes peers no longer reported by peers-clear-std", %{name: name} do
