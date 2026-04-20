@@ -28,6 +28,8 @@ defmodule Aerospike.MixProject do
   defp deps do
     [
       {:nimble_pool, "~> 1.0"},
+      {:telemetry, "~> 1.3"},
+      {:telemetry_metrics, "~> 1.0", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
