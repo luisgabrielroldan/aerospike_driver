@@ -44,7 +44,13 @@ defmodule Aerospike do
 
   Options:
 
-    * `:timeout` — milliseconds for the full round-trip, default `5_000`.
+    * `:timeout` — total op-budget milliseconds for the call, shared
+      across the initial send and every retry. Default `5_000`.
+    * `:max_retries` — overrides the cluster-default retry cap for this
+      call. `0` disables retry entirely. See `Aerospike.RetryPolicy`.
+    * `:sleep_between_retries_ms` — fixed delay between retry attempts.
+    * `:replica_policy` — `:master` (all attempts against the master)
+      or `:sequence` (walk the replica list by attempt index).
 
   Returns `{:ok, %Aerospike.Record{}}` on hit,
   `{:error, %Aerospike.Error{code: :key_not_found}}` on miss, or a

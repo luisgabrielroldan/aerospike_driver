@@ -84,6 +84,13 @@ defmodule Aerospike.NodeSupervisor do
     * `:max_idle_pings` — positive integer bounding how many idle
       workers NimblePool may drop per verification cycle. Defaults to
       `#{@default_max_idle_pings}`.
+    * `:counters` — optional `Aerospike.NodeCounters.t()` reference
+      owned by the `Aerospike.Tender`. When present, pool callbacks
+      increment `:in_flight` on checkout and decrement on checkin /
+      cancellation, and bump `:failed` when the caller signals a
+      transport-class failure via `{:close, :failure}`. Omitting this
+      key leaves counter writes as no-ops, which is the intended
+      behaviour for tests and cluster-state-only modes.
   """
   @spec start_pool(pid() | atom(), keyword()) :: DynamicSupervisor.on_start_child()
   def start_pool(supervisor, opts) when is_list(opts) do
@@ -95,6 +102,17 @@ defmodule Aerospike.NodeSupervisor do
     pool_size = Keyword.get(opts, :pool_size, @default_pool_size)
     idle_timeout_ms = Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms)
     max_idle_pings = Keyword.get(opts, :max_idle_pings, @default_max_idle_pings)
+    counters = Keyword.get(opts, :counters)
+
+    worker_opts =
+      [
+        transport: transport,
+        host: host,
+        port: port,
+        connect_opts: connect_opts,
+        node_name: node_name,
+        counters: counters
+      ]
 
     # `lazy: false` is NimblePool's current default but pinning it makes
     # warm-up explicit: every worker is opened during `Supervisor.init/1`
@@ -106,13 +124,7 @@ defmodule Aerospike.NodeSupervisor do
         {NimblePool, :start_link,
          [
            [
-             worker:
-               {Aerospike.NodePool,
-                transport: transport,
-                host: host,
-                port: port,
-                connect_opts: connect_opts,
-                node_name: node_name},
+             worker: {Aerospike.NodePool, worker_opts},
              pool_size: pool_size,
              lazy: false,
              worker_idle_timeout: idle_timeout_ms,

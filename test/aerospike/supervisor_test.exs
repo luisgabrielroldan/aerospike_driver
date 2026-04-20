@@ -199,8 +199,9 @@ defmodule Aerospike.SupervisorTest do
   defp script_bootstrap_node(fake, node_name, partition_gen, replicas_value) do
     Fake.script_info(fake, node_name, ["node"], %{"node" => node_name})
 
-    Fake.script_info(fake, node_name, ["partition-generation"], %{
-      "partition-generation" => Integer.to_string(partition_gen)
+    Fake.script_info(fake, node_name, ["partition-generation", "cluster-stable"], %{
+      "partition-generation" => Integer.to_string(partition_gen),
+      "cluster-stable" => "deadbeef"
     })
 
     Fake.script_info(fake, node_name, ["peers-clear-std"], %{

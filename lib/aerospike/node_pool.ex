@@ -47,16 +47,41 @@ defmodule Aerospike.NodePool do
         host: String.t(),
         port: :inet.port_number(),
         connect_opts: keyword(),
-        node_name: String.t()
+        node_name: String.t(),
+        counters: Aerospike.NodeCounters.t() | nil
       ]
 
   `node_name` is recorded for log context; it is not used by the
-  transport callbacks.
+  transport callbacks. `counters`, when present, is the per-node
+  `:counters` reference the Tender allocated at node registration; the
+  pool increments its `:in_flight` slot in `handle_checkout/4`,
+  decrements it in `handle_checkin/4` and `handle_cancelled/2`, and
+  bumps `:failed` when the caller signals a transport-class failure via
+  the `{:close, :failure}` checkin value. See
+  `Aerospike.NodeCounters` for writer discipline per slot. When
+  `counters` is `nil` the callbacks degrade to no-ops so the pool keeps
+  working in tests and cluster-state-only modes that never allocate a
+  counters reference.
+
+  ## Checkin value protocol
+
+  The second element of the tuple returned by the caller's `fun` is
+  passed verbatim to `handle_checkin/4`:
+
+    * `conn` — normal check-in. Worker is kept for reuse.
+    * `:close` — worker is removed without counting a failure. Use this
+      for benign reasons (e.g. tests intentionally forcing a reconnect).
+    * `{:close, :failure}` — worker is removed *and* the counters'
+      `:failed` slot is incremented. Use this when the command returned
+      a transport-class error (`:network_error`, `:timeout`,
+      `:connection_error`) so the Task 6 circuit breaker can read the
+      rate.
   """
 
   @behaviour NimblePool
 
   alias Aerospike.Error
+  alias Aerospike.NodeCounters
 
   require Logger
 
@@ -65,22 +90,33 @@ defmodule Aerospike.NodePool do
   @typedoc "Result returned verbatim from the `fun` passed to `checkout!/3`."
   @type result :: term()
 
+  @typedoc """
+  Value the caller's `fun` returns as the second element of its tuple.
+
+  `conn` keeps the worker for reuse. `:close` removes the worker with
+  no failure accounting. `{:close, :failure}` removes the worker *and*
+  increments the node's `:failed` counter.
+  """
+  @type checkin_value :: term() | :close | {:close, :failure}
+
   @doc """
   Checks out a worker and runs `fun.(conn)` with a pool-owned connection.
 
   `fun` must return a two-tuple `{result, checkin_value}` where:
 
     * `result` is returned verbatim from `checkout!/3`.
-    * `checkin_value` is either the connection (normal return — the
-      worker is kept and will be reused) or the atom `:close` (the
-      worker is removed and a fresh one is initialised on the next
-      checkout).
+    * `checkin_value` controls worker lifecycle and node-health
+      accounting. See `t:checkin_value/0`.
 
   Pool-level failures are translated to `{:error, %Aerospike.Error{}}`:
 
     * `:pool_timeout` — the checkout timed out waiting for a free worker.
     * `:invalid_node` — the pool process is gone.
     * `:network_error` — the checkout exited for any other reason.
+
+  These pool-level failures never bump the `:failed` counter because
+  `fun` did not run against a live connection — there is no node-health
+  signal to record.
   """
   @spec checkout!(
           NimblePool.pool(),
@@ -124,6 +160,9 @@ defmodule Aerospike.NodePool do
     _port = Keyword.fetch!(opts, :port)
     _connect_opts = Keyword.fetch!(opts, :connect_opts)
     _node_name = Keyword.fetch!(opts, :node_name)
+    # `:counters` is optional: tests and cluster-state-only modes may
+    # omit it, and the callbacks below degrade to no-ops when it is nil.
+    _counters = Keyword.get(opts, :counters)
 
     {:ok, opts}
   end
@@ -155,17 +194,40 @@ defmodule Aerospike.NodePool do
 
   @impl NimblePool
   def handle_checkout(@checkout_reason, _from, conn, pool_state) do
+    incr_in_flight(pool_state)
     {:ok, conn, conn, pool_state}
   end
 
   @impl NimblePool
+  def handle_checkin({:close, :failure}, _from, _worker, pool_state) do
+    decr_in_flight(pool_state)
+    incr_failed(pool_state)
+    {:remove, :closed, pool_state}
+  end
+
   def handle_checkin(:close, _from, _worker, pool_state) do
+    decr_in_flight(pool_state)
     {:remove, :closed, pool_state}
   end
 
   def handle_checkin(conn, _from, _prev, pool_state) do
+    decr_in_flight(pool_state)
     {:ok, conn, pool_state}
   end
+
+  # Caller process crashed or timed out while holding a checked-out
+  # worker. NimblePool will subsequently call `terminate_worker/3` to
+  # destroy the now-abandoned connection, but that callback cannot
+  # tell "worker was checked out" from "worker was idle at shutdown".
+  # Decrement `:in_flight` here where the distinction is explicit so
+  # pool shutdown (idle workers) does not over-decrement.
+  @impl NimblePool
+  def handle_cancelled(:checked_out, pool_state) do
+    decr_in_flight(pool_state)
+    :ok
+  end
+
+  def handle_cancelled(:queued, _pool_state), do: :ok
 
   @impl NimblePool
   def handle_ping(_conn, pool_state) do
@@ -194,5 +256,28 @@ defmodule Aerospike.NodePool do
     end
 
     {:ok, pool_state}
+  end
+
+  ## Counter helpers
+
+  defp incr_in_flight(pool_state) do
+    case Keyword.get(pool_state, :counters) do
+      nil -> :ok
+      ref -> NodeCounters.incr_in_flight(ref)
+    end
+  end
+
+  defp decr_in_flight(pool_state) do
+    case Keyword.get(pool_state, :counters) do
+      nil -> :ok
+      ref -> NodeCounters.decr_in_flight(ref)
+    end
+  end
+
+  defp incr_failed(pool_state) do
+    case Keyword.get(pool_state, :counters) do
+      nil -> :ok
+      ref -> NodeCounters.incr_failed(ref)
+    end
   end
 end

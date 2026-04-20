@@ -1,6 +1,6 @@
 # Tier 2 — Correctness Under Cluster Churn
 
-- **Status**: pending
+- **Status**: done
 
 ## Objective
 
@@ -86,7 +86,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
 ## Tasks
 
 ### Task 1: Replace boolean reachability with per-node lifecycle
-- **Status**: pending
+- **Status**: done
 - **Goal**: The Tender's `state.nodes` entry carries an explicit
   `:status` field (`:active | :inactive`) plus `last_tend_at`,
   `last_tend_result`, and a monotonic `:generation_seen` counter.
@@ -137,7 +137,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
     `mix test test/aerospike/tender_pool_test.exs test/integration/get_pool_test.exs test/aerospike/node_pool_test.exs`
 
 ### Task 2: Cluster-stable agreement guard
-- **Status**: pending
+- **Status**: done
 - **Goal**: Before any `PartitionMap.update/5` write, the Tender
   verifies that every `:active` tended node returned the same
   `cluster-stable` hash this cycle. Disagreement aborts the write
@@ -189,7 +189,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
     must still behave as before).
 
 ### Task 3: Skip partition-map fetch when generation has not advanced
-- **Status**: pending
+- **Status**: done
 - **Goal**: `maybe_refresh_partition_map/2` fetches `replicas` only
   when the node's observed `partition-generation` is greater than
   the last-applied generation. Steady-state tend cycles become
@@ -246,7 +246,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
   - `mix test test/aerospike/tender_test.exs test/aerospike/partition_map_test.exs`
 
 ### Task 4: Rebalance-class error surfacing
-- **Status**: pending
+- **Status**: done
 - **Goal**: When the server replies with result code 11
   (`PARTITION_UNAVAILABLE`), `Aerospike.Get` surfaces a distinct
   error value the retry layer can pattern-match on, rather than a
@@ -292,7 +292,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
   - `mix test test/aerospike/`
 
 ### Task 5: Per-node in-flight / queued / failed counters
-- **Status**: pending
+- **Status**: done
 - **Goal**: The pool checkout path increments and decrements per-
   node counters so the (Task 6) circuit breaker can read them
   without blocking on a GenServer call. Counters are `:counters`
@@ -360,7 +360,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
     `mix test test/integration/get_pool_test.exs --include integration`
 
 ### Task 6: Circuit breaker reading counters
-- **Status**: pending
+- **Status**: done
 - **Goal**: A pure function `Aerospike.CircuitBreaker.allow?/2`
   reads a node's counters and status and returns `:ok` or
   `{:error, %Error{code: :circuit_open, ...}}`. `Aerospike.Get`
@@ -420,7 +420,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
   - `mix test test/aerospike/circuit_breaker_test.exs test/aerospike/tender_test.exs test/aerospike/node_pool_test.exs`
 
 ### Task 7: Retry policy
-- **Status**: pending
+- **Status**: done
 - **Goal**: `Aerospike.Get` (and, by extension, the caller
   `Aerospike.get/3`) retries within a caller-supplied total-op
   budget, picking the next replica on rebalance-class errors and
@@ -503,7 +503,7 @@ cycle, and a cluster-stable mismatch does not poison ETS.
   - `mix test --include integration` (local docker single-node)
 
 ### Task 8: Integration proof — node killed mid-traffic
-- **Status**: pending
+- **Status**: done
 - **Goal**: Reproduce the roadmap's exit-criteria scenario end-to-
   end against the local single-node server: kill the container
   mid-traffic, observe the node transitions to `:inactive`, its

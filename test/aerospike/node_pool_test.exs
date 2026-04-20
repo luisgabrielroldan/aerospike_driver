@@ -2,6 +2,7 @@ defmodule Aerospike.NodePoolTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.NodeCounters
   alias Aerospike.NodePool
   alias Aerospike.Transport.Fake
 
@@ -16,15 +17,19 @@ defmodule Aerospike.NodePoolTest do
       setup_fun.(fake)
     end
 
+    worker_opts =
+      [
+        transport: Fake,
+        host: @host,
+        port: @port,
+        connect_opts: [fake: fake],
+        node_name: @node_name
+      ]
+      |> maybe_put(opts, :counters)
+
     pool_opts =
       [
-        worker:
-          {NodePool,
-           transport: Fake,
-           host: @host,
-           port: @port,
-           connect_opts: [fake: fake],
-           node_name: @node_name},
+        worker: {NodePool, worker_opts},
         pool_size: pool_size,
         lazy: false
       ]
@@ -41,7 +46,7 @@ defmodule Aerospike.NodePoolTest do
       stop_quietly(fake)
     end)
 
-    %{fake: fake, pool: pool}
+    %{fake: fake, pool: pool, counters: Keyword.get(opts, :counters)}
   end
 
   defp maybe_put(acc, opts, key) do
@@ -450,6 +455,235 @@ defmodule Aerospike.NodePoolTest do
       else
         Process.sleep(10)
         do_wait_for_close_count(fake, target, deadline)
+      end
+    end
+  end
+
+  describe "node counters" do
+    test "in_flight is incremented on checkout and decremented on checkin", ctx do
+      _ = ctx
+      counters = NodeCounters.new()
+      %{fake: fake, pool: pool} = start_pool!(1, counters: counters)
+      Fake.script_command(fake, @node_name, {:ok, <<"ok">>})
+
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          NodePool.checkout!(
+            pool,
+            fn conn ->
+              send(parent, {:in_flight, NodeCounters.in_flight(counters)})
+              # Hold the worker long enough for the parent to observe the
+              # incremented slot before we check in.
+              Process.sleep(50)
+              {Fake.command(conn, <<"req">>, 1_000), conn}
+            end,
+            1_000
+          )
+        end)
+
+      assert_receive {:in_flight, 1}, 500
+
+      assert {:ok, <<"ok">>} = Task.await(task, 1_000)
+
+      # `Task.await/2` returns when the Task finishes; the task sends
+      # the pool's checkin message just before returning, so it may not
+      # have been processed yet. Force the pool to drain its mailbox.
+      _ = :sys.get_state(pool)
+
+      # After check-in the slot is back to zero; no transport failure was
+      # observed, so :failed stays at zero.
+      assert NodeCounters.in_flight(counters) == 0
+      assert NodeCounters.failed(counters) == 0
+    end
+
+    test "close without :failure tag does not bump :failed", _ctx do
+      counters = NodeCounters.new()
+      %{fake: fake, pool: pool} = start_pool!(1, counters: counters)
+      Fake.script_command(fake, @node_name, {:ok, <<"ok">>})
+
+      # :close drops the worker but does not count a failure — the
+      # caller used :close for a benign reason (e.g. a test forcing
+      # reconnect).
+      assert {:ok, <<"ok">>} =
+               NodePool.checkout!(
+                 pool,
+                 fn conn ->
+                   {Fake.command(conn, <<"req">>, 1_000), :close}
+                 end,
+                 1_000
+               )
+
+      # `NodePool.checkout!/3` sends the checkin message asynchronously
+      # and returns; `:sys.get_state/1` forces the pool to process the
+      # mailbox up to and including that message, so counters reflect
+      # the checkin before we assert.
+      _ = :sys.get_state(pool)
+
+      assert NodeCounters.in_flight(counters) == 0
+      assert NodeCounters.failed(counters) == 0
+    end
+
+    test "{:close, :failure} checkin bumps :failed and removes the worker", _ctx do
+      counters = NodeCounters.new()
+      %{fake: fake, pool: pool} = start_pool!(1, counters: counters)
+
+      # First checkout: transport reply is a scripted network error.
+      Fake.script_command(
+        fake,
+        @node_name,
+        {:error, %Error{code: :network_error, message: "boom"}}
+      )
+
+      # Second checkout: a replacement worker connects fresh and the
+      # command succeeds, proving the failing worker was removed.
+      Fake.script_command(fake, @node_name, {:ok, <<"ok">>})
+
+      assert {:error, %Error{code: :network_error}} =
+               NodePool.checkout!(
+                 pool,
+                 fn conn ->
+                   {Fake.command(conn, <<"req">>, 1_000), {:close, :failure}}
+                 end,
+                 1_000
+               )
+
+      # Synchronise with the pool so handle_checkin has run before we
+      # assert on counter state (checkin is fire-and-forget from the
+      # caller's perspective).
+      _ = :sys.get_state(pool)
+
+      assert NodeCounters.in_flight(counters) == 0
+      assert NodeCounters.failed(counters) == 1
+
+      # Next checkout succeeds against a fresh worker; :failed is not
+      # bumped because no failure was signalled this time.
+      assert {:ok, <<"ok">>} =
+               NodePool.checkout!(
+                 pool,
+                 fn conn ->
+                   {Fake.command(conn, <<"req">>, 1_000), conn}
+                 end,
+                 1_000
+               )
+
+      _ = :sys.get_state(pool)
+
+      assert NodeCounters.failed(counters) == 1
+      assert NodeCounters.in_flight(counters) == 0
+    end
+
+    test "caller crash while checked out decrements :in_flight", _ctx do
+      counters = NodeCounters.new()
+      %{pool: pool} = start_pool!(1, counters: counters)
+
+      parent = self()
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          NodePool.checkout!(
+            pool,
+            fn _conn ->
+              send(parent, :checked_out)
+              # Hang until killed so the pool observes a crashed caller.
+              Process.sleep(:infinity)
+            end,
+            5_000
+          )
+        end)
+
+      assert_receive :checked_out, 500
+
+      # After the task crashes, NimblePool fires handle_cancelled(:checked_out, ...)
+      # which must decrement :in_flight — otherwise the slot would be
+      # stuck above zero until the pool restarts.
+      Process.exit(task_pid, :kill)
+
+      wait_until(
+        fn -> NodeCounters.in_flight(counters) == 0 end,
+        500,
+        "in_flight never returned to zero after caller crash"
+      )
+
+      # No transport-class failure was signalled, so :failed stays zero.
+      assert NodeCounters.failed(counters) == 0
+    end
+
+    test "pool_timeout does not bump :failed", _ctx do
+      counters = NodeCounters.new()
+      %{pool: pool} = start_pool!(1, counters: counters)
+
+      parent = self()
+
+      # Hold the only worker so the next checkout hits pool_timeout.
+      Task.start(fn ->
+        NodePool.checkout!(
+          pool,
+          fn conn ->
+            send(parent, :holding)
+            Process.sleep(500)
+            {:ok, conn}
+          end,
+          5_000
+        )
+      end)
+
+      assert_receive :holding, 500
+
+      assert {:error, %Error{code: :pool_timeout}} =
+               NodePool.checkout!(pool, fn conn -> {:ok, conn} end, 50)
+
+      # Pool-level timeout means the caller never ran fun against a
+      # live connection, so it is not a node-health signal.
+      assert NodeCounters.failed(counters) == 0
+    end
+
+    test "pool without counters still works (nil-safe callbacks)", _ctx do
+      %{fake: fake, pool: pool} = start_pool!(1)
+      Fake.script_command(fake, @node_name, {:ok, <<"ok">>})
+
+      assert {:ok, <<"ok">>} =
+               NodePool.checkout!(
+                 pool,
+                 fn conn -> {Fake.command(conn, <<"req">>, 1_000), conn} end,
+                 1_000
+               )
+
+      # A later checkout that signals failure must not crash either.
+      Fake.script_command(
+        fake,
+        @node_name,
+        {:error, %Error{code: :network_error, message: "x"}}
+      )
+
+      assert {:error, %Error{code: :network_error}} =
+               NodePool.checkout!(
+                 pool,
+                 fn conn ->
+                   {Fake.command(conn, <<"req">>, 1_000), {:close, :failure}}
+                 end,
+                 1_000
+               )
+    end
+  end
+
+  defp wait_until(check, timeout_ms, message) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(check, deadline, message)
+  end
+
+  defp do_wait_until(check, deadline, message) do
+    if check.() do
+      :ok
+    else
+      now = System.monotonic_time(:millisecond)
+
+      if now >= deadline do
+        flunk(message)
+      else
+        Process.sleep(10)
+        do_wait_until(check, deadline, message)
       end
     end
   end

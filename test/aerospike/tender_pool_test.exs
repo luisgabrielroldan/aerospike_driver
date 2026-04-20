@@ -66,18 +66,23 @@ defmodule Aerospike.TenderPoolTest do
   end
 
   describe "failure threshold + pool lifecycle" do
-    test "dropping a node terminates its pool and forgets its pid", ctx do
+    test "flipping a node to :inactive terminates its pool and forgets its pid", ctx do
+      # Threshold = 3. Each failing cycle contributes 2 failure events
+      # (refresh-node info + peers-clear-std); the Task 3 short-circuit
+      # skips the replicas fetch because the generation cannot advance
+      # when the refresh-node info call fails. Cycle 2 pushes the counter
+      # to 2, cycle 3's first failure lifts it to 3 and flips the node to
+      # :inactive, stopping the pool along the way.
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
 
       Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation"], err)
+        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
         Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["replicas"], err)
       end)
 
-      {:ok, pid} = start_tender(ctx, failure_threshold: 5)
+      {:ok, pid} = start_tender(ctx, failure_threshold: 3)
 
       :ok = Tender.tend_now(pid)
       {:ok, pool_pid} = Tender.pool_pid(pid, "A1")
@@ -186,8 +191,9 @@ defmodule Aerospike.TenderPoolTest do
   defp script_bootstrap_node(fake, node_name, partition_gen, replicas_value) do
     Fake.script_info(fake, node_name, ["node"], %{"node" => node_name})
 
-    Fake.script_info(fake, node_name, ["partition-generation"], %{
-      "partition-generation" => Integer.to_string(partition_gen)
+    Fake.script_info(fake, node_name, ["partition-generation", "cluster-stable"], %{
+      "partition-generation" => Integer.to_string(partition_gen),
+      "cluster-stable" => "deadbeef"
     })
 
     Fake.script_info(fake, node_name, ["peers-clear-std"], %{

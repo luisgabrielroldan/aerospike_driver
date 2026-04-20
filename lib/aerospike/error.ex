@@ -55,6 +55,55 @@ defmodule Aerospike.Error do
     }
   end
 
+  # Server result codes that indicate the partition map the client addressed
+  # is out of sync with the cluster's current ownership. These are a routing
+  # signal — retry against a different replica (and trigger a tend) — not a
+  # node-health signal.
+  #
+  # Today only `:partition_unavailable` (wire code 11) qualifies. The Go
+  # and Java reference clients branch on this exact code: Go's
+  # `multi_command.go` treats `PARTITION_UNAVAILABLE` as a re-route cue
+  # distinct from generic server errors, and Java's `PartitionTracker`
+  # flips a partition's `retry` flag on the same code. If the Aerospike
+  # server grows another "not-mine" result code in the future, widen this
+  # list after auditing the reference clients (see Task 4 notes in
+  # `spike-docs/plans/tier-2-cluster-correctness/`).
+  @rebalance_codes [:partition_unavailable]
+
+  @doc """
+  Returns `true` when the error represents a cluster rebalance / partition-
+  ownership signal that should trigger a re-route rather than a same-replica
+  retry.
+
+  Rebalance-class errors mean "the server you addressed does not own this
+  partition right now" — the retry layer consumes this as a cue to pick the
+  next replica (and usually to ask the Tender for a fresh partition map).
+  Transport errors (`:network_error`, `:timeout`, pool errors) and server
+  errors unrelated to ownership (`:key_not_found`, `:generation_error`,
+  etc.) are **not** rebalance-class.
+
+  Accepts `t/0` or any value; non-`Error` values (including bare atoms like
+  `:cluster_not_ready`) return `false` so callers can pattern-match uniformly
+  on whatever the command path returned.
+
+  ## Examples
+
+      iex> err = Aerospike.Error.from_result_code(:partition_unavailable)
+      iex> Aerospike.Error.rebalance?(err)
+      true
+
+      iex> err = Aerospike.Error.from_result_code(:key_not_found)
+      iex> Aerospike.Error.rebalance?(err)
+      false
+
+      iex> Aerospike.Error.rebalance?(:cluster_not_ready)
+      false
+
+  """
+  @spec rebalance?(t() | term()) :: boolean()
+  def rebalance?(%__MODULE__{code: code}), do: code in @rebalance_codes
+  def rebalance?(_other), do: false
+
   @impl true
   def message(%__MODULE__{code: code, message: msg}) do
     "Aerospike error #{code}: #{msg}"
