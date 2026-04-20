@@ -98,9 +98,6 @@ defmodule Aerospike.RetryPolicyTest do
     test "delegates to Aerospike.Error.rebalance?/1 for PARTITION_UNAVAILABLE" do
       err = Error.from_result_code(:partition_unavailable)
       assert RetryPolicy.rebalance?({:error, err})
-      # The classification helper accepts either a bare Error struct or
-      # the `{:error, _}` tuple form; Aerospike.Error.rebalance?/1 unwraps
-      # the struct path. Both must agree.
       assert RetryPolicy.rebalance?(err)
     end
 
@@ -136,6 +133,90 @@ defmodule Aerospike.RetryPolicyTest do
       refute RetryPolicy.transport?({:error, :cluster_not_ready})
       refute RetryPolicy.transport?(:ok)
       refute RetryPolicy.transport?({:ok, %{}})
+    end
+  end
+
+  describe "classify/1" do
+    test "maps routing refusals into their own fatal bucket" do
+      assert RetryPolicy.classify({:error, :cluster_not_ready}) == %{
+               bucket: :routing_refusal,
+               retry_classification: nil,
+               close_connection?: false,
+               node_failure?: false
+             }
+
+      assert RetryPolicy.classify({:error, :no_master}) == %{
+               bucket: :routing_refusal,
+               retry_classification: nil,
+               close_connection?: false,
+               node_failure?: false
+             }
+    end
+
+    test "maps rebalance errors to retry without node-failure accounting" do
+      assert RetryPolicy.classify({:error, Error.from_result_code(:partition_unavailable)}) == %{
+               bucket: :rebalance,
+               retry_classification: :rebalance,
+               close_connection?: false,
+               node_failure?: false
+             }
+    end
+
+    test "maps transport outcomes by retry label and node-failure boundary" do
+      assert RetryPolicy.classify({:error, Error.from_result_code(:network_error)}) == %{
+               bucket: :transport,
+               retry_classification: :transport,
+               close_connection?: true,
+               node_failure?: true
+             }
+
+      assert RetryPolicy.classify({:error, Error.from_result_code(:pool_timeout)}) == %{
+               bucket: :transport,
+               retry_classification: :transport,
+               close_connection?: false,
+               node_failure?: false
+             }
+
+      assert RetryPolicy.classify({:error, Error.from_result_code(:circuit_open)}) == %{
+               bucket: :transport,
+               retry_classification: :circuit_open,
+               close_connection?: false,
+               node_failure?: false
+             }
+
+      assert RetryPolicy.classify({:error, :unknown_node}) == %{
+               bucket: :transport,
+               retry_classification: :transport,
+               close_connection?: false,
+               node_failure?: false
+             }
+    end
+
+    test "maps server logical and parse errors to fatal without retry" do
+      assert RetryPolicy.classify({:error, Error.from_result_code(:key_not_found)}) == %{
+               bucket: :server_fatal,
+               retry_classification: nil,
+               close_connection?: false,
+               node_failure?: false
+             }
+
+      assert RetryPolicy.classify({:error, %Error{code: :parse_error, message: "bad reply"}}) ==
+               %{
+                 bucket: :server_fatal,
+                 retry_classification: nil,
+                 close_connection?: true,
+                 node_failure?: false
+               }
+    end
+  end
+
+  describe "node_failure?/1" do
+    test "keeps node-health accounting narrower than the full transport bucket" do
+      assert RetryPolicy.node_failure?({:error, Error.from_result_code(:network_error)})
+
+      refute RetryPolicy.node_failure?({:error, Error.from_result_code(:pool_timeout)})
+      refute RetryPolicy.node_failure?({:error, Error.from_result_code(:circuit_open)})
+      refute RetryPolicy.node_failure?({:error, Error.from_result_code(:partition_unavailable)})
     end
   end
 end

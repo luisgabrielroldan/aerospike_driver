@@ -7,6 +7,11 @@ defmodule Aerospike.NodeTransport do
   TCP implementation in production and a scripted fake in tests, so every
   cluster-logic path is exercised deterministically without sockets.
 
+  This behaviour is intentionally narrow: `info/2`, unary `command/4`, and
+  optional `login/2` are the execution shapes supported today. Streaming
+  replies and fan-out orchestration are separate future contracts, not
+  hidden variants of `command/4`.
+
   Implementations are free to choose their own `conn` representation
   (a socket, a pid, a reference, a struct). The opaque type prevents
   transport internals from leaking into callers.

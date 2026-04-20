@@ -24,14 +24,24 @@ defmodule Aerospike.RetryPolicy do
 
   ## Classification
 
-  Three disjoint classes drive the retry control flow:
+  One canonical classifier drives the retry loop and the pool-side
+  failure accounting. It returns:
+
+    * `:bucket` — one of `:ok`, `:rebalance`, `:transport`,
+      `:routing_refusal`, `:server_fatal`
+    * `:retry_classification` — the retry telemetry label or `nil`
+    * `:close_connection?` — whether the current worker should be
+      discarded after the outcome
+    * `:node_failure?` — whether the outcome should increment the
+      node's `:failed` counter
+
+  The buckets stay disjoint:
 
     * **rebalance** — the server replied with a result code that says
       "this partition is not mine right now" (currently
-      `:partition_unavailable`). `Aerospike.Error.rebalance?/1` is the
-      canonical predicate; the retry driver re-picks on a different
-      replica and asynchronously asks the Tender for a fresh partition
-      map.
+      `:partition_unavailable`). The retry driver re-picks on a
+      different replica and asynchronously asks the Tender for a fresh
+      partition map.
 
     * **transport** — the command did not reach a server that answered
       cleanly: `:network_error`, `:timeout`, `:connection_error`
@@ -39,11 +49,13 @@ defmodule Aerospike.RetryPolicy do
       `:circuit_open` (Task 6 refusal). These are not ownership signals;
       the retry driver re-dispatches without asking for a map refresh.
 
-    * **fatal** — everything else: `{:ok, _}` payloads, server logical
-      errors (`:key_not_found`, `:generation_error`, …), and routing
-      atoms returned by `Aerospike.Router` (`:cluster_not_ready`,
-      `:no_master`, `:unknown_node`). The driver returns these
-      verbatim.
+    * **routing_refusal** — the router refused to select a replica
+      (`:cluster_not_ready`, `:no_master`). The driver returns the atom
+      verbatim; no retry.
+
+    * **server_fatal** — everything else: server logical errors
+      (`:key_not_found`, `:generation_error`, …) and client-local fatal
+      errors like `:parse_error`. The driver returns these verbatim.
   """
 
   alias Aerospike.Error
@@ -66,10 +78,20 @@ defmodule Aerospike.RetryPolicy do
     :invalid_node,
     :circuit_open
   ]
+  @node_failure_codes [:network_error, :timeout, :connection_error]
+  @routing_refusal_codes [:cluster_not_ready, :no_master]
 
   @meta_key :retry_opts
 
   @type replica_policy :: :master | :sequence
+  @type bucket :: :ok | :rebalance | :transport | :routing_refusal | :server_fatal
+  @type retry_classification :: :rebalance | :transport | :circuit_open | nil
+  @type classification :: %{
+          bucket: bucket(),
+          retry_classification: retry_classification(),
+          close_connection?: boolean(),
+          node_failure?: boolean()
+        }
 
   @typedoc """
   Effective retry policy for one command.
@@ -174,14 +196,92 @@ defmodule Aerospike.RetryPolicy do
   end
 
   @doc """
+  Classifies one command outcome into the Phase 1 retry buckets and the
+  metadata the retry and pool layers consume.
+  """
+  @spec classify(term()) :: classification()
+  def classify({:ok, _record}) do
+    %{
+      bucket: :ok,
+      retry_classification: nil,
+      close_connection?: false,
+      node_failure?: false
+    }
+  end
+
+  def classify({:error, %Error{} = err}), do: classify(err)
+
+  def classify(%Error{} = err) do
+    cond do
+      Error.rebalance?(err) ->
+        %{
+          bucket: :rebalance,
+          retry_classification: :rebalance,
+          close_connection?: false,
+          node_failure?: false
+        }
+
+      err.code in @transport_codes ->
+        %{
+          bucket: :transport,
+          retry_classification: retry_label(err.code),
+          close_connection?: err.code in @node_failure_codes,
+          node_failure?: err.code in @node_failure_codes
+        }
+
+      err.code == :parse_error ->
+        %{
+          bucket: :server_fatal,
+          retry_classification: nil,
+          close_connection?: true,
+          node_failure?: false
+        }
+
+      true ->
+        %{
+          bucket: :server_fatal,
+          retry_classification: nil,
+          close_connection?: false,
+          node_failure?: false
+        }
+    end
+  end
+
+  def classify({:error, reason}) when reason in @routing_refusal_codes do
+    %{
+      bucket: :routing_refusal,
+      retry_classification: nil,
+      close_connection?: false,
+      node_failure?: false
+    }
+  end
+
+  def classify({:error, :unknown_node}) do
+    %{
+      bucket: :transport,
+      retry_classification: :transport,
+      close_connection?: false,
+      node_failure?: false
+    }
+  end
+
+  def classify(_other) do
+    %{
+      bucket: :server_fatal,
+      retry_classification: nil,
+      close_connection?: false,
+      node_failure?: false
+    }
+  end
+
+  @doc """
   Returns `true` when `term` is an error the retry driver should treat
   as a cluster-rebalance signal. Accepts either a bare `%Aerospike.Error{}`
   or the `{:error, _}` tuple form the command path produces; delegates to
-  `Aerospike.Error.rebalance?/1` on the unwrapped struct.
+  the canonical classifier above.
   """
   @spec rebalance?(term()) :: boolean()
-  def rebalance?({:error, %Error{} = err}), do: Error.rebalance?(err)
-  def rebalance?(term), do: Error.rebalance?(term)
+  def rebalance?(term), do: classify(term).bucket == :rebalance
 
   @doc """
   Returns `true` when `term` is an error the retry driver should treat
@@ -192,10 +292,26 @@ defmodule Aerospike.RetryPolicy do
   `:connection_error`, `:pool_timeout`, `:invalid_node`, `:circuit_open`.
   """
   @spec transport?(term()) :: boolean()
-  def transport?({:error, %Error{code: code}}), do: code in @transport_codes
-  def transport?(_other), do: false
+  def transport?(term), do: classify(term).bucket == :transport
+
+  @doc """
+  Returns the retry telemetry label for `term`, or `nil` when the
+  outcome is fatal / non-retryable.
+  """
+  @spec retry_classification(term()) :: retry_classification()
+  def retry_classification(term), do: classify(term).retry_classification
+
+  @doc """
+  Returns `true` when `term` should increment the node's `:failed`
+  counter.
+  """
+  @spec node_failure?(term()) :: boolean()
+  def node_failure?(term), do: classify(term).node_failure?
 
   ## Internals
+
+  defp retry_label(:circuit_open), do: :circuit_open
+  defp retry_label(_transport_code), do: :transport
 
   defp fetch_non_neg_int(opts, key, default) do
     case Keyword.fetch(opts, key) do

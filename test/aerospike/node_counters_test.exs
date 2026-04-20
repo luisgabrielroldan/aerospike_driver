@@ -83,6 +83,7 @@ defmodule Aerospike.NodeCountersTest do
       refute NodeCounters.failure?({:error, Error.from_result_code(:partition_unavailable)})
       refute NodeCounters.failure?({:error, Error.from_result_code(:key_not_found)})
       refute NodeCounters.failure?({:error, Error.from_result_code(:generation_error)})
+      refute NodeCounters.failure?({:error, %Error{code: :parse_error, message: "bad reply"}})
     end
 
     test "pool-level errors are not failures" do

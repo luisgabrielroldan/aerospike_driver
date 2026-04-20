@@ -29,17 +29,17 @@ defmodule Aerospike.Get do
   Classification for retry:
 
     * `{:ok, record}` — return immediately.
-    * `{:error, %Error{} = e}` with `RetryPolicy.rebalance?/1` → trigger
-      an asynchronous `Tender.tend_now/1` so the partition map catches
-      up, then retry with `attempt + 1` if the budget allows. The
-      Router's next pick is deterministic once the map updates.
-    * `{:error, %Error{code: c}}` with `c` in the transport class
-      (`:network_error`, `:timeout`, `:connection_error`,
-      `:pool_timeout`, `:invalid_node`, `:circuit_open`) → retry with
-      `attempt + 1` if the budget allows. `:sequence` replicas rotation
-      re-targets the next node automatically.
-    * Any other error (server logical errors, routing atoms) → return
-      verbatim. No retry.
+    * rebalance bucket → trigger an asynchronous `Tender.tend_now/1`
+      so the partition map catches up, then retry with `attempt + 1`
+      if the budget allows. The Router's next pick is deterministic
+      once the map updates.
+    * transport bucket (`:network_error`, `:timeout`,
+      `:connection_error`, `:pool_timeout`, `:invalid_node`,
+      `:circuit_open`) → retry with `attempt + 1` if the budget
+      allows. `:sequence` replica rotation re-targets the next node
+      automatically.
+    * routing-refusal and server-fatal buckets → return verbatim. No
+      retry.
 
   On budget exhaustion or the retry cap, the most recent error is
   returned as-is. The monotonic clock is used so system-time adjustments
@@ -143,12 +143,7 @@ defmodule Aerospike.Get do
         dispatch(ctx, node_name, attempt)
 
       {:error, _reason} = routing_error ->
-        # Routing atoms (`:cluster_not_ready`, `:no_master`) are fatal for
-        # the retry driver: we have no replica to target, so re-picking
-        # would burn attempts against the same empty state. The caller
-        # gets the last concrete error if we have one, else the routing
-        # atom itself.
-        fatal(last_error, routing_error)
+        handle_classification(ctx, nil, attempt, routing_error, last_error)
     end
   end
 
@@ -158,9 +153,7 @@ defmodule Aerospike.Get do
         check_breaker(ctx, node_name, handle, attempt)
 
       {:error, :unknown_node} = err ->
-        # The node disappeared between pick and handle — treat as a
-        # transport-class miss so the next attempt re-picks.
-        retry_after_error(ctx, node_name, attempt, err, :transport)
+        handle_classification(ctx, node_name, attempt, err)
     end
   end
 
@@ -178,32 +171,29 @@ defmodule Aerospike.Get do
             remaining
           )
 
-        classify(ctx, node_name, attempt, result)
+        handle_classification(ctx, node_name, attempt, result)
 
       {:error, %Error{code: :circuit_open}} = err ->
-        # Breaker refusal is a node-health cue. Treat as transport class
-        # so `:sequence` re-routes to a different replica on the next
-        # attempt without paying a checkout. The classification stays
-        # `:circuit_open` so operator handlers can distinguish breaker
-        # refusals from actual socket / timeout failures.
-        retry_after_error(ctx, node_name, attempt, err, :circuit_open)
+        handle_classification(ctx, node_name, attempt, err)
     end
   end
 
-  defp classify(ctx, node_name, attempt, result) do
-    cond do
-      match?({:ok, _}, result) ->
+  defp handle_classification(ctx, node_name, attempt, result, last_error \\ nil) do
+    case RetryPolicy.classify(result) do
+      %{bucket: :ok} ->
         result
 
-      RetryPolicy.rebalance?(result) ->
+      %{bucket: :rebalance, retry_classification: classification} ->
         trigger_tend_async(ctx.tender)
-        retry_after_error(ctx, node_name, attempt, result, :rebalance)
+        retry_after_error(ctx, node_name, attempt, result, classification)
 
-      RetryPolicy.transport?(result) ->
-        retry_after_error(ctx, node_name, attempt, result, :transport)
+      %{bucket: :transport, retry_classification: classification} ->
+        retry_after_error(ctx, node_name, attempt, result, classification)
 
-      true ->
-        # Fatal: return verbatim. No retry for server logical errors.
+      %{bucket: :routing_refusal} ->
+        fatal(last_error, result)
+
+      %{bucket: :server_fatal} ->
         result
     end
   end
@@ -290,8 +280,10 @@ defmodule Aerospike.Get do
   #   * `conn` — keep the worker (normal return).
   #   * `:close` — drop the worker without counting a failure.
   #   * `{:close, :failure}` — drop the worker *and* bump the node's
-  #     `:failed` counter. Used for transport-level errors and parse
-  #     errors so the Task 6 circuit breaker sees the rate.
+  #     `:failed` counter. Only transport-class node-health failures
+  #     (`:network_error`, `:timeout`, `:connection_error`) use this
+  #     path. Parse errors still close the worker, but do not count
+  #     against node health.
   defp do_get(transport, conn, key, deadline_ms, command_opts) do
     request = encode_read(key)
 
@@ -302,11 +294,19 @@ defmodule Aerospike.Get do
             {Response.parse_record_response(msg, key), conn}
 
           {:error, %Error{}} = err ->
-            {err, {:close, :failure}}
+            {err, checkin_value(err, conn)}
         end
 
       {:error, %Error{}} = err ->
-        {err, {:close, :failure}}
+        {err, checkin_value(err, conn)}
+    end
+  end
+
+  defp checkin_value(result, conn) do
+    case RetryPolicy.classify(result) do
+      %{close_connection?: true, node_failure?: true} -> {:close, :failure}
+      %{close_connection?: true} -> :close
+      _ -> conn
     end
   end
 

@@ -19,8 +19,8 @@ defmodule Aerospike.NodeCounters do
 
     * `@failed` (3) — number of transport-class command failures
       observed against this node. Incremented by `Aerospike.NodePool`
-      after `fun.(conn)` returns when the command result is an
-      `%Aerospike.Error{}` whose `:code` is in `@failure_codes`.
+      when `Aerospike.RetryPolicy.classify/1` marks the outcome as a
+      node-health failure.
       Rebalance-class errors (`Aerospike.Error.rebalance?/1`) are a
       routing cue, not a node-health signal, so they never bump this
       slot. Pool-level errors that occur before `fun` runs
@@ -42,19 +42,13 @@ defmodule Aerospike.NodeCounters do
   layout stays internal to this module.
   """
 
+  alias Aerospike.RetryPolicy
+
   @in_flight 1
   @queued 2
   @failed 3
 
   @num_slots 3
-
-  # Transport-class error codes that the pool counts as node-health
-  # signals. Keep this list narrow: only errors that plausibly indicate
-  # "the node itself is misbehaving" belong here. Server-side logical
-  # errors (`:key_not_found`, `:generation_error`, etc.) are not failures
-  # of the node; rebalance-class errors are a routing cue handled by the
-  # retry layer.
-  @failure_codes [:network_error, :timeout, :connection_error]
 
   @type t :: :counters.counters_ref()
 
@@ -109,9 +103,5 @@ defmodule Aerospike.NodeCounters do
   second element (the checkin value) is not consulted.
   """
   @spec failure?(term()) :: boolean()
-  def failure?({:error, %Aerospike.Error{code: code}}) do
-    code in @failure_codes
-  end
-
-  def failure?(_other), do: false
+  def failure?(term), do: RetryPolicy.node_failure?(term)
 end
