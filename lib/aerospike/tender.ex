@@ -117,6 +117,16 @@ defmodule Aerospike.Tender do
       happens inside the Tender, not at the call site, so a cluster
       with mixed-capability nodes never sends a compressed frame to a
       node that cannot decode it.
+    * `:use_services_alternate` — boolean, default `false`. Cluster-wide
+      toggle between the `peers-clear-std` and `peers-clear-alt`
+      info keys during peer discovery. `peers-clear-alt` surfaces the
+      server's alternate-access endpoints (configured via
+      `alternate-access-address`), which is the route a client on a
+      different subnet than the server's primary NIC has to take to
+      reach every node. The toggle applies only to peer discovery — the
+      seed list in `:seeds` is dialled verbatim — and is static for the
+      lifetime of the cluster, matching Go
+      `ClientPolicy.UseServicesAlternate`.
   """
   @type option ::
           {:name, GenServer.name()}
@@ -136,6 +146,7 @@ defmodule Aerospike.Tender do
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:replica_policy, :master | :sequence}
           | {:use_compression, boolean()}
+          | {:use_services_alternate, boolean()}
 
   @spec start_link([option()]) :: GenServer.on_start()
   def start_link(opts) do
@@ -333,6 +344,7 @@ defmodule Aerospike.Tender do
       breaker_opts: breaker_opts,
       retry_opts: retry_opts,
       use_compression: Keyword.get(opts, :use_compression, false),
+      use_services_alternate: Keyword.get(opts, :use_services_alternate, false),
       owners_tab: owners_tab,
       node_gens_tab: node_gens_tab,
       meta_tab: meta_tab,
@@ -834,12 +846,12 @@ defmodule Aerospike.Tender do
   ## Peer discovery
 
   # Iterates over every known `:active` node (ordered by node name) asking
-  # for peers-clear-std. Every parseable reply contributes to the peer
-  # set — we do not stop at the first one. This avoids the "first-by-term-
-  # order" failure mode where a stale or broken lead node masks real
-  # topology. Nodes flipped to `:inactive` earlier in the same cycle are
-  # skipped; their grace-cycle recovery probe happens in
-  # `refresh_nodes/1` of the *next* cycle.
+  # for the configured peer-discovery info key. Every parseable reply
+  # contributes to the peer set — we do not stop at the first one. This
+  # avoids the "first-by-term-order" failure mode where a stale or broken
+  # lead node masks real topology. Nodes flipped to `:inactive` earlier in
+  # the same cycle are skipped; their grace-cycle recovery probe happens
+  # in `refresh_nodes/1` of the *next* cycle.
   defp discover_peers(state) do
     ordered = state.nodes |> sorted_nodes() |> Enum.filter(&(&1.status == :active))
 
@@ -851,16 +863,25 @@ defmodule Aerospike.Tender do
     end)
   end
 
+  # `peers-clear-alt` surfaces the server's alternate-access addresses;
+  # `peers-clear-std` surfaces its primary-access addresses. Go's
+  # `ClientPolicy.UseServicesAlternate` picks between them; the reply
+  # format is identical so `Peers.parse_peers_clear_std/1` handles both.
+  defp peer_info_key(%{use_services_alternate: true}), do: "peers-clear-alt"
+  defp peer_info_key(_state), do: "peers-clear-std"
+
   defp collect_peers(node, {state, peers_acc}) do
-    case state.transport.info(node.conn, ["peers-clear-std"]) do
-      {:ok, %{"peers-clear-std" => value}} ->
+    key = peer_info_key(state)
+
+    case state.transport.info(node.conn, [key]) do
+      {:ok, %{^key => value}} ->
         handle_peers_value(state, node, value, peers_acc)
 
       {:ok, _other} ->
         {register_failure(state, node.name), peers_acc}
 
       {:error, %Error{} = err} ->
-        Logger.debug("Aerospike.Tender: #{node.name} peers-clear-std failed: #{err.message}")
+        Logger.debug("Aerospike.Tender: #{node.name} #{key} failed: #{err.message}")
         {register_failure(state, node.name), peers_acc}
     end
   end

@@ -47,7 +47,7 @@ defmodule Aerospike.Supervisor do
 
   Every other option is forwarded verbatim to `Aerospike.Tender` (for
   example `:connect_opts`, `:failure_threshold`, `:tend_interval_ms`,
-  `:tend_trigger`, `:use_compression`).
+  `:tend_trigger`, `:use_compression`, `:use_services_alternate`).
   """
   @type option ::
           {:name, atom()}

@@ -1511,6 +1511,163 @@ defmodule Aerospike.TenderTest do
     end
   end
 
+  describe ":use_services_alternate picks the peer-discovery info key" do
+    test "default uses peers-clear-std: a std-only script produces a clean cycle", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      # A successful peers reply clears the failure counter; if the
+      # Tender had asked for a different info key the Fake's default
+      # `:no_script` error would have bumped `failures` instead.
+      assert Tender.nodes_status(pid)["A1"].failures == 0
+      assert Tender.nodes_status(pid)["A1"].last_tend_result == :ok
+    end
+
+    test ":use_services_alternate true asks for peers-clear-alt, not peers-clear-std", ctx do
+      # Seed handshake and the two non-peers cycle probes are scripted as
+      # usual. Only the peers probe diverges.
+      script_bootstrap_info(ctx.fake, "A1")
+
+      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef"
+      })
+
+      Fake.script_info(ctx.fake, "A1", ["peers-clear-alt"], %{
+        "peers-clear-alt" => "0,3000,[]"
+      })
+
+      Fake.script_info(ctx.fake, "A1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      {:ok, pid} = start_tender(ctx, "test", use_services_alternate: true)
+      :ok = Tender.tend_now(pid)
+
+      assert Tender.nodes_status(pid)["A1"].failures == 0
+      assert Tender.nodes_status(pid)["A1"].last_tend_result == :ok
+      assert Tender.ready?(pid)
+    end
+
+    test ":use_services_alternate true with only a peers-clear-std script flips the node", ctx do
+      # Scripting peers under the std key while the Tender asks for the
+      # alt key makes the peers probe fall through the Fake's
+      # `:no_script` default on every cycle. With `failure_threshold: 1`
+      # the first breach is enough to flip A1 to `:inactive` — direct
+      # evidence that the configured toggle selected the alternate key.
+      script_bootstrap_info(ctx.fake, "A1")
+
+      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef"
+      })
+
+      Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{
+        "peers-clear-std" => "0,3000,[]"
+      })
+
+      Fake.script_info(ctx.fake, "A1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      {:ok, pid} =
+        start_tender(ctx, "test", use_services_alternate: true, failure_threshold: 1)
+
+      :ok = Tender.tend_now(pid)
+
+      assert Tender.nodes_status(pid)["A1"].status == :inactive
+    end
+
+    test "either key produces identical peer node registrations", ctx do
+      # Run the same peer-discovery scenario under both toggles and
+      # compare the resulting node registrations: identical `features`
+      # (empty MapSet), identical lifecycle status, identical generations.
+      register_node(ctx.fake, "B1", "10.0.0.2", 3000)
+
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1")
+
+      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef"
+      })
+
+      Fake.script_info(ctx.fake, "A1", ["peers-clear-alt"], %{
+        "peers-clear-alt" => "1,3000,[[B1,,[10.0.0.2:3000]]]"
+      })
+
+      Fake.script_info(ctx.fake, "B1", ["features"], %{"features" => ""})
+
+      Fake.script_info(ctx.fake, "A1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      Fake.script_info(ctx.fake, "B1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      {:ok, pid} = start_tender(ctx, "test", use_services_alternate: true)
+      :ok = Tender.tend_now(pid)
+
+      alt_snapshot = Tender.nodes_status(pid)
+
+      assert Map.keys(alt_snapshot) |> Enum.sort() == ["A1", "B1"]
+      assert alt_snapshot["B1"].status == :active
+      assert alt_snapshot["B1"].features == MapSet.new()
+
+      # Tear down and rerun the same flow under the std key. A fresh
+      # Fake and Tender keep the two scenarios isolated.
+      stop_tender(pid)
+      stop_fake(ctx.fake)
+
+      {:ok, fake2} = Fake.start_link(nodes: [{"A1", "10.0.0.1", 3000}, {"B1", "10.0.0.2", 3000}])
+      ctx2 = %{ctx | fake: fake2, name: :"#{ctx.name}_std"}
+      {:ok, owner2} = TableOwner.start_link(name: ctx2.name)
+      tables2 = TableOwner.tables(owner2)
+      ctx2 = %{ctx2 | owner: owner2, tables: tables2}
+
+      on_exit(fn ->
+        stop_fake(fake2)
+        stop_process(owner2)
+      end)
+
+      script_bootstrap_info(ctx2.fake, "A1")
+      script_bootstrap_info(ctx2.fake, "B1")
+
+      Fake.script_info(ctx2.fake, "A1", ["partition-generation", "cluster-stable"], %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef"
+      })
+
+      Fake.script_info(ctx2.fake, "A1", ["peers-clear-std"], %{
+        "peers-clear-std" => "1,3000,[[B1,,[10.0.0.2:3000]]]"
+      })
+
+      Fake.script_info(ctx2.fake, "B1", ["features"], %{"features" => ""})
+
+      Fake.script_info(ctx2.fake, "A1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      Fake.script_info(ctx2.fake, "B1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      {:ok, pid2} = start_tender(ctx2, "test")
+      :ok = Tender.tend_now(pid2)
+
+      std_snapshot = Tender.nodes_status(pid2)
+
+      # The two snapshots match field-by-field for B1 on every stable
+      # attribute. `last_tend_at` is monotonic-ms-based and will differ
+      # between runs, so strip it before comparing.
+      assert Map.drop(alt_snapshot["B1"], [:last_tend_at, :counters]) ==
+               Map.drop(std_snapshot["B1"], [:last_tend_at, :counters])
+    end
+  end
+
   describe "`:failed` counter decay on successful tend cycles" do
     test "a successful refresh-node info cycle zeroes the `:failed` slot", ctx do
       {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
@@ -1635,6 +1792,7 @@ defmodule Aerospike.TenderTest do
         Keyword.get(opts, :max_concurrent_ops_per_node)
       )
       |> maybe_put(:use_compression, Keyword.get(opts, :use_compression))
+      |> maybe_put(:use_services_alternate, Keyword.get(opts, :use_services_alternate))
 
     {:ok, pid} = Tender.start_link(tender_opts)
 
