@@ -1,0 +1,15 @@
+services:
+  aerospike:
+    image: aerospike/aerospike-server:latest
+    container_name: aerospike_spike
+    hostname: aerospike_spike
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
