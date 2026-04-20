@@ -599,7 +599,7 @@ defmodule Aerospike.Tender do
 
         :error ->
           features = parse_bootstrap_features(node_name, info)
-          register_new_node(state, node_name, host, port, conn, features)
+          register_new_node(state, node_name, host, port, conn, features, :bootstrap)
       end
     else
       {:error, %Error{} = err} ->
@@ -631,7 +631,8 @@ defmodule Aerospike.Tender do
     end
   end
 
-  defp register_new_node(state, node_name, host, port, conn, features) do
+  defp register_new_node(state, node_name, host, port, conn, features, reason)
+       when reason in [:bootstrap, :peer_discovery] do
     # Allocate counters *before* starting the pool so the pool's
     # callbacks see the reference from the first init_worker call.
     # In cluster-state-only mode (`:node_supervisor` absent) no pool
@@ -666,6 +667,7 @@ defmodule Aerospike.Tender do
           tend_histogram: tend_histogram
         }
 
+        emit_transition(node_name, :unknown, :active, reason)
         %{state | nodes: Map.put(state.nodes, node_name, node)}
 
       :error ->
@@ -756,8 +758,12 @@ defmodule Aerospike.Tender do
     update_node(state, name, fn node ->
       {status, recoveries} =
         case node.status do
-          :active -> {:active, node.recoveries}
-          :inactive -> {:active, node.recoveries + 1}
+          :active ->
+            {:active, node.recoveries}
+
+          :inactive ->
+            emit_transition(name, :inactive, :active, :recovery)
+            {:active, node.recoveries + 1}
         end
 
       reset_failed_counter(node.counters)
@@ -784,8 +790,12 @@ defmodule Aerospike.Tender do
     update_node(state, name, fn node ->
       {status, recoveries} =
         case node.status do
-          :active -> {:active, node.recoveries}
-          :inactive -> {:active, node.recoveries + 1}
+          :active ->
+            {:active, node.recoveries}
+
+          :inactive ->
+            emit_transition(name, :inactive, :active, :recovery)
+            {:active, node.recoveries + 1}
         end
 
       %{
@@ -864,7 +874,7 @@ defmodule Aerospike.Tender do
   # recover or fall through to a full drop, and drops the node's
   # counters / tend-histogram references — the pool is gone, the breaker
   # cannot sensibly read stale slots, and a fresh recovery will allocate
-  # new references via `register_new_node/6`. The `:atomics` term is
+  # new references via `register_new_node/7`. The `:atomics` term is
   # GC'd once no process retains it.
   defp mark_inactive(state, name) do
     case Map.fetch(state.nodes, name) do
@@ -884,6 +894,7 @@ defmodule Aerospike.Tender do
             tend_histogram: nil
         }
 
+        emit_transition(name, :active, :inactive, :failure_threshold)
         %{state | nodes: Map.put(state.nodes, name, updated)}
 
       :error ->
@@ -907,6 +918,7 @@ defmodule Aerospike.Tender do
         safe_close(state.transport, node.conn)
         PartitionMap.delete_node_gen(state.node_gens_tab, name)
         PartitionMap.drop_node(state.owners_tab, name)
+        emit_transition(name, :inactive, :unknown, :dropped)
         %{state | nodes: nodes}
     end
   end
@@ -984,7 +996,7 @@ defmodule Aerospike.Tender do
         case state.transport.connect(host, port, state.connect_opts) do
           {:ok, conn} ->
             features = fetch_peer_features(state, name, conn)
-            register_new_node(state, name, host, port, conn, features)
+            register_new_node(state, name, host, port, conn, features, :peer_discovery)
 
           {:error, %Error{} = err} ->
             Logger.warning(
@@ -1292,4 +1304,17 @@ defmodule Aerospike.Tender do
   end
 
   defp monotonic_ms, do: System.monotonic_time(:millisecond)
+
+  # Instant telemetry event fired whenever a node's lifecycle status
+  # changes. The `:reason` enum is fixed at the call sites — see the
+  # `Aerospike.Telemetry` moduledoc for the contract. Logs stay alongside
+  # (operators still see the existing Logger output); this is purely
+  # additive.
+  defp emit_transition(name, from, to, reason) do
+    :telemetry.execute(
+      Telemetry.node_transition(),
+      %{system_time: System.system_time()},
+      %{node_name: name, from: from, to: to, reason: reason}
+    )
+  end
 end

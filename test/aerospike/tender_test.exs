@@ -1857,6 +1857,179 @@ defmodule Aerospike.TenderTest do
     end
   end
 
+  describe "node lifecycle telemetry" do
+    test ":bootstrap fires when a seed node first registers", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      handler_id = attach_handler([[:aerospike, :node, :transition]])
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      assert_receive {:event, [:aerospike, :node, :transition], meas, meta}, 1_000
+
+      assert %{system_time: _} = meas
+
+      assert %{
+               node_name: "A1",
+               from: :unknown,
+               to: :active,
+               reason: :bootstrap
+             } = meta
+    end
+
+    test ":peer_discovery fires when a peer joins via another node's peers reply", ctx do
+      # A1 is the seed; B1 is discovered from A1's peers reply.
+      register_node(ctx.fake, "B1", "10.0.0.2", 3000)
+
+      last_partition = PartitionMap.partition_count() - 1
+      half = div(last_partition + 1, 2)
+
+      a1_replicas =
+        ReplicasFixture.build("test", 1, [Enum.to_list(0..(half - 1))])
+
+      b1_replicas =
+        ReplicasFixture.build("test", 1, [Enum.to_list(half..last_partition)])
+
+      # A1 bootstrap + cycle advertising B1 as a peer.
+      script_bootstrap_info(ctx.fake, "A1")
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "1,3000,[[B1,,[10.0.0.2:3000]]]",
+        replicas: a1_replicas
+      )
+
+      # B1 is dialled through ensure_peer_connected — features probe + replicas.
+      Fake.script_info(ctx.fake, "B1", ["features"], %{"features" => ""})
+      Fake.script_info(ctx.fake, "B1", ["replicas"], %{"replicas" => b1_replicas})
+
+      handler_id = attach_handler([[:aerospike, :node, :transition]])
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      # Both transitions should fire; order is A1 (bootstrap) then B1 (peer
+      # discovery) because the peer is registered only after A1's peers reply.
+      assert_receive {:event, [:aerospike, :node, :transition], _,
+                      %{node_name: "A1", reason: :bootstrap}},
+                     1_000
+
+      assert_receive {:event, [:aerospike, :node, :transition], _,
+                      %{node_name: "B1", from: :unknown, to: :active, reason: :peer_discovery}},
+                     1_000
+    end
+
+    test ":failure_threshold fires when an active node is marked inactive", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      err = %Error{code: :network_error, message: "injected"}
+
+      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
+
+      handler_id = attach_handler([[:aerospike, :node, :transition]])
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # Cycle 1 — healthy bootstrap, emits :bootstrap (ignored here).
+      :ok = Tender.tend_now(pid)
+      assert_receive {:event, [:aerospike, :node, :transition], _, %{reason: :bootstrap}}, 1_000
+
+      # Cycle 2 — refresh failure crosses the threshold and flips to inactive.
+      :ok = Tender.tend_now(pid)
+
+      assert_receive {:event, [:aerospike, :node, :transition], _,
+                      %{
+                        node_name: "A1",
+                        from: :active,
+                        to: :inactive,
+                        reason: :failure_threshold
+                      }},
+                     1_000
+    end
+
+    test ":recovery fires when an inactive node returns a successful refresh", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      err = %Error{code: :network_error, message: "injected"}
+
+      # Cycle 2 — fails and flips to inactive.
+      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+
+      # Cycle 3 — healthy again.
+      script_cycle(ctx.fake, "A1",
+        gen: 2,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 2)
+      )
+
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
+
+      handler_id = attach_handler([[:aerospike, :node, :transition]])
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :ok = Tender.tend_now(pid)
+      assert_receive {:event, [:aerospike, :node, :transition], _, %{reason: :bootstrap}}, 1_000
+
+      :ok = Tender.tend_now(pid)
+
+      assert_receive {:event, [:aerospike, :node, :transition], _, %{reason: :failure_threshold}},
+                     1_000
+
+      :ok = Tender.tend_now(pid)
+
+      assert_receive {:event, [:aerospike, :node, :transition], _,
+                      %{
+                        node_name: "A1",
+                        from: :inactive,
+                        to: :active,
+                        reason: :recovery
+                      }},
+                     1_000
+    end
+
+    test ":dropped fires when an inactive node fails a second cycle", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      err = %Error{code: :network_error, message: "injected"}
+
+      # Two failing cycles — first flips to inactive, second drops the node.
+      Enum.each(1..2, fn _ ->
+        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+      end)
+
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
+
+      handler_id = attach_handler([[:aerospike, :node, :transition]])
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :ok = Tender.tend_now(pid)
+      assert_receive {:event, [:aerospike, :node, :transition], _, %{reason: :bootstrap}}, 1_000
+
+      :ok = Tender.tend_now(pid)
+
+      assert_receive {:event, [:aerospike, :node, :transition], _, %{reason: :failure_threshold}},
+                     1_000
+
+      :ok = Tender.tend_now(pid)
+
+      assert_receive {:event, [:aerospike, :node, :transition], _,
+                      %{
+                        node_name: "A1",
+                        from: :inactive,
+                        to: :unknown,
+                        reason: :dropped
+                      }},
+                     1_000
+    end
+  end
+
   describe "TableOwner outlives the Tender: restart preserves ETS state" do
     test "a restarted Tender reuses the same tables with their prior contents", ctx do
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
