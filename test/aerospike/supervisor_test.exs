@@ -78,6 +78,82 @@ defmodule Aerospike.SupervisorTest do
         )
       end
     end
+
+    # Pool-level and TCP-level knob validation. Bad values should fail
+    # synchronously at `start_link/1` — waiting for the first pool
+    # worker's connect-failure to surface a misconfigured opt is
+    # operator-hostile.
+    test "rejects non-positive :pool_size" do
+      assert_raise ArgumentError, ~r/:pool_size must be a positive integer/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          pool_size: 0
+        )
+      end
+    end
+
+    test "rejects non-positive :idle_timeout_ms" do
+      assert_raise ArgumentError, ~r/:idle_timeout_ms must be a positive integer/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          idle_timeout_ms: -1
+        )
+      end
+    end
+
+    test "rejects non-positive :max_idle_pings" do
+      assert_raise ArgumentError, ~r/:max_idle_pings must be a positive integer/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          max_idle_pings: 0
+        )
+      end
+    end
+
+    test "rejects non-boolean connect_opts :tcp_nodelay" do
+      assert_raise ArgumentError, ~r/:tcp_nodelay must be a boolean/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          connect_opts: [tcp_nodelay: :yes]
+        )
+      end
+    end
+
+    test "rejects non-positive connect_opts :tcp_sndbuf" do
+      assert_raise ArgumentError, ~r/:tcp_sndbuf must be a positive integer/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          connect_opts: [tcp_sndbuf: 0]
+        )
+      end
+    end
+
+    test "rejects non-keyword :connect_opts" do
+      assert_raise ArgumentError, ~r/:connect_opts must be a keyword list/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          connect_opts: :not_a_list
+        )
+      end
+    end
   end
 
   describe "supervision tree shape" do

@@ -29,7 +29,7 @@ defmodule Aerospike.Transport.TcpTest do
     } do
       server = spawn_server(listener, fn client_sock -> hold_client(client_sock) end)
 
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       started = System.monotonic_time(:millisecond)
       assert {:error, %Error{code: :timeout}} = Tcp.command(conn, <<"req">>, 80)
@@ -58,7 +58,7 @@ defmodule Aerospike.Transport.TcpTest do
           hold_client(client_sock)
         end)
 
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^body} = Tcp.command(conn, <<"req">>, 500)
 
@@ -95,7 +95,7 @@ defmodule Aerospike.Transport.TcpTest do
           hold_client(client_sock)
         end)
 
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^body} = Tcp.command(conn, <<"req">>, 1_000)
 
@@ -117,7 +117,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(3, 3, byte_size(body)) <> body
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:error, %Error{code: :parse_error, message: msg}} =
                Tcp.command(conn, <<"req">>, 500)
@@ -138,7 +138,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 1, byte_size(body)) <> body
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:error, %Error{code: :parse_error, message: msg}} =
                Tcp.command(conn, <<"req">>, 500)
@@ -161,7 +161,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = compressed_reply_of(inner_body)
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^inner_body} = Tcp.command(conn, <<"req">>, 500)
 
@@ -179,7 +179,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 4, byte_size(compressed_body)) <> compressed_body
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:error, %Error{code: :parse_error, message: msg}} =
                Tcp.command(conn, <<"req">>, 500)
@@ -203,7 +203,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 4, byte_size(compressed_body)) <> compressed_body
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:error, %Error{code: :parse_error, message: msg}} =
                Tcp.command(conn, <<"req">>, 500)
@@ -225,7 +225,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = wrap_compressed(inner_frame)
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:error, %Error{code: :parse_error, message: msg}} =
                Tcp.command(conn, <<"req">>, 500)
@@ -246,7 +246,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 4, byte_size(compressed_body)) <> compressed_body
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:error, %Error{code: :parse_error, message: msg}} =
                Tcp.command(conn, <<"req">>, 500)
@@ -273,7 +273,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 3, byte_size(body)) <> body
 
       {server, received_ref} = spawn_echo_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^body} = Tcp.command(conn, request, 500, use_compression: true)
 
@@ -302,7 +302,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 3, byte_size(body)) <> body
 
       {server, received_ref} = spawn_echo_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^body} = Tcp.command(conn, request, 500, use_compression: true)
 
@@ -325,7 +325,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 3, byte_size(body)) <> body
 
       {server, received_ref} = spawn_echo_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^body} = Tcp.command(conn, request, 500, use_compression: true)
 
@@ -345,7 +345,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 3, byte_size(body)) <> body
 
       {server, received_ref} = spawn_echo_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^body} = Tcp.command(conn, request, 500)
 
@@ -365,7 +365,7 @@ defmodule Aerospike.Transport.TcpTest do
       reply = compressed_reply_of(inner_body)
 
       {server, received_ref} = spawn_echo_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
 
       assert {:ok, ^inner_body} = Tcp.command(conn, request, 500, use_compression: true)
 
@@ -387,7 +387,9 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(3, 1, byte_size(body)) <> body
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000, info_timeout: 500)
+
+      {:ok, conn} =
+        Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, info_timeout: 500)
 
       assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.info(conn, ["node"])
       assert msg =~ "proto version"
@@ -406,13 +408,112 @@ defmodule Aerospike.Transport.TcpTest do
       reply = typed_header(2, 3, byte_size(body)) <> body
 
       server = spawn_reply_server(listener, reply)
-      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000, info_timeout: 500)
+
+      {:ok, conn} =
+        Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, info_timeout: 500)
 
       assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.info(conn, ["node"])
       assert msg =~ "proto type"
       assert msg =~ "got 3"
 
       :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+  end
+
+  describe "connect/3 TCP tuning opts" do
+    # Every public TCP opt documented in the moduledoc must land on the
+    # socket via `:inet.getopts/2`. Defaults turn `:nodelay` and
+    # `:keepalive` on; buffer sizes stay at kernel defaults unless
+    # explicitly set.
+    test "defaults set :nodelay and :keepalive on", %{listener: listener, port: port} do
+      server = spawn_server(listener, fn client -> hold_client(client) end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+
+      {:ok, vals} = :inet.getopts(conn.socket, [:nodelay, :keepalive])
+      assert Keyword.fetch!(vals, :nodelay) == true
+      assert Keyword.fetch!(vals, :keepalive) == true
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "tcp_nodelay: false turns Nagle back on", %{listener: listener, port: port} do
+      server = spawn_server(listener, fn client -> hold_client(client) end)
+
+      {:ok, conn} =
+        Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, tcp_nodelay: false)
+
+      {:ok, [nodelay: false]} = :inet.getopts(conn.socket, [:nodelay])
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "tcp_keepalive: false disables SO_KEEPALIVE", %{listener: listener, port: port} do
+      server = spawn_server(listener, fn client -> hold_client(client) end)
+
+      {:ok, conn} =
+        Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, tcp_keepalive: false)
+
+      {:ok, [keepalive: false]} = :inet.getopts(conn.socket, [:keepalive])
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "tcp_sndbuf and tcp_rcvbuf set SO_SNDBUF / SO_RCVBUF", %{
+      listener: listener,
+      port: port
+    } do
+      server = spawn_server(listener, fn client -> hold_client(client) end)
+
+      requested_sndbuf = 64 * 1024
+      requested_rcvbuf = 128 * 1024
+
+      {:ok, conn} =
+        Tcp.connect("127.0.0.1", port,
+          connect_timeout_ms: 1_000,
+          tcp_sndbuf: requested_sndbuf,
+          tcp_rcvbuf: requested_rcvbuf
+        )
+
+      {:ok, [sndbuf: sndbuf, recbuf: recbuf]} =
+        :inet.getopts(conn.socket, [:sndbuf, :recbuf])
+
+      # Kernels may round the requested value up to the page size, so
+      # only assert the socket at-least-honours what we asked for.
+      assert sndbuf >= requested_sndbuf
+      assert recbuf >= requested_rcvbuf
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects a non-boolean :tcp_nodelay with ArgumentError", %{
+      listener: listener,
+      port: port
+    } do
+      server = spawn_server(listener, fn client -> hold_client(client) end)
+
+      assert_raise ArgumentError, ~r/:tcp_nodelay must be a boolean/, fn ->
+        Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, tcp_nodelay: :yes)
+      end
+
+      stop_server(server)
+    end
+
+    test "rejects a non-positive :tcp_sndbuf with ArgumentError", %{
+      listener: listener,
+      port: port
+    } do
+      server = spawn_server(listener, fn client -> hold_client(client) end)
+
+      assert_raise ArgumentError, ~r/:tcp_sndbuf must be a positive integer/, fn ->
+        Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, tcp_sndbuf: 0)
+      end
+
       stop_server(server)
     end
   end

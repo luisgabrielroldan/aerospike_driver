@@ -23,6 +23,35 @@ defmodule Aerospike.Transport.Tcp do
 
   Failures are returned as `{:error, %Aerospike.Error{}}` — sockets are not
   reused after an error and the caller is expected to `close/1` them.
+
+  ## `connect/3` options
+
+  Every option is a key in the `opts` keyword list. Unknown keys are
+  ignored so the same keyword list can be shared across transport
+  implementations.
+
+    * `:connect_timeout_ms` — milliseconds to wait for the TCP handshake
+      and for the `:gen_tcp.send/2` write buffer to drain. Defaults to
+      `#{5_000}` ms.
+    * `:info_timeout` — read deadline applied to every `info/2` call.
+      Defaults to `:connect_timeout_ms` so a caller that sets one value
+      gets consistent behaviour across connect and info probes.
+    * `:tcp_nodelay` — boolean. When `true` (default), the socket is
+      opened with `{:nodelay, true}` so small info probes are not
+      delayed by Nagle. Set `false` to let the kernel coalesce writes.
+    * `:tcp_keepalive` — boolean. When `true` (default), the socket is
+      opened with `{:keepalive, true}` so the kernel probes a half-open
+      peer independently of the driver's tend loop.
+    * `:tcp_sndbuf` — positive integer. When set, translates to
+      `{:sndbuf, n}`. Left unset (default `nil`) the kernel picks its
+      own send-buffer size.
+    * `:tcp_rcvbuf` — positive integer. When set, translates to
+      `{:recbuf, n}` (the `:gen_tcp` spelling of `SO_RCVBUF`). Left
+      unset (default `nil`) the kernel picks its own receive-buffer
+      size.
+
+  See `:inet.setopts/2` for the underlying semantics. Opt translation
+  happens once in `connect/3`; callers pass the public names above.
   """
 
   @behaviour Aerospike.NodeTransport
@@ -31,7 +60,7 @@ defmodule Aerospike.Transport.Tcp do
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Message
 
-  @default_timeout 5_000
+  @default_connect_timeout_ms 5_000
   @header_size 8
   # Outbound requests below this size are sent uncompressed even when the
   # caller sets `use_compression: true`. Matches Go
@@ -53,18 +82,63 @@ defmodule Aerospike.Transport.Tcp do
 
   @impl true
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
-    info_timeout = Keyword.get(opts, :info_timeout, timeout)
+    connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
+    info_timeout = Keyword.get(opts, :info_timeout, connect_timeout_ms)
 
-    tcp_opts = [:binary, {:active, false}, {:packet, :raw}, {:send_timeout, timeout}]
+    tcp_opts = build_tcp_opts(opts, connect_timeout_ms)
 
-    case :gen_tcp.connect(to_charlist(host), port, tcp_opts, timeout) do
+    case :gen_tcp.connect(to_charlist(host), port, tcp_opts, connect_timeout_ms) do
       {:ok, socket} ->
         {:ok, %__MODULE__{socket: socket, info_timeout: info_timeout}}
 
       {:error, reason} ->
         {:error, connect_error(host, port, reason)}
     end
+  end
+
+  # Builds the `:gen_tcp.connect/4` opt list. The first four entries are
+  # fixed framing (`:binary`, passive, raw, send-timeout tied to the
+  # connect deadline) that every Aerospike connection needs. Remaining
+  # entries are the optional tuning knobs documented in the moduledoc,
+  # translated here from public names to the `:inet.setopts/2` spellings
+  # in exactly one place.
+  defp build_tcp_opts(opts, connect_timeout_ms) do
+    base = [:binary, {:active, false}, {:packet, :raw}, {:send_timeout, connect_timeout_ms}]
+
+    base
+    |> maybe_put_bool(opts, :tcp_nodelay, :nodelay, true)
+    |> maybe_put_bool(opts, :tcp_keepalive, :keepalive, true)
+    |> maybe_put_size(opts, :tcp_sndbuf, :sndbuf)
+    |> maybe_put_size(opts, :tcp_rcvbuf, :recbuf)
+  end
+
+  defp maybe_put_bool(acc, opts, public_key, inet_key, default) do
+    case Keyword.get(opts, public_key, default) do
+      value when is_boolean(value) -> acc ++ [{inet_key, value}]
+      other -> raise ArgumentError, bool_error(public_key, other)
+    end
+  end
+
+  defp maybe_put_size(acc, opts, public_key, inet_key) do
+    case Keyword.get(opts, public_key) do
+      nil ->
+        acc
+
+      value when is_integer(value) and value > 0 ->
+        acc ++ [{inet_key, value}]
+
+      other ->
+        raise ArgumentError, size_error(public_key, other)
+    end
+  end
+
+  defp bool_error(key, value) do
+    "Aerospike.Transport.Tcp: #{inspect(key)} must be a boolean, got #{inspect(value)}"
+  end
+
+  defp size_error(key, value) do
+    "Aerospike.Transport.Tcp: #{inspect(key)} must be a positive integer or nil, " <>
+      "got #{inspect(value)}"
   end
 
   @impl true

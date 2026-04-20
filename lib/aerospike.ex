@@ -31,7 +31,31 @@ defmodule Aerospike do
   option is used both as the supervisor's registered name and as the
   Tender's identity for `get/3`.
 
-  See `Aerospike.Supervisor` for the option shape.
+  Required options: `:name`, `:transport`, `:seeds`, `:namespaces`.
+
+  Pool-level knobs (forwarded to `Aerospike.NodeSupervisor.start_pool/2`
+  on each pool start):
+
+    * `:pool_size` — workers per node. Positive integer.
+    * `:idle_timeout_ms` — milliseconds a worker may sit idle before
+      `NimblePool.handle_ping/2` evicts it. Positive integer. Defaults
+      stay under Aerospike's `proto-fd-idle-ms`.
+    * `:max_idle_pings` — bound on how many idle workers NimblePool
+      may drop per verification cycle. Positive integer.
+
+  TCP-level tuning knobs (passed verbatim to
+  `Aerospike.Transport.Tcp.connect/3` via the `:connect_opts` keyword):
+
+    * `:connect_timeout_ms` — handshake + write-buffer drain deadline.
+    * `:info_timeout` — read deadline applied to every `info/2` call.
+      Defaults to `:connect_timeout_ms`.
+    * `:tcp_nodelay` — boolean, default `true`.
+    * `:tcp_keepalive` — boolean, default `true`.
+    * `:tcp_sndbuf` / `:tcp_rcvbuf` — positive integer kernel buffer
+      sizes. Unset lets the kernel pick.
+
+  See `Aerospike.Supervisor` for the full option shape and validation
+  rules.
   """
   @spec start_link([ClusterSupervisor.option()]) :: Supervisor.on_start()
   def start_link(opts) when is_list(opts) do

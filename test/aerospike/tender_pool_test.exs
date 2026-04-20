@@ -128,6 +128,25 @@ defmodule Aerospike.TenderPoolTest do
     end
   end
 
+  describe "pool opts plumbing" do
+    # `:idle_timeout_ms` and `:max_idle_pings` live at the Tender level
+    # and flow through `ensure_pool` into `NodeSupervisor.start_pool/2`.
+    # The observable signal: with a tiny idle timeout, the fake sees the
+    # pool close its single warm-up connection shortly after warm-up.
+    test ":idle_timeout_ms from Tender reaches the NimblePool child", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, idle_timeout_ms: 50, max_idle_pings: 2)
+
+      :ok = Tender.tend_now(pid)
+      {:ok, pool_pid} = Tender.pool_pid(pid, "A1")
+      assert Process.alive?(pool_pid)
+
+      :ok = wait_for_close_count(ctx.fake, "A1", 1, 500)
+      assert Fake.close_count(ctx.fake, "A1") >= 1
+    end
+  end
+
   describe "orphan pool cleanup on Tender start" do
     test "orphan pools from the previous incarnation are terminated", ctx do
       # Simulate: a previous Tender started a pool that survived the
@@ -177,7 +196,11 @@ defmodule Aerospike.TenderPoolTest do
       pool_size: Keyword.get(opts, :pool_size, 1)
     ]
 
-    tender_opts = maybe_put(base_opts, :failure_threshold, Keyword.get(opts, :failure_threshold))
+    tender_opts =
+      base_opts
+      |> maybe_put(:failure_threshold, Keyword.get(opts, :failure_threshold))
+      |> maybe_put(:idle_timeout_ms, Keyword.get(opts, :idle_timeout_ms))
+      |> maybe_put(:max_idle_pings, Keyword.get(opts, :max_idle_pings))
 
     {:ok, pid} = Tender.start_link(tender_opts)
 
@@ -216,6 +239,25 @@ defmodule Aerospike.TenderPoolTest do
       after
         2_000 -> :ok
       end
+    end
+  end
+
+  defp wait_for_close_count(fake, node_id, target, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_close_count(fake, node_id, target, deadline)
+  end
+
+  defp do_wait_for_close_count(fake, node_id, target, deadline) do
+    cond do
+      Fake.close_count(fake, node_id) >= target ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("timed out waiting for #{target} close(s) on #{inspect(node_id)}")
+
+      true ->
+        Process.sleep(10)
+        do_wait_for_close_count(fake, node_id, target, deadline)
     end
   end
 

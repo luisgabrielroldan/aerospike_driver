@@ -90,6 +90,17 @@ defmodule Aerospike.Tender do
     * `:pool_size` — pool workers per node. Default
       `#{@default_pool_size}`. Ignored when `:node_supervisor` is
       absent.
+    * `:idle_timeout_ms` — milliseconds a pooled worker may sit idle
+      before NimblePool evicts it via `handle_ping/2`. Forwarded to
+      `Aerospike.NodeSupervisor.start_pool/2`. Defaults to the value
+      chosen by the supervisor (stays below Aerospike's
+      `proto-fd-idle-ms` of 60_000 ms). Ignored when `:node_supervisor`
+      is absent.
+    * `:max_idle_pings` — positive integer bounding how many idle
+      workers NimblePool may drop per verification cycle. Forwarded to
+      `Aerospike.NodeSupervisor.start_pool/2`. Defaults to the value
+      chosen by the supervisor. Ignored when `:node_supervisor` is
+      absent.
     * `:circuit_open_threshold` — non-negative integer. The
       `Aerospike.CircuitBreaker` refuses a command when the node's
       `:failed` counter has reached this value. The Tender zeroes the
@@ -140,6 +151,8 @@ defmodule Aerospike.Tender do
           | {:tend_trigger, :timer | :manual}
           | {:node_supervisor, atom() | pid()}
           | {:pool_size, pos_integer()}
+          | {:idle_timeout_ms, pos_integer()}
+          | {:max_idle_pings, pos_integer()}
           | {:circuit_open_threshold, non_neg_integer()}
           | {:max_concurrent_ops_per_node, pos_integer()}
           | {:max_retries, non_neg_integer()}
@@ -341,6 +354,8 @@ defmodule Aerospike.Tender do
       tend_trigger: Keyword.get(opts, :tend_trigger, :timer),
       node_supervisor: Keyword.get(opts, :node_supervisor),
       pool_size: pool_size,
+      idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms),
+      max_idle_pings: Keyword.get(opts, :max_idle_pings),
       breaker_opts: breaker_opts,
       retry_opts: retry_opts,
       use_compression: Keyword.get(opts, :use_compression, false),
@@ -1091,16 +1106,19 @@ defmodule Aerospike.Tender do
     do: {:ok, nil}
 
   defp ensure_pool(state, node_name, host, port, counters, features) do
-    opts = [
-      node_name: node_name,
-      transport: state.transport,
-      host: host,
-      port: port,
-      connect_opts: state.connect_opts,
-      pool_size: state.pool_size,
-      counters: counters,
-      features: features
-    ]
+    opts =
+      [
+        node_name: node_name,
+        transport: state.transport,
+        host: host,
+        port: port,
+        connect_opts: state.connect_opts,
+        pool_size: state.pool_size,
+        counters: counters,
+        features: features
+      ]
+      |> maybe_put_pool_opt(:idle_timeout_ms, state.idle_timeout_ms)
+      |> maybe_put_pool_opt(:max_idle_pings, state.max_idle_pings)
 
     case NodeSupervisor.start_pool(state.node_supervisor, opts) do
       {:ok, pool_pid} ->
@@ -1161,6 +1179,12 @@ defmodule Aerospike.Tender do
 
   defp sup_pid(name) when is_atom(name), do: Process.whereis(name)
   defp sup_pid(pid) when is_pid(pid), do: pid
+
+  # Only forward pool opts the caller set explicitly — absent values let
+  # `NodeSupervisor.start_pool/2` pick its own defaults (which stay
+  # below Aerospike's `proto-fd-idle-ms` for `:idle_timeout_ms`).
+  defp maybe_put_pool_opt(opts, _key, nil), do: opts
+  defp maybe_put_pool_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   ## Helpers
 

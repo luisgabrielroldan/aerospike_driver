@@ -47,7 +47,22 @@ defmodule Aerospike.Supervisor do
 
   Every other option is forwarded verbatim to `Aerospike.Tender` (for
   example `:connect_opts`, `:failure_threshold`, `:tend_interval_ms`,
-  `:tend_trigger`, `:use_compression`, `:use_services_alternate`).
+  `:tend_trigger`, `:use_compression`, `:use_services_alternate`,
+  `:pool_size`, `:idle_timeout_ms`, `:max_idle_pings`).
+
+  Pool-level knobs live at the top level of the keyword list because
+  the pool supervisor — not the transport — honours them:
+
+    * `:idle_timeout_ms` — milliseconds a pooled worker may sit idle
+      before `NimblePool.handle_ping/2` evicts it. Must be a positive
+      integer when set.
+    * `:max_idle_pings` — positive integer bounding how many idle
+      workers NimblePool may drop per verification cycle.
+
+  TCP-level tuning knobs live inside `:connect_opts` because
+  `Aerospike.Transport.Tcp.connect/3` is where they take effect. See
+  its moduledoc for the public keys and how they map to
+  `:inet.setopts/2` spellings.
   """
   @type option ::
           {:name, atom()}
@@ -152,6 +167,92 @@ defmodule Aerospike.Supervisor do
       raise ArgumentError,
             "Aerospike.Supervisor: :namespaces must be a non-empty list of strings"
 
+    validate_pos_integer!(opts, :pool_size)
+    validate_pos_integer!(opts, :idle_timeout_ms)
+    validate_pos_integer!(opts, :max_idle_pings)
+    validate_pos_integer!(opts, :tend_interval_ms)
+    validate_non_neg_integer!(opts, :failure_threshold)
+
+    validate_connect_opts!(opts)
+
     opts
+  end
+
+  defp validate_pos_integer!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error -> :ok
+      {:ok, value} when is_integer(value) and value > 0 -> :ok
+      {:ok, value} -> raise_pos_integer!(key, value)
+    end
+  end
+
+  defp validate_non_neg_integer!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_integer(value) and value >= 0 ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: #{inspect(key)} must be a non-negative integer, " <>
+                "got #{inspect(value)}"
+    end
+  end
+
+  defp raise_pos_integer!(key, value) do
+    raise ArgumentError,
+          "Aerospike.Supervisor: #{inspect(key)} must be a positive integer, " <>
+            "got #{inspect(value)}"
+  end
+
+  # Rejects the two fat-fingers an operator is most likely to hit inside
+  # `:connect_opts`: a non-boolean boolean or a non-positive buffer size.
+  # `Transport.Tcp.connect/3` also raises on bad values — doing it here
+  # too means `start_link/1` fails synchronously instead of later when
+  # the first pool worker tries to connect.
+  defp validate_connect_opts!(opts) do
+    case Keyword.fetch(opts, :connect_opts) do
+      :error ->
+        :ok
+
+      {:ok, connect_opts} when is_list(connect_opts) ->
+        validate_bool!(connect_opts, :tcp_nodelay)
+        validate_bool!(connect_opts, :tcp_keepalive)
+        validate_optional_pos_integer!(connect_opts, :tcp_sndbuf)
+        validate_optional_pos_integer!(connect_opts, :tcp_rcvbuf)
+        validate_pos_integer!(connect_opts, :connect_timeout_ms)
+        validate_pos_integer!(connect_opts, :info_timeout)
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: :connect_opts must be a keyword list, got #{inspect(value)}"
+    end
+  end
+
+  defp validate_bool!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_boolean(value) ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: connect_opts #{inspect(key)} must be a boolean, " <>
+                "got #{inspect(value)}"
+    end
+  end
+
+  defp validate_optional_pos_integer!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, value} when is_integer(value) and value > 0 -> :ok
+      {:ok, value} -> raise_pos_integer!(key, value)
+    end
   end
 end
