@@ -140,6 +140,13 @@ defmodule Aerospike.Tender do
       seed list in `:seeds` is dialled verbatim — and is static for the
       lifetime of the cluster, matching Go
       `ClientPolicy.UseServicesAlternate`.
+    * `:user` / `:password` — cluster-wide session-login credentials.
+      When both are present, the Tender performs a full password login
+      on every fresh info socket it opens (seed bootstrap and peer
+      discovery), caches the returned session token per node, and
+      forwards the token to `NodeSupervisor.start_pool/2` so pool
+      workers authenticate via the cached token instead of paying a
+      bcrypt round trip. Must be strings or both absent.
   """
   @type option ::
           {:name, GenServer.name()}
@@ -162,6 +169,8 @@ defmodule Aerospike.Tender do
           | {:replica_policy, :master | :sequence}
           | {:use_compression, boolean()}
           | {:use_services_alternate, boolean()}
+          | {:user, String.t()}
+          | {:password, String.t()}
 
   @spec start_link([option()]) :: GenServer.on_start()
   def start_link(opts) do
@@ -371,6 +380,11 @@ defmodule Aerospike.Tender do
     retry_opts = RetryPolicy.from_opts(opts)
     RetryPolicy.put(meta_tab, retry_opts)
 
+    user = Keyword.get(opts, :user)
+    password = Keyword.get(opts, :password)
+
+    validate_auth_pair!(user, password)
+
     state = %{
       transport: transport,
       connect_opts: Keyword.get(opts, :connect_opts, []),
@@ -387,6 +401,8 @@ defmodule Aerospike.Tender do
       retry_opts: retry_opts,
       use_compression: Keyword.get(opts, :use_compression, false),
       use_services_alternate: Keyword.get(opts, :use_services_alternate, false),
+      user: user,
+      password: password,
       owners_tab: owners_tab,
       node_gens_tab: node_gens_tab,
       meta_tab: meta_tab,
@@ -398,6 +414,17 @@ defmodule Aerospike.Tender do
 
     {:ok, maybe_schedule_tend(state)}
   end
+
+  defp validate_auth_pair!(nil, nil), do: :ok
+
+  defp validate_auth_pair!(user, password) when is_binary(user) and is_binary(password),
+    do: :ok
+
+  defp validate_auth_pair!(_, _),
+    do:
+      raise(ArgumentError,
+        message: "Aerospike.Tender: :user and :password must both be strings or both be absent"
+      )
 
   @impl GenServer
   def handle_call(:tend_now, _from, state) do
@@ -590,6 +617,7 @@ defmodule Aerospike.Tender do
   # toggle takes effect.
   defp bootstrap_seed(state, host, port) do
     with {:ok, conn} <- state.transport.connect(host, port, state.connect_opts),
+         {:ok, session} <- login_info_socket(state, conn),
          {:ok, %{"node" => node_name} = info} <-
            state.transport.info(conn, ["node", "features"]) do
       case Map.fetch(state.nodes, node_name) do
@@ -599,7 +627,7 @@ defmodule Aerospike.Tender do
 
         :error ->
           features = parse_bootstrap_features(node_name, info)
-          register_new_node(state, node_name, host, port, conn, features, :bootstrap)
+          register_new_node(state, node_name, host, port, conn, features, session, :bootstrap)
       end
     else
       {:error, %Error{} = err} ->
@@ -611,6 +639,42 @@ defmodule Aerospike.Tender do
         state
     end
   end
+
+  # Runs the admin-protocol login on a freshly-opened info socket when
+  # cluster-wide `:user`/`:password` credentials are configured. Returns
+  # `{:ok, session}` where `session` is either `nil` (no auth configured or
+  # server has security disabled) or `{token, expires_at | nil}`. Any
+  # login error surfaces as `{:error, %Error{}}` and the caller treats it
+  # the same as a failed `info` probe — seed is skipped this cycle.
+  defp login_info_socket(%{user: nil, password: nil}, _conn), do: {:ok, nil}
+
+  defp login_info_socket(%{user: user, password: password, transport: transport}, conn)
+       when is_binary(user) and is_binary(password) do
+    case transport.login(conn, user: user, password: password) do
+      {:ok, {:session, token, ttl}} ->
+        {:ok, {token, session_expires_at(ttl)}}
+
+      {:ok, :ok_no_token} ->
+        {:ok, nil}
+
+      {:ok, :security_not_enabled} ->
+        {:ok, nil}
+
+      {:error, %Error{} = err} ->
+        {:error, err}
+    end
+  end
+
+  # `ttl` is in seconds; subtract 60 s so the client drops the token
+  # before the server does (matches Go `login_command.go`).
+  defp session_expires_at(nil), do: nil
+
+  defp session_expires_at(ttl_seconds) when is_integer(ttl_seconds) and ttl_seconds > 0 do
+    skew = min(60, div(ttl_seconds, 2))
+    System.monotonic_time(:millisecond) + (ttl_seconds - skew) * 1_000
+  end
+
+  defp session_expires_at(_), do: nil
 
   # `features` is best-effort: a node that fails the probe still
   # registers, but with an empty feature set, which is the safe default
@@ -631,7 +695,7 @@ defmodule Aerospike.Tender do
     end
   end
 
-  defp register_new_node(state, node_name, host, port, conn, features, reason)
+  defp register_new_node(state, node_name, host, port, conn, features, session, reason)
        when reason in [:bootstrap, :peer_discovery] do
     # Allocate counters *before* starting the pool so the pool's
     # callbacks see the reference from the first init_worker call.
@@ -646,7 +710,7 @@ defmodule Aerospike.Tender do
     # sampling call site runs regardless of whether a pool exists).
     tend_histogram = TendHistogram.new()
 
-    case ensure_pool(state, node_name, host, port, counters, features) do
+    case ensure_pool(state, node_name, host, port, counters, features, session) do
       {:ok, pool_pid} ->
         node = %{
           name: node_name,
@@ -664,7 +728,8 @@ defmodule Aerospike.Tender do
           pool_pid: pool_pid,
           counters: counters,
           features: features,
-          tend_histogram: tend_histogram
+          tend_histogram: tend_histogram,
+          session: session
         }
 
         emit_transition(node_name, :unknown, :active, reason)
@@ -874,7 +939,7 @@ defmodule Aerospike.Tender do
   # recover or fall through to a full drop, and drops the node's
   # counters / tend-histogram references — the pool is gone, the breaker
   # cannot sensibly read stale slots, and a fresh recovery will allocate
-  # new references via `register_new_node/7`. The `:atomics` term is
+  # new references via `register_new_node/8`. The `:atomics` term is
   # GC'd once no process retains it.
   defp mark_inactive(state, name) do
     case Map.fetch(state.nodes, name) do
@@ -891,7 +956,8 @@ defmodule Aerospike.Tender do
             generation_seen: nil,
             applied_gen: nil,
             counters: nil,
-            tend_histogram: nil
+            tend_histogram: nil,
+            session: nil
         }
 
         emit_transition(name, :active, :inactive, :failure_threshold)
@@ -993,18 +1059,47 @@ defmodule Aerospike.Tender do
         state
 
       false ->
-        case state.transport.connect(host, port, state.connect_opts) do
-          {:ok, conn} ->
-            features = fetch_peer_features(state, name, conn)
-            register_new_node(state, name, host, port, conn, features, :peer_discovery)
+        connect_and_register_peer(state, name, host, port)
+    end
+  end
 
-          {:error, %Error{} = err} ->
-            Logger.warning(
-              "Aerospike.Tender: could not connect to peer #{name} at #{host}:#{port}: #{err.message}"
-            )
+  defp connect_and_register_peer(state, name, host, port) do
+    case state.transport.connect(host, port, state.connect_opts) do
+      {:ok, conn} ->
+        login_and_register_peer(state, name, host, port, conn)
 
-            state
-        end
+      {:error, %Error{} = err} ->
+        Logger.warning(
+          "Aerospike.Tender: could not connect to peer #{name} at #{host}:#{port}: #{err.message}"
+        )
+
+        state
+    end
+  end
+
+  defp login_and_register_peer(state, name, host, port, conn) do
+    case login_info_socket(state, conn) do
+      {:ok, session} ->
+        features = fetch_peer_features(state, name, conn)
+
+        register_new_node(
+          state,
+          name,
+          host,
+          port,
+          conn,
+          features,
+          session,
+          :peer_discovery
+        )
+
+      {:error, %Error{} = err} ->
+        Logger.warning(
+          "Aerospike.Tender: peer #{name} at #{host}:#{port} login failed: #{err.message}"
+        )
+
+        safe_close(state.transport, conn)
+        state
     end
   end
 
@@ -1189,17 +1284,25 @@ defmodule Aerospike.Tender do
   defp allocate_counters(%{node_supervisor: nil}), do: nil
   defp allocate_counters(_state), do: NodeCounters.new()
 
-  defp ensure_pool(%{node_supervisor: nil}, _node_name, _host, _port, _counters, _features),
-    do: {:ok, nil}
+  defp ensure_pool(
+         %{node_supervisor: nil},
+         _node_name,
+         _host,
+         _port,
+         _counters,
+         _features,
+         _session
+       ),
+       do: {:ok, nil}
 
-  defp ensure_pool(state, node_name, host, port, counters, features) do
+  defp ensure_pool(state, node_name, host, port, counters, features, session) do
     opts =
       [
         node_name: node_name,
         transport: state.transport,
         host: host,
         port: port,
-        connect_opts: state.connect_opts,
+        connect_opts: pool_connect_opts(state, session),
         pool_size: state.pool_size,
         counters: counters,
         features: features
@@ -1219,6 +1322,33 @@ defmodule Aerospike.Tender do
 
         :error
     end
+  end
+
+  # Builds the per-worker connect opts for a pool:
+  #
+  #   * When no creds are configured → verbatim `state.connect_opts`.
+  #   * When creds are configured but the info socket did not produce a
+  #     session token (server has security disabled, or PKI-anonymous) →
+  #     forward `:user` + `:password` so workers can run a full password
+  #     login on their own socket.
+  #   * When a session token is cached → forward `:user` + `:session_token`
+  #     so workers run the cheap AUTHENTICATE path; the password stays in
+  #     case the server rejects the token with `:expired_session` and the
+  #     worker needs to fall back to a full login.
+  defp pool_connect_opts(%{user: nil, password: nil} = state, _session), do: state.connect_opts
+
+  defp pool_connect_opts(%{user: user, password: password} = state, nil) do
+    state.connect_opts
+    |> Keyword.put(:user, user)
+    |> Keyword.put(:password, password)
+  end
+
+  defp pool_connect_opts(%{user: user, password: password} = state, {token, _expires_at})
+       when is_binary(token) do
+    state.connect_opts
+    |> Keyword.put(:user, user)
+    |> Keyword.put(:password, password)
+    |> Keyword.put(:session_token, token)
   end
 
   # Stops the pool for `node`. Absence of a pool (no supervisor or a nil

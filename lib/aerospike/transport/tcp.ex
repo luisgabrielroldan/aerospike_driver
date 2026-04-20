@@ -54,6 +54,23 @@ defmodule Aerospike.Transport.Tcp do
       handle. `nil` (default) when the caller does not know the node
       name yet — e.g. seed bootstrap and peer-discovery probes open
       sockets before the `node` info key has been read.
+    * `:user` / `:password` — internal-auth session login credentials.
+      When both are present, `connect/3` runs the admin-protocol login
+      handshake immediately after the TCP handshake and returns the
+      authenticated socket. On a server with security disabled the
+      login result code `SECURITY_NOT_ENABLED` (52) is treated as a
+      successful no-op and the socket is returned as usual. Any other
+      non-zero result closes the socket and surfaces as an
+      `%Aerospike.Error{}`.
+    * `:session_token` — opaque session token issued by an earlier
+      login. When present, `connect/3` sends an `AUTHENTICATE` command
+      on the fresh socket instead of the full password handshake.
+      `:user` must be present alongside the token. The transport
+      returns `{:error, %Aerospike.Error{code: :expired_session}}` when
+      the server rejects the token; the caller is expected to retry
+      with `:user`/`:password` to acquire a fresh token.
+    * `:login_timeout_ms` — read deadline applied to the login reply.
+      Defaults to `:connect_timeout_ms`.
 
   See `:inet.setopts/2` for the underlying semantics. Opt translation
   happens once in `connect/3`; callers pass the public names above.
@@ -74,6 +91,7 @@ defmodule Aerospike.Transport.Tcp do
 
   alias Aerospike.Error
   alias Aerospike.Protocol.Info
+  alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
   alias Aerospike.Telemetry
 
@@ -87,6 +105,7 @@ defmodule Aerospike.Transport.Tcp do
   @type_info Message.type_info()
   @type_as_msg Message.type_as_msg()
   @type_compressed Message.type_compressed()
+  @login_header_size Login.reply_header_size()
 
   @typedoc "Concrete connection handle returned by `connect/3`."
   @opaque conn :: %__MODULE__{
@@ -102,17 +121,219 @@ defmodule Aerospike.Transport.Tcp do
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
     info_timeout = Keyword.get(opts, :info_timeout, connect_timeout_ms)
+    login_timeout_ms = Keyword.get(opts, :login_timeout_ms, connect_timeout_ms)
     node_name = Keyword.get(opts, :node_name)
 
     tcp_opts = build_tcp_opts(opts, connect_timeout_ms)
 
     case :gen_tcp.connect(to_charlist(host), port, tcp_opts, connect_timeout_ms) do
       {:ok, socket} ->
-        {:ok, %__MODULE__{socket: socket, info_timeout: info_timeout, node_name: node_name}}
+        conn = %__MODULE__{socket: socket, info_timeout: info_timeout, node_name: node_name}
+        maybe_login(conn, opts, login_timeout_ms, host, port)
 
       {:error, reason} ->
         {:error, connect_error(host, port, reason)}
     end
+  end
+
+  # Runs the admin-protocol login or authenticate handshake on a freshly
+  # connected socket. Selection order:
+  #
+  #   1. `:session_token` present → send AUTHENTICATE (cheap, no bcrypt).
+  #      On `:expired_session` the caller is expected to retry with
+  #      password creds; the socket is closed so callers cannot reuse it.
+  #   2. `:user` + `:password` present → send LOGIN (internal auth).
+  #      Returns `{:ok, conn}` regardless of whether the server produced a
+  #      session token; callers that need the token must call
+  #      `login/2` on an unauthenticated connection instead.
+  #   3. Neither set → return the connection untouched (plaintext, no auth).
+  #
+  # `SECURITY_NOT_ENABLED` (code 52) is treated as success at every entry
+  # point: the socket is usable, the server simply had security disabled.
+  # Any other non-zero result closes the socket and surfaces as a typed
+  # `%Aerospike.Error{}`.
+  defp maybe_login(conn, opts, timeout_ms, host, port) do
+    user = Keyword.get(opts, :user)
+    password = Keyword.get(opts, :password)
+    session_token = Keyword.get(opts, :session_token)
+
+    cond do
+      is_binary(user) and is_binary(session_token) ->
+        authenticate_session_with_fallback(
+          conn,
+          user,
+          password,
+          session_token,
+          timeout_ms,
+          host,
+          port
+        )
+
+      is_binary(user) and is_binary(password) ->
+        login_internal(conn, user, password, timeout_ms, host, port)
+
+      true ->
+        {:ok, conn}
+    end
+  end
+
+  # Runs AUTHENTICATE first; if the server rejects the session token with
+  # `:expired_session` and the caller also supplied `:password`, reopens
+  # the handshake on the same socket with a full password login so the
+  # pool worker recovers from an expired cached token without bouncing
+  # the socket. On any other failure the socket is closed and the error
+  # surfaces to the caller.
+  defp authenticate_session_with_fallback(conn, user, password, token, timeout_ms, host, port) do
+    frame = Login.encode_authenticate(user, token)
+
+    case run_login_rpc(conn, frame, timeout_ms) do
+      {:ok, _reply} ->
+        {:ok, conn}
+
+      {:error, %Error{code: :expired_session}} when is_binary(password) ->
+        login_internal(conn, user, password, timeout_ms, host, port)
+
+      {:error, %Error{} = err} ->
+        close_and_fail(conn, err, host, port)
+    end
+  end
+
+  defp login_internal(conn, user, password, timeout_ms, host, port) do
+    hashed = Login.hash_password(password)
+    frame = Login.encode_login_internal(user, hashed)
+
+    case run_login_rpc(conn, frame, timeout_ms) do
+      {:ok, :ok_no_token} ->
+        {:ok, conn}
+
+      {:ok, :security_not_enabled} ->
+        {:ok, conn}
+
+      {:ok, {:session, _token, _ttl}} ->
+        {:ok, conn}
+
+      {:error, %Error{} = err} ->
+        close_and_fail(conn, err, host, port)
+    end
+  end
+
+  # Public entry point so callers that want the raw login reply (the
+  # Tender, which caches the session token per node) can reach it
+  # without going through `connect/3`'s default swallow-the-token
+  # behaviour. Runs on an already-connected socket; the caller owns
+  # the socket and is expected to close it on error.
+  @impl true
+  @spec login(conn(), keyword()) ::
+          {:ok, Login.login_reply()} | {:error, Error.t()}
+  def login(%__MODULE__{} = conn, opts) when is_list(opts) do
+    timeout_ms = Keyword.get(opts, :login_timeout_ms, conn.info_timeout)
+
+    frame =
+      case Keyword.get(opts, :session_token) do
+        nil ->
+          user = Keyword.fetch!(opts, :user)
+          password = Keyword.fetch!(opts, :password)
+          Login.encode_login_internal(user, Login.hash_password(password))
+
+        token when is_binary(token) ->
+          user = Keyword.fetch!(opts, :user)
+          Login.encode_authenticate(user, token)
+      end
+
+    run_login_rpc(conn, frame, timeout_ms)
+  end
+
+  # Sends the login/authenticate frame, reads the 24-byte reply header and
+  # the trailing field block, and translates the decoded reply into either
+  # a `Login.login_reply` or an `%Aerospike.Error{}`. Wrapped in a
+  # `[:aerospike, :info, :rpc, :*]` span so the login RPC shows up in the
+  # same event stream as ordinary info probes.
+  defp run_login_rpc(%__MODULE__{node_name: node_name} = conn, frame, timeout_ms) do
+    :telemetry.span(
+      Telemetry.info_rpc_span(),
+      %{node_name: node_name, commands: [:login]},
+      fn ->
+        result = do_run_login_rpc(conn, frame, timeout_ms)
+        {result, %{node_name: node_name, commands: [:login]}}
+      end
+    )
+  end
+
+  defp do_run_login_rpc(conn, frame, timeout_ms) do
+    with :ok <- send_login(conn, frame),
+         {:ok, header} <- recv_exact(conn.socket, @login_header_size, timeout_ms),
+         {:ok, {result_code, field_count, body_length}} <- decode_login_header(header),
+         {:ok, body} <- recv_login_body(conn.socket, body_length, timeout_ms) do
+      interpret_login_reply(result_code, field_count, body)
+    end
+  end
+
+  defp send_login(%__MODULE__{socket: socket}, frame) do
+    case :gen_tcp.send(socket, frame) do
+      :ok -> :ok
+      {:error, reason} -> {:error, transport_error(:send, reason)}
+    end
+  end
+
+  defp recv_login_body(_socket, 0, _timeout), do: {:ok, <<>>}
+
+  defp recv_login_body(socket, length, timeout) when length > 0 do
+    recv_exact(socket, length, timeout)
+  end
+
+  defp decode_login_header(header) do
+    case Login.decode_reply_header(header) do
+      {:ok, result_code, field_count, body_length} ->
+        {:ok, {result_code, field_count, body_length}}
+
+      {:error, :incomplete_header} ->
+        {:error,
+         %Error{code: :parse_error, message: "incomplete admin-protocol header from server"}}
+
+      {:error, {:wrong_version, version}} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "unexpected admin proto version from server: got #{version}"
+         }}
+
+      {:error, {:wrong_type, type}} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "unexpected admin proto type from server: got #{type}"
+         }}
+    end
+  end
+
+  defp interpret_login_reply(:ok, field_count, body) do
+    case Login.decode_login_fields(body, field_count) do
+      {:ok, reply} ->
+        {:ok, reply}
+
+      {:error, :parse_error} ->
+        {:error, %Error{code: :parse_error, message: "malformed admin-protocol login fields"}}
+    end
+  end
+
+  defp interpret_login_reply(:security_not_enabled, _field_count, _body),
+    do: {:ok, :security_not_enabled}
+
+  defp interpret_login_reply(code, _field_count, _body) when is_atom(code) do
+    {:error, Error.from_result_code(code)}
+  end
+
+  defp interpret_login_reply(code, _field_count, _body) when is_integer(code) do
+    {:error,
+     %Error{
+       code: :server_error,
+       message: "login failed with unknown result code #{code}"
+     }}
+  end
+
+  defp close_and_fail(%__MODULE__{socket: socket}, %Error{} = err, _host, _port) do
+    _ = :gen_tcp.close(socket)
+    {:error, err}
   end
 
   # Builds the `:gen_tcp.connect/4` opt list. The first four entries are

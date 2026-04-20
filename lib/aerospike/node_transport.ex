@@ -91,4 +91,43 @@ defmodule Aerospike.NodeTransport do
               opts :: command_opts()
             ) ::
               {:ok, binary()} | {:error, Aerospike.Error.t()}
+
+  @typedoc """
+  Parsed admin-protocol login reply returned by `c:login/2`.
+
+    * `:ok_no_token` — server accepted the login but issued no session
+      token (e.g. PKI with no user mapping).
+    * `{:session, token, ttl_seconds_or_nil}` — server accepted the login
+      and issued `token`. `ttl_seconds` is the server-reported TTL (nil
+      if omitted).
+    * `:security_not_enabled` — server has security disabled (result
+      code 52); callers treat this as success with no token.
+  """
+  @type login_reply ::
+          :ok_no_token
+          | {:session, binary(), non_neg_integer() | nil}
+          | :security_not_enabled
+
+  @doc """
+  Runs the admin-protocol login (or session-token authenticate) handshake
+  on an already-connected socket and returns the parsed reply.
+
+  Optional — transports that do not support authentication raise
+  `UndefinedFunctionError`; callers that use this callback must ensure
+  the configured transport implements it.
+
+  Opts:
+
+    * `:user` — username (required when `:session_token` is absent).
+    * `:password` — cleartext password (required when `:session_token`
+      is absent; the transport hashes it as the server requires).
+    * `:session_token` — when present, runs AUTHENTICATE instead of a
+      fresh LOGIN. `:user` is still required.
+    * `:login_timeout_ms` — read deadline applied to the login reply.
+      Transport-specific default.
+  """
+  @callback login(conn(), opts :: keyword()) ::
+              {:ok, login_reply()} | {:error, Aerospike.Error.t()}
+
+  @optional_callbacks login: 2
 end

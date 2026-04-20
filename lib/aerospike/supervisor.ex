@@ -50,6 +50,16 @@ defmodule Aerospike.Supervisor do
   `:tend_trigger`, `:use_compression`, `:use_services_alternate`,
   `:pool_size`, `:idle_timeout_ms`, `:max_idle_pings`).
 
+  ## Auth opts
+
+  `:user` and `:password` are cluster-wide session-login credentials.
+  Both must be present together; neither present disables auth (the
+  transport connects plaintext without a login handshake). The
+  credentials are forwarded into `:connect_opts` so the transport can
+  run the admin-protocol login immediately after the TCP handshake;
+  the Tender additionally caches the resulting session token per node
+  and reuses it across pool workers.
+
   Pool-level knobs live at the top level of the keyword list because
   the pool supervisor — not the transport — honours them:
 
@@ -173,9 +183,30 @@ defmodule Aerospike.Supervisor do
     validate_pos_integer!(opts, :tend_interval_ms)
     validate_non_neg_integer!(opts, :failure_threshold)
 
+    validate_auth_opts!(opts)
     validate_connect_opts!(opts)
 
     opts
+  end
+
+  # `:user` / `:password` are cluster-wide credentials. Reject a partial
+  # pair at `start_link/1` rather than letting a half-configured cluster
+  # silently disable auth on one socket and require it on the next.
+  defp validate_auth_opts!(opts) do
+    user = Keyword.get(opts, :user)
+    password = Keyword.get(opts, :password)
+
+    case {user, password} do
+      {nil, nil} ->
+        :ok
+
+      {u, p} when is_binary(u) and is_binary(p) ->
+        :ok
+
+      _ ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: :user and :password must both be strings or both be absent"
+    end
   end
 
   defp validate_pos_integer!(opts, key) do
