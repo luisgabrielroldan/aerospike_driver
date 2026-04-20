@@ -10,9 +10,8 @@ defmodule Aerospike.NodePool do
   the caller returns `:close` at check-in to have the worker torn down
   and replaced.
 
-  Tier 1 deliberately omits login/auth, TLS, and telemetry: those are
-  scheduled for Tier 2 and Tier 3. Tier 1.5 adds idle-deadline eviction
-  via `handle_ping/2` (see "Idle eviction" below).
+  The pool deliberately omits login/auth, TLS, and telemetry. It adds
+  idle-deadline eviction via `handle_ping/2` (see "Idle eviction" below).
 
   ## Warm-up
 
@@ -22,16 +21,16 @@ defmodule Aerospike.NodePool do
   failure at `:warning`. A failed `init_worker/1` returns
   `{:remove, {:connect_failed, _}}`, which NimblePool re-schedules
   asynchronously; the pool stays usable on the workers that did connect
-  and the failed slot retries later. Tier 1.5 does not escalate "all
-  workers failed" — that decision belongs to the Tier 2 per-node state
-  machine.
+  and the failed slot retries later. The pool does not escalate "all
+  workers failed" — that decision belongs to the per-node state machine
+  in the Tender.
 
   ## Idle eviction
 
   `handle_ping/2` returns `{:remove, :idle}` for every worker that has
   sat unused past the pool's `:worker_idle_timeout`, so NimblePool tears
   the socket down via `terminate_worker/3` (which calls
-  `transport.close/1`). Tier 1.5 does not eagerly re-open evicted
+  `transport.close/1`). The pool does not eagerly re-open evicted
   workers; NimblePool re-initialises them on the next checkout. The
   default idle deadline is chosen by `Aerospike.NodeSupervisor` to stay
   below Aerospike's default `proto-fd-idle-ms` of 60_000 ms so the
@@ -48,7 +47,8 @@ defmodule Aerospike.NodePool do
         port: :inet.port_number(),
         connect_opts: keyword(),
         node_name: String.t(),
-        counters: Aerospike.NodeCounters.t() | nil
+        counters: Aerospike.NodeCounters.t() | nil,
+        features: MapSet.t()
       ]
 
   `node_name` is recorded for log context; it is not used by the
@@ -62,6 +62,14 @@ defmodule Aerospike.NodePool do
   `counters` is `nil` the callbacks degrade to no-ops so the pool keeps
   working in tests and cluster-state-only modes that never allocate a
   counters reference.
+
+  `features` is the set of capability tokens the Tender captured from
+  the node's `features` info-key reply at registration. The pool itself
+  does not branch on the set — capability-gated dispatch decisions live
+  in the command path — but the set rides on the pool state so that
+  consumer can read it without paying a `GenServer.call` into the
+  Tender. An empty set means either a probe failure or a server that
+  advertises no client-relevant capabilities.
 
   ## Checkin value protocol
 
@@ -163,6 +171,16 @@ defmodule Aerospike.NodePool do
     # `:counters` is optional: tests and cluster-state-only modes may
     # omit it, and the callbacks below degrade to no-ops when it is nil.
     _counters = Keyword.get(opts, :counters)
+    # `:features` is optional and defaults to an empty set so tests and
+    # cluster-state-only modes that never run the bootstrap probe still
+    # produce a usable pool. Stash an explicit empty set on the
+    # pool_state when omitted so consumers can pattern-match without a
+    # `nil` branch.
+    opts =
+      case Keyword.has_key?(opts, :features) do
+        true -> opts
+        false -> Keyword.put(opts, :features, MapSet.new())
+      end
 
     {:ok, opts}
   end

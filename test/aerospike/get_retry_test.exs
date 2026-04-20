@@ -249,8 +249,8 @@ defmodule Aerospike.GetRetryTest do
     # B1 owns every partition at replica slot 1 (secondary).
     b1_replicas = ReplicasFixture.build(@namespace, 1, [[], partitions])
 
-    Fake.script_info(fake, "A1", ["node"], %{"node" => "A1"})
-    Fake.script_info(fake, "B1", ["node"], %{"node" => "B1"})
+    Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
+    Fake.script_info(fake, "B1", ["node", "features"], %{"node" => "B1", "features" => ""})
 
     script_cycle(fake, "A1", gen: 1, peers: "0,3000,[]", replicas: a1_replicas)
     script_cycle(fake, "B1", gen: 1, peers: "0,3000,[]", replicas: b1_replicas)

@@ -48,6 +48,101 @@ defmodule Aerospike.TenderTest do
     end
   end
 
+  describe "bootstrap captures the node's `features` info-key reply" do
+    test "recognised features land on the node record and the snapshot", ctx do
+      Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
+        "node" => "A1",
+        "features" => "compression;pipelining"
+      })
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      snapshot = Tender.nodes_status(pid)
+      assert MapSet.new([:compression, :pipelining]) == snapshot["A1"].features
+    end
+
+    test "unknown tokens are preserved as {:unknown, raw} so future probes can see them", ctx do
+      Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
+        "node" => "A1",
+        "features" => "compression;peers;batch-index"
+      })
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      features = Tender.nodes_status(pid)["A1"].features
+      assert MapSet.member?(features, :compression)
+      assert MapSet.member?(features, {:unknown, "peers"})
+      assert MapSet.member?(features, {:unknown, "batch-index"})
+    end
+
+    test "missing `features` key registers the node with an empty MapSet", ctx do
+      Fake.script_info(ctx.fake, "A1", ["node", "features"], %{"node" => "A1"})
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      assert MapSet.new() == Tender.nodes_status(pid)["A1"].features
+    end
+
+    test "empty `features` value still registers the node with an empty MapSet", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      assert MapSet.new() == Tender.nodes_status(pid)["A1"].features
+    end
+
+    test "peer-discovered nodes capture features from a dedicated probe", ctx do
+      register_node(ctx.fake, "B1", "10.0.0.2", 3000)
+
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1", "compression")
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "1,3000,[[B1,,[10.0.0.2:3000]]]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      # B1 is reached via ensure_peer_connected, which probes only the
+      # `features` key on the freshly opened socket.
+      Fake.script_info(ctx.fake, "B1", ["features"], %{
+        "features" => "compression;pipelining"
+      })
+
+      Fake.script_info(ctx.fake, "B1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      snapshot = Tender.nodes_status(pid)
+      assert MapSet.new([:compression, :pipelining]) == snapshot["B1"].features
+    end
+  end
+
   describe "tend_now/1 synchronisation" do
     test "returns only after the cycle finishes writing ETS", ctx do
       script_bootstrap_node(ctx.fake, "A1", 3, ReplicasFixture.all_master("test", 3))
@@ -113,7 +208,7 @@ defmodule Aerospike.TenderTest do
       # First cycle installs regime 5. Second cycle pretends the node regressed
       # to regime 4 (as if a lagging partition-map was read after a newer one).
       # The stored entry must stay at regime 5.
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
+      script_bootstrap_info(ctx.fake, "A1")
 
       Enum.each([5, 4], fn regime ->
         Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
@@ -152,7 +247,7 @@ defmodule Aerospike.TenderTest do
       incomplete =
         ReplicasFixture.build("test", 1, [Enum.to_list(0..(last_partition - 1))])
 
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
+      script_bootstrap_info(ctx.fake, "A1")
 
       Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
         "partition-generation" => "1",
@@ -198,8 +293,8 @@ defmodule Aerospike.TenderTest do
         ReplicasFixture.build("test", 1, [Enum.to_list(half..last_partition)])
 
       # Bootstrap: A1 and B1 are both seeds.
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
-      Fake.script_info(ctx.fake, "B1", ["node"], %{"node" => "B1"})
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1")
 
       # Cycle 1 — peers discovery returns empty from A1 and empty from B1.
       # Partition map is incomplete (half owned by A1, no one owns the rest).
@@ -216,6 +311,9 @@ defmodule Aerospike.TenderTest do
       )
 
       # C1 gets reached inside cycle 2 via ensure_peer_connected + replicas.
+      # ensure_peer_connected probes the peer's features after dialling so the
+      # node record carries the same MapSet shape as a seed-registered node.
+      Fake.script_info(ctx.fake, "C1", ["features"], %{"features" => ""})
       Fake.script_info(ctx.fake, "C1", ["replicas"], %{"replicas" => c1_replicas})
 
       {:ok, pid} =
@@ -255,8 +353,8 @@ defmodule Aerospike.TenderTest do
       b1_replicas_v2 =
         ReplicasFixture.build("test", 2, [Enum.to_list(half..last_partition)])
 
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
-      Fake.script_info(ctx.fake, "B1", ["node"], %{"node" => "B1"})
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1")
 
       # Cycle 1 — both nodes succeed; map is complete and ready.
       script_cycle(ctx.fake, "A1", gen: 1, peers: "0,3000,[]", replicas: a1_replicas)
@@ -468,6 +566,133 @@ defmodule Aerospike.TenderTest do
     end
   end
 
+  describe "re-bootstrap when state.nodes goes empty" do
+    test "steady state never re-dials seeds after the first bootstrap", ctx do
+      # Script five healthy tend cycles against a single node. Once the
+      # Tender has a non-empty `state.nodes`, `bootstrap_if_needed/1` must
+      # short-circuit and the Fake transport must record exactly one
+      # `connect/3` call against the seed for the whole run.
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      Enum.each(1..4, fn _ ->
+        Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef"
+        })
+
+        Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{
+          "peers-clear-std" => "0,3000,[]"
+        })
+      end)
+
+      {:ok, pid} = start_tender(ctx, "test")
+
+      Enum.each(1..5, fn _ -> :ok = Tender.tend_now(pid) end)
+
+      assert Fake.connect_count(ctx.fake, "A1") == 1,
+             "seed must be dialled exactly once in steady state"
+    end
+
+    test "re-dials seeds after every node has been dropped", ctx do
+      # Cycle 1 bootstraps A1 successfully. Cycle 2 fails the refresh-node
+      # info call and the peers probe, driving A1's failures to the
+      # threshold and flipping it to :inactive (the replicas fetch is
+      # skipped because the :inactive filter in `refresh_partition_maps/1`
+      # sees A1 after the flip). Cycle 3 probes A1's pg/cluster-stable
+      # through `refresh_nodes/1` and fails again — because A1 is already
+      # :inactive, that single failure removes the node entirely. At that
+      # point `state.nodes == %{}` and the next tend cycle must re-run
+      # `bootstrap_seed/3` against the configured seeds. `connect_count`
+      # must advance to 2 and A1 must come back as :active with a fresh
+      # partition map applied.
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      err = %Error{code: :network_error, message: "injected"}
+
+      # Cycle 2 — fails pg/cluster-stable and peers; mark_inactive flips
+      # A1 to :inactive before the replicas stage runs, so no replicas
+      # script is consumed.
+      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+
+      # Cycle 3 — A1 is :inactive; only `refresh_nodes/1` probes it.
+      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+
+      # Recovery cycle 4 — re-bootstrap + full healthy round.
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+
+      :ok = Tender.tend_now(pid)
+      assert Tender.ready?(pid)
+
+      # Cycle 2 — flip to :inactive.
+      :ok = Tender.tend_now(pid)
+      assert %{"A1" => %{status: :inactive}} = Tender.nodes_status(pid)
+      refute Tender.ready?(pid)
+
+      # Cycle 3 — drop the node; state.nodes becomes empty.
+      :ok = Tender.tend_now(pid)
+      assert Tender.nodes_status(pid) == %{}
+
+      # Cycle 4 — `bootstrap_if_needed/1` must re-enter because
+      # state.nodes is empty. The replayed bootstrap cycle puts A1 back
+      # into :active and re-applies the partition map.
+      :ok = Tender.tend_now(pid)
+
+      status = Tender.nodes_status(pid)
+      assert %{"A1" => %{status: :active, generation_seen: 1}} = status
+      assert Tender.ready?(pid)
+
+      assert Fake.connect_count(ctx.fake, "A1") == 2,
+             "seed must be re-dialled exactly once after the drop"
+    end
+
+    test "seed dial failure during recovery leaves state.nodes empty", ctx do
+      # Same drop sequence as the previous test, but cycle 4 scripts a
+      # `connect/3` failure against the seed — the recovery attempt must
+      # fail cleanly, state.nodes must stay empty, and no partial node
+      # entry is left behind. The next cycle (cycle 5) falls back to the
+      # Fake's default success path and A1 finally comes back.
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      err = %Error{code: :network_error, message: "injected"}
+
+      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+
+      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+
+      :ok = Tender.tend_now(pid)
+      :ok = Tender.tend_now(pid)
+      :ok = Tender.tend_now(pid)
+      assert Tender.nodes_status(pid) == %{}
+
+      # Script the recovery-cycle connect failure AFTER cycle 1 has
+      # consumed its own successful connect so the error is queued to
+      # be observed by the first re-bootstrap attempt, not the initial
+      # bootstrap dial.
+      Fake.script_connect(ctx.fake, "A1", {:error, err})
+
+      # Cycle 4 — re-bootstrap dials the seed; the scripted failure
+      # short-circuits and no node is registered.
+      :ok = Tender.tend_now(pid)
+      assert Tender.nodes_status(pid) == %{}
+      refute Tender.ready?(pid)
+
+      # Cycle 5 — retry. No more scripted connect outcomes remain so the
+      # Fake falls back to the default success path. Script a fresh
+      # healthy bootstrap cycle so the re-dial can install A1.
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      :ok = Tender.tend_now(pid)
+      assert %{"A1" => %{status: :active}} = Tender.nodes_status(pid)
+      assert Tender.ready?(pid)
+    end
+  end
+
   describe "cluster-stable agreement guard" do
     test "all active nodes agreeing lets the partition-map refresh proceed", ctx do
       register_node(ctx.fake, "B1", "10.0.0.2", 3000)
@@ -481,8 +706,8 @@ defmodule Aerospike.TenderTest do
       b1_replicas =
         ReplicasFixture.build("test", 1, [Enum.to_list(half..last_partition)])
 
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
-      Fake.script_info(ctx.fake, "B1", ["node"], %{"node" => "B1"})
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1")
 
       script_cycle(ctx.fake, "A1",
         gen: 1,
@@ -524,8 +749,8 @@ defmodule Aerospike.TenderTest do
       b1_replicas =
         ReplicasFixture.build("test", 1, [Enum.to_list(half..last_partition)])
 
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
-      Fake.script_info(ctx.fake, "B1", ["node"], %{"node" => "B1"})
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1")
 
       # Cycle 1 — both nodes agree; the map is fully populated.
       script_cycle(ctx.fake, "A1",
@@ -613,8 +838,8 @@ defmodule Aerospike.TenderTest do
       b1_replicas_v2 =
         ReplicasFixture.build("test", 2, [Enum.to_list(half..last_partition)])
 
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
-      Fake.script_info(ctx.fake, "B1", ["node"], %{"node" => "B1"})
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1")
 
       # Cycle 1 — agree; map populated.
       script_cycle(ctx.fake, "A1",
@@ -692,8 +917,8 @@ defmodule Aerospike.TenderTest do
       b1_replicas =
         ReplicasFixture.build("test", 1, [Enum.to_list(half..last_partition)])
 
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
-      Fake.script_info(ctx.fake, "B1", ["node"], %{"node" => "B1"})
+      script_bootstrap_info(ctx.fake, "A1")
+      script_bootstrap_info(ctx.fake, "B1")
 
       # Cycle 1 — both healthy, both agree on hash="X".
       script_cycle(ctx.fake, "A1",
@@ -860,7 +1085,7 @@ defmodule Aerospike.TenderTest do
       # circuit does not fire, replicas IS fetched, but every segment is
       # rejected as stale. applied_gen must stay at the previous value so
       # the next cycle refetches and has a chance to re-apply.
-      Fake.script_info(ctx.fake, "A1", ["node"], %{"node" => "A1"})
+      script_bootstrap_info(ctx.fake, "A1")
 
       # Cycle 1 installs regime 5.
       script_cycle(ctx.fake, "A1",
@@ -1021,10 +1246,11 @@ defmodule Aerospike.TenderTest do
       # Cycle 1 bootstraps A1 with a pool + counters. Cycle 2 fails and
       # trips the inactive transition (counters cleared to nil). Cycle 3
       # is healthy → A1 flips back to :active but its pool was torn down
-      # in cycle 2 and is not restarted by the Tier 1.5 recovery path.
-      # The test pins the post-recovery counters field to nil so future
-      # tasks that re-introduce pool restart can update this expectation
-      # in one place instead of discovering the contract by accident.
+      # in cycle 2 and is not restarted by the current recovery path.
+      # The test pins the post-recovery counters field to nil so any
+      # future change that re-introduces pool restart on recovery can
+      # update this expectation in one place instead of discovering the
+      # contract by accident.
       {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
@@ -1062,11 +1288,10 @@ defmodule Aerospike.TenderTest do
 
       snapshot = Tender.nodes_status(pid)
       assert snapshot["A1"].status == :active
-      # Pool was not restarted during recovery (pre-existing Tier 1.5
-      # behaviour), so counters remain nil after recovery. The pre-
-      # recovery reference must be gone — it is unsafe for anyone to
-      # still be writing through it because the pool that produced
-      # those writes is dead.
+      # Pool is not restarted during recovery (current behaviour), so
+      # counters remain nil after recovery. The pre-recovery reference
+      # must be gone — it is unsafe for anyone to still be writing
+      # through it because the pool that produced those writes is dead.
       assert snapshot["A1"].counters == nil
       assert {:error, :unknown_node} = Tender.node_counters(pid, "A1")
       # The old reference is still a live term (refs never go away on
@@ -1305,13 +1530,20 @@ defmodule Aerospike.TenderTest do
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp script_bootstrap_node(fake, node_name, partition_gen, replicas_value) do
-    Fake.script_info(fake, node_name, ["node"], %{"node" => node_name})
+    script_bootstrap_info(fake, node_name)
 
     script_cycle(fake, node_name,
       gen: partition_gen,
       peers: "0,3000,[]",
       replicas: replicas_value
     )
+  end
+
+  defp script_bootstrap_info(fake, node_name, features \\ "") do
+    Fake.script_info(fake, node_name, ["node", "features"], %{
+      "node" => node_name,
+      "features" => features
+    })
   end
 
   defp script_cycle(fake, node_name, opts) do
@@ -1343,7 +1575,16 @@ defmodule Aerospike.TenderTest do
   defp stop_tender(pid) do
     if Process.alive?(pid) do
       ref = Process.monitor(pid)
-      GenServer.stop(pid, :normal, 2_000)
+
+      # GenServer.stop can still race a concurrent exit (the Fake's
+      # `on_exit` may tear down the linked Tender between the
+      # `Process.alive?/1` check and this call); absorb :exit the same
+      # way `stop_process/1` does.
+      try do
+        GenServer.stop(pid, :normal, 2_000)
+      catch
+        :exit, _ -> :ok
+      end
 
       receive do
         {:DOWN, ^ref, _, _, _} -> :ok

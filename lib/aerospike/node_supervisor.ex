@@ -3,10 +3,10 @@ defmodule Aerospike.NodeSupervisor do
   `DynamicSupervisor` that owns the per-node `NimblePool` children for one
   named cluster.
 
-  This module is a shell in Tier 1: it accepts `start_pool/2` and
-  `stop_pool/2` calls from the Tender but makes no autonomous decisions
-  about cluster membership. The Tender decides when a pool starts or
-  stops; this supervisor just holds the pool children.
+  This module is a shell: it accepts `start_pool/2` and `stop_pool/2`
+  calls from the Tender but makes no autonomous decisions about cluster
+  membership. The Tender decides when a pool starts or stops; this
+  supervisor just holds the pool children.
 
   Pool children are started with `restart: :temporary` so a dead pool is
   not automatically resurrected. The Tender re-adds the node (and starts
@@ -91,6 +91,11 @@ defmodule Aerospike.NodeSupervisor do
       transport-class failure via `{:close, :failure}`. Omitting this
       key leaves counter writes as no-ops, which is the intended
       behaviour for tests and cluster-state-only modes.
+    * `:features` — optional `MapSet` of capability tokens captured
+      from the node's `features` info-key reply at registration. Pool
+      consumers (capability-gated send paths) read this to decide
+      whether to enable optional features per node. Defaults to an
+      empty `MapSet`.
   """
   @spec start_pool(pid() | atom(), keyword()) :: DynamicSupervisor.on_start_child()
   def start_pool(supervisor, opts) when is_list(opts) do
@@ -103,6 +108,7 @@ defmodule Aerospike.NodeSupervisor do
     idle_timeout_ms = Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms)
     max_idle_pings = Keyword.get(opts, :max_idle_pings, @default_max_idle_pings)
     counters = Keyword.get(opts, :counters)
+    features = Keyword.get(opts, :features, MapSet.new())
 
     worker_opts =
       [
@@ -111,7 +117,8 @@ defmodule Aerospike.NodeSupervisor do
         port: port,
         connect_opts: connect_opts,
         node_name: node_name,
-        counters: counters
+        counters: counters,
+        features: features
       ]
 
     # `lazy: false` is NimblePool's current default but pinning it makes

@@ -37,6 +37,7 @@ defmodule Aerospike.Tender do
   alias Aerospike.NodeCounters
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionMap
+  alias Aerospike.Protocol.Info, as: InfoParser
   alias Aerospike.Protocol.PartitionMap, as: PartitionMapParser
   alias Aerospike.Protocol.Peers
   alias Aerospike.RetryPolicy
@@ -103,8 +104,8 @@ defmodule Aerospike.Tender do
       disables retry. Default `2`. Per-command overrides via
       `Aerospike.get/3` opts.
     * `:sleep_between_retries_ms` — non-negative integer. Fixed sleep
-      between retry attempts. Default `0` (no backoff; a jittered
-      scheme is Tier 4 work).
+      between retry attempts. Default `0` (no backoff; jittered backoff
+      is not implemented).
     * `:replica_policy` — `:master` or `:sequence`. Default `:sequence`
       so retries walk the replica list; set to `:master` to pin every
       attempt to the master replica.
@@ -231,7 +232,7 @@ defmodule Aerospike.Tender do
   Returns a snapshot of every known node's lifecycle state.
 
   The map is keyed by node name and exposes the fields the retry and
-  circuit-breaker layers need in later Tier 2 tasks:
+  circuit-breaker layers consume:
 
     * `:status` — `:active | :inactive`.
     * `:failures` — consecutive refresh-failure counter.
@@ -246,6 +247,12 @@ defmodule Aerospike.Tender do
     * `:counters` — the node's `Aerospike.NodeCounters` reference, or
       `nil` when the Tender was started without a `:node_supervisor`
       (cluster-state-only mode).
+    * `:features` — `MapSet` of capability tokens captured from the
+      node's `features` info-key reply at registration. Recognised
+      tokens (e.g. `:compression`, `:pipelining`) are atoms;
+      unrecognised tokens are preserved as `{:unknown, raw_string}`
+      tuples. An empty set means either a probe failure or a server
+      that advertises no capabilities the client knows about.
 
   This call is intended for tests and diagnostics; hot-path readers use
   ETS (`owners`, `node_gens`, `meta`) or `node_counters/2` instead.
@@ -314,8 +321,7 @@ defmodule Aerospike.Tender do
       node_gens_tab: node_gens_tab,
       meta_tab: meta_tab,
       nodes: %{},
-      ready?: read_ready(meta_tab),
-      bootstrapped?: false
+      ready?: read_ready(meta_tab)
     }
 
     cleanup_orphan_pools(state)
@@ -384,7 +390,8 @@ defmodule Aerospike.Tender do
            last_tend_at: node.last_tend_at,
            last_tend_result: node.last_tend_result,
            generation_seen: node.generation_seen,
-           counters: node.counters
+           counters: node.counters,
+           features: node.features
          }}
       end)
 
@@ -458,31 +465,39 @@ defmodule Aerospike.Tender do
     end
   end
 
-  defp bootstrap_if_needed(%{bootstrapped?: true} = state), do: state
+  # Re-enters seed bootstrap whenever `state.nodes` is empty. In steady
+  # state the map is non-empty and this is a `map_size == 0` check — the
+  # same cost as a boolean latch. When every node has been dropped (full
+  # outage followed by the grace-cycle drop), the next tend cycle re-runs
+  # `bootstrap_seed/3` against the configured seeds. A seed that is still
+  # dead fails the info probe inside `bootstrap_seed/3` and logs at
+  # `:warning`; no state is written and the next cycle retries. The
+  # `:seeds` option is validated non-empty in `init/1`, so the "no
+  # configured seeds" edge case cannot occur here.
+  defp bootstrap_if_needed(%{nodes: nodes} = state) when map_size(nodes) > 0, do: state
 
   defp bootstrap_if_needed(state) do
-    state =
-      Enum.reduce(state.seeds, state, fn {host, port}, acc ->
-        bootstrap_seed(acc, host, port)
-      end)
-
-    if map_size(state.nodes) > 0 do
-      %{state | bootstrapped?: true}
-    else
-      state
-    end
+    Enum.reduce(state.seeds, state, fn {host, port}, acc ->
+      bootstrap_seed(acc, host, port)
+    end)
   end
 
+  # Fetches `node` and `features` in one info round-trip. The seed list is
+  # dialled verbatim from `connect_opts`, so `service-clear-alt` does not
+  # belong here — peer discovery is the only place the alternate-services
+  # toggle takes effect.
   defp bootstrap_seed(state, host, port) do
     with {:ok, conn} <- state.transport.connect(host, port, state.connect_opts),
-         {:ok, %{"node" => node_name}} <- state.transport.info(conn, ["node"]) do
+         {:ok, %{"node" => node_name} = info} <-
+           state.transport.info(conn, ["node", "features"]) do
       case Map.fetch(state.nodes, node_name) do
         {:ok, _existing} ->
           safe_close(state.transport, conn)
           state
 
         :error ->
-          register_new_node(state, node_name, host, port, conn)
+          features = parse_bootstrap_features(node_name, info)
+          register_new_node(state, node_name, host, port, conn, features)
       end
     else
       {:error, %Error{} = err} ->
@@ -495,7 +510,26 @@ defmodule Aerospike.Tender do
     end
   end
 
-  defp register_new_node(state, node_name, host, port, conn) do
+  # `features` is best-effort: a node that fails the probe still
+  # registers, but with an empty feature set, which is the safe default
+  # (every optional capability stays off). This matches the Go client's
+  # behaviour — `node.go:refreshFeatures` swallows a missing reply and
+  # leaves the feature set at zero.
+  defp parse_bootstrap_features(node_name, info) do
+    case Map.fetch(info, "features") do
+      {:ok, value} when is_binary(value) ->
+        InfoParser.parse_features(value)
+
+      _ ->
+        Logger.debug(fn ->
+          "Aerospike.Tender: #{node_name} bootstrap features key absent; assuming none"
+        end)
+
+        MapSet.new()
+    end
+  end
+
+  defp register_new_node(state, node_name, host, port, conn, features) do
     # Allocate counters *before* starting the pool so the pool's
     # callbacks see the reference from the first init_worker call.
     # In cluster-state-only mode (`:node_supervisor` absent) no pool
@@ -505,7 +539,7 @@ defmodule Aerospike.Tender do
     # invariant used by the breaker in Task 6.
     counters = allocate_counters(state)
 
-    case ensure_pool(state, node_name, host, port, counters) do
+    case ensure_pool(state, node_name, host, port, counters, features) do
       {:ok, pool_pid} ->
         node = %{
           name: node_name,
@@ -521,7 +555,8 @@ defmodule Aerospike.Tender do
           applied_gen: nil,
           cluster_stable: nil,
           pool_pid: pool_pid,
-          counters: counters
+          counters: counters,
+          features: features
         }
 
         %{state | nodes: Map.put(state.nodes, node_name, node)}
@@ -720,9 +755,9 @@ defmodule Aerospike.Tender do
   # the node's `owners`/`node_gens` rows so the Router stops routing to
   # it, resets the `failures` counter so the next tend cycle can either
   # recover or fall through to a full drop, and drops the node's
-  # counters reference — the pool is gone, the breaker (Task 6) cannot
-  # sensibly read stale slots, and a fresh recovery will allocate a new
-  # reference via `register_new_node/5`.
+  # counters reference — the pool is gone, the breaker cannot sensibly
+  # read stale slots, and a fresh recovery will allocate a new reference
+  # via `register_new_node/6`.
   defp mark_inactive(state, name) do
     case Map.fetch(state.nodes, name) do
       {:ok, node} ->
@@ -830,7 +865,8 @@ defmodule Aerospike.Tender do
       false ->
         case state.transport.connect(host, port, state.connect_opts) do
           {:ok, conn} ->
-            register_new_node(state, name, host, port, conn)
+            features = fetch_peer_features(state, name, conn)
+            register_new_node(state, name, host, port, conn, features)
 
           {:error, %Error{} = err} ->
             Logger.warning(
@@ -839,6 +875,25 @@ defmodule Aerospike.Tender do
 
             state
         end
+    end
+  end
+
+  # Peers are registered with the same best-effort feature handling as
+  # seeds. The peer's `node_name` is already known from the
+  # `peers-clear-std` reply, so only the `features` key is needed here;
+  # an empty MapSet on probe failure keeps capability-gated paths off
+  # for that node until the next time it is discovered.
+  defp fetch_peer_features(state, name, conn) do
+    case state.transport.info(conn, ["features"]) do
+      {:ok, info} ->
+        parse_bootstrap_features(name, info)
+
+      {:error, %Error{} = err} ->
+        Logger.debug(fn ->
+          "Aerospike.Tender: peer #{name} features probe failed: #{err.message}"
+        end)
+
+        MapSet.new()
     end
   end
 
@@ -989,9 +1044,10 @@ defmodule Aerospike.Tender do
   defp allocate_counters(%{node_supervisor: nil}), do: nil
   defp allocate_counters(_state), do: NodeCounters.new()
 
-  defp ensure_pool(%{node_supervisor: nil}, _node_name, _host, _port, _counters), do: {:ok, nil}
+  defp ensure_pool(%{node_supervisor: nil}, _node_name, _host, _port, _counters, _features),
+    do: {:ok, nil}
 
-  defp ensure_pool(state, node_name, host, port, counters) do
+  defp ensure_pool(state, node_name, host, port, counters, features) do
     opts = [
       node_name: node_name,
       transport: state.transport,
@@ -999,7 +1055,8 @@ defmodule Aerospike.Tender do
       port: port,
       connect_opts: state.connect_opts,
       pool_size: state.pool_size,
-      counters: counters
+      counters: counters,
+      features: features
     ]
 
     case NodeSupervisor.start_pool(state.node_supervisor, opts) do

@@ -99,4 +99,65 @@ defmodule Aerospike.Protocol.Info do
       end
     end
   end
+
+  @typedoc """
+  A capability token captured from the server's `features` info reply.
+
+  Recognised tokens (`compression`, `pipelining`) become atoms so call
+  sites can pattern-match. Every other token is preserved as
+  `{:unknown, raw_string}` so future probes (e.g. diagnostic logging or
+  a wider allow-list in a later phase) can still see what the server
+  advertised.
+  """
+  @type feature :: atom() | {:unknown, String.t()}
+
+  # Recognised tokens become atoms so callers can pattern-match. Anything
+  # outside this list is preserved as `{:unknown, raw}` so a diagnostic
+  # log or a future wider allow-list can still see what the server
+  # advertised. Keep this list aligned with the call sites that actually
+  # branch on a feature — adding a token here without a consumer is
+  # noise.
+  @recognised_features %{
+    "compression" => :compression,
+    "pipelining" => :pipelining
+  }
+
+  @doc """
+  Parses a `features` info-key value into a set of capability tokens.
+
+  The reply body is a `;`-separated list of feature names. Empty
+  segments (leading, trailing, or doubled separators) are dropped.
+  Recognised tokens become atoms; unrecognised tokens are preserved
+  as `{:unknown, raw}` tuples.
+
+  ## Examples
+
+      iex> Aerospike.Protocol.Info.parse_features("compression;pipelining")
+      MapSet.new([:compression, :pipelining])
+
+      iex> Aerospike.Protocol.Info.parse_features("")
+      MapSet.new()
+
+      iex> Aerospike.Protocol.Info.parse_features("compression;peers;;batch-index")
+      MapSet.new([:compression, {:unknown, "batch-index"}, {:unknown, "peers"}])
+
+  """
+  @spec parse_features(binary()) :: MapSet.t(feature())
+  def parse_features(value) when is_binary(value) do
+    value
+    |> String.split(";", trim: true)
+    |> Enum.reduce(MapSet.new(), fn raw, acc ->
+      token = raw |> String.trim() |> classify_feature()
+      if token == :empty, do: acc, else: MapSet.put(acc, token)
+    end)
+  end
+
+  defp classify_feature(""), do: :empty
+
+  defp classify_feature(raw) do
+    case Map.fetch(@recognised_features, raw) do
+      {:ok, atom} -> atom
+      :error -> {:unknown, raw}
+    end
+  end
 end

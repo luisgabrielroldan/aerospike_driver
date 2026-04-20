@@ -189,7 +189,10 @@ defmodule Aerospike.TenderPoolTest do
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp script_bootstrap_node(fake, node_name, partition_gen, replicas_value) do
-    Fake.script_info(fake, node_name, ["node"], %{"node" => node_name})
+    Fake.script_info(fake, node_name, ["node", "features"], %{
+      "node" => node_name,
+      "features" => ""
+    })
 
     Fake.script_info(fake, node_name, ["partition-generation", "cluster-stable"], %{
       "partition-generation" => Integer.to_string(partition_gen),

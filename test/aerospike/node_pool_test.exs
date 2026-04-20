@@ -49,6 +49,17 @@ defmodule Aerospike.NodePoolTest do
     %{fake: fake, pool: pool, counters: Keyword.get(opts, :counters)}
   end
 
+  defp base_init_opts(extras \\ []) do
+    [
+      transport: Fake,
+      host: @host,
+      port: @port,
+      connect_opts: [fake: nil],
+      node_name: @node_name
+    ]
+    |> Keyword.merge(extras)
+  end
+
   defp maybe_put(acc, opts, key) do
     case Keyword.fetch(opts, key) do
       {:ok, value} -> Keyword.put(acc, key, value)
@@ -66,6 +77,24 @@ defmodule Aerospike.NodePoolTest do
       after
         1_000 -> :ok
       end
+    end
+  end
+
+  describe "init_pool/1 features stashing" do
+    test "passes through a non-empty :features MapSet" do
+      features = MapSet.new([:compression])
+
+      opts = base_init_opts(features: features)
+
+      assert {:ok, pool_state} = NodePool.init_pool(opts)
+      assert Keyword.fetch!(pool_state, :features) == features
+    end
+
+    test "defaults :features to an empty MapSet when omitted" do
+      opts = base_init_opts()
+
+      assert {:ok, pool_state} = NodePool.init_pool(opts)
+      assert Keyword.fetch!(pool_state, :features) == MapSet.new()
     end
   end
 
