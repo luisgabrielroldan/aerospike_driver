@@ -9,6 +9,10 @@ defmodule Aerospike.TenderTest do
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 
+  def forward(event, measurements, metadata, test_pid) do
+    send(test_pid, {:event, event, measurements, metadata})
+  end
+
   setup context do
     name = :"tender_#{:erlang.phash2(context.test)}"
 
@@ -1662,9 +1666,12 @@ defmodule Aerospike.TenderTest do
 
       # The two snapshots match field-by-field for B1 on every stable
       # attribute. `last_tend_at` is monotonic-ms-based and will differ
-      # between runs, so strip it before comparing.
-      assert Map.drop(alt_snapshot["B1"], [:last_tend_at, :counters]) ==
-               Map.drop(std_snapshot["B1"], [:last_tend_at, :counters])
+      # between runs, so strip it before comparing. `:counters` and
+      # `:tend_histogram` are `:atomics`/`:counters` references — fresh
+      # per allocation so their terms differ across the two runs even
+      # though their content is equivalent.
+      assert Map.drop(alt_snapshot["B1"], [:last_tend_at, :counters, :tend_histogram]) ==
+               Map.drop(std_snapshot["B1"], [:last_tend_at, :counters, :tend_histogram])
     end
   end
 
@@ -1736,6 +1743,120 @@ defmodule Aerospike.TenderTest do
     end
   end
 
+  describe "tend-cycle telemetry and per-node histogram" do
+    test "tend_cycle span fires on every cycle with matching start/stop", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+
+      events = [
+        [:aerospike, :tender, :tend_cycle, :start],
+        [:aerospike, :tender, :tend_cycle, :stop]
+      ]
+
+      handler_id = attach_handler(events)
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :ok = Tender.tend_now(pid)
+
+      assert_receive {:event, [:aerospike, :tender, :tend_cycle, :start], start_meas, _},
+                     1_000
+
+      assert %{monotonic_time: _} = start_meas
+
+      assert_receive {:event, [:aerospike, :tender, :tend_cycle, :stop], stop_meas, _},
+                     1_000
+
+      assert %{duration: duration} = stop_meas
+      assert is_integer(duration)
+      assert duration >= 0
+    end
+
+    test "partition_map_refresh span fires as a nested span inside tend_cycle", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+
+      events = [
+        [:aerospike, :tender, :tend_cycle, :start],
+        [:aerospike, :tender, :tend_cycle, :stop],
+        [:aerospike, :tender, :partition_map_refresh, :start],
+        [:aerospike, :tender, :partition_map_refresh, :stop]
+      ]
+
+      handler_id = attach_handler(events)
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :ok = Tender.tend_now(pid)
+
+      # Expected ordering: cycle_start, partition_start, partition_stop,
+      # cycle_stop. Assert the nesting directly so a future refactor that
+      # lifts the partition-map refresh out of the cycle would fail loudly.
+      assert_receive {:event, [:aerospike, :tender, :tend_cycle, :start], _, _}, 1_000
+
+      assert_receive {:event, [:aerospike, :tender, :partition_map_refresh, :start], _, _},
+                     1_000
+
+      assert_receive {:event, [:aerospike, :tender, :partition_map_refresh, :stop], _, _},
+                     1_000
+
+      assert_receive {:event, [:aerospike, :tender, :tend_cycle, :stop], _, _}, 1_000
+    end
+
+    test "a replicas fetch records one sample into the node's histogram", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      {:ok, ref} = Tender.tend_histogram(pid, "A1")
+      assert Aerospike.TendHistogram.count(ref) == 1
+      assert is_integer(Aerospike.TendHistogram.percentile(ref, 0.5))
+    end
+
+    test "nodes_status/1 snapshot exposes the histogram reference", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      snapshot = Tender.nodes_status(pid)
+      assert %{tend_histogram: hist_ref} = snapshot["A1"]
+      assert hist_ref != nil
+      # Snapshot reference and accessor reference are the same :atomics term.
+      {:ok, accessor_ref} = Tender.tend_histogram(pid, "A1")
+      assert accessor_ref == hist_ref
+    end
+
+    test "tend_histogram/2 returns :unknown_node for inactive nodes", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      err = %Error{code: :network_error, message: "injected"}
+
+      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
+
+      :ok = Tender.tend_now(pid)
+      assert Tender.nodes_status(pid)["A1"].status == :active
+
+      # Second cycle crosses the threshold and flips the node to :inactive.
+      :ok = Tender.tend_now(pid)
+
+      assert Tender.nodes_status(pid)["A1"].status == :inactive
+      assert {:error, :unknown_node} = Tender.tend_histogram(pid, "A1")
+    end
+
+    test "tend_histogram/2 returns :unknown_node for an unknown node", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      assert {:error, :unknown_node} = Tender.tend_histogram(pid, "nope")
+    end
+  end
+
   describe "TableOwner outlives the Tender: restart preserves ETS state" do
     test "a restarted Tender reuses the same tables with their prior contents", ctx do
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
@@ -1802,6 +1923,12 @@ defmodule Aerospike.TenderTest do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp attach_handler(events) do
+    handler_id = {__MODULE__, make_ref()}
+    :ok = :telemetry.attach_many(handler_id, events, &__MODULE__.forward/4, self())
+    handler_id
+  end
 
   defp script_bootstrap_node(fake, node_name, partition_gen, replicas_value) do
     script_bootstrap_info(fake, node_name)

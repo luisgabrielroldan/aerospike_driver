@@ -54,13 +54,13 @@ defmodule Aerospike.Telemetry do
       list of info keys requested). Measurements: `:duration` on stop.
 
     * `[:aerospike, :tender, :tend_cycle]` — wraps one full
-      `Aerospike.Tender` cycle. Metadata: `:node_name`. Measurements:
-      `:duration` on stop.
+      `Aerospike.Tender` cycle. Cluster-wide (one pair per cycle).
+      Metadata: none. Measurements: `:duration` on stop.
 
     * `[:aerospike, :tender, :partition_map_refresh]` — wraps the
       partition-map refresh stage of the tend cycle (the most expensive
-      sub-step). Metadata: `:node_name`. Measurements: `:duration`
-      on stop.
+      sub-step). Cluster-wide, nested inside a `:tend_cycle` span.
+      Metadata: none. Measurements: `:duration` on stop.
 
   Instant events (dispatched via `:telemetry.execute/3`):
 

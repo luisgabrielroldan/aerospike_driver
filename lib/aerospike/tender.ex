@@ -42,6 +42,8 @@ defmodule Aerospike.Tender do
   alias Aerospike.Protocol.Peers
   alias Aerospike.RetryPolicy
   alias Aerospike.TableOwner
+  alias Aerospike.Telemetry
+  alias Aerospike.TendHistogram
 
   @default_tend_interval_ms 1_000
   @default_failure_threshold 5
@@ -215,7 +217,7 @@ defmodule Aerospike.Tender do
   @doc """
   Returns the `Aerospike.NodeCounters` reference allocated for
   `node_name`, or `{:error, :unknown_node}` if the node is not in the
-  cluster's current view or is currently `:inactive`. Task 6's circuit
+  cluster's current view or is currently `:inactive`. The circuit
   breaker reads counter slots through this reference on the hot path;
   this call pays a GenServer hop only once per node, not per command.
 
@@ -226,6 +228,26 @@ defmodule Aerospike.Tender do
           {:ok, NodeCounters.t()} | {:error, :unknown_node}
   def node_counters(server, node_name) when is_binary(node_name) do
     GenServer.call(server, {:node_counters, node_name})
+  end
+
+  @doc """
+  Returns the `Aerospike.TendHistogram` reference for `node_name`.
+
+  The histogram accumulates per-node partition-map-refresh latency
+  samples (one sample per tend cycle that fetches `replicas` for the
+  node). Readers call `Aerospike.TendHistogram.percentile/2` or
+  `count/1` directly against the returned reference; the GenServer hop
+  is one-shot per node, not per query.
+
+  Returns `{:error, :unknown_node}` if the node is not in the cluster's
+  current view, is currently `:inactive`, or when the Tender was
+  started without a `:node_supervisor` (cluster-state-only mode still
+  allocates histograms — see the head of `allocate_histogram/1`).
+  """
+  @spec tend_histogram(GenServer.server(), String.t()) ::
+          {:ok, TendHistogram.t()} | {:error, :unknown_node}
+  def tend_histogram(server, node_name) when is_binary(node_name) do
+    GenServer.call(server, {:tend_histogram, node_name})
   end
 
   @typedoc """
@@ -286,6 +308,11 @@ defmodule Aerospike.Tender do
     * `:counters` — the node's `Aerospike.NodeCounters` reference, or
       `nil` when the Tender was started without a `:node_supervisor`
       (cluster-state-only mode).
+    * `:tend_histogram` — the node's `Aerospike.TendHistogram`
+      reference, allocated at registration and nilled on lifecycle
+      demotion. Callers that only want percentiles should prefer
+      `tend_histogram/2`; the field is exposed here so a diagnostic
+      caller can inspect the raw slot counts.
     * `:features` — `MapSet` of capability tokens captured from the
       node's `features` info-key reply at registration. Recognised
       tokens (e.g. `:compression`, `:pipelining`) are atoms;
@@ -406,6 +433,16 @@ defmodule Aerospike.Tender do
     end
   end
 
+  def handle_call({:tend_histogram, node_name}, _from, state) do
+    case Map.fetch(state.nodes, node_name) do
+      {:ok, %{status: :active, tend_histogram: ref}} when not is_nil(ref) ->
+        {:reply, {:ok, ref}, state}
+
+      _ ->
+        {:reply, {:error, :unknown_node}, state}
+    end
+  end
+
   def handle_call({:node_handle, node_name}, _from, state) do
     case Map.fetch(state.nodes, node_name) do
       {:ok, %{status: :active, pool_pid: pool, counters: counters, features: features}}
@@ -440,6 +477,7 @@ defmodule Aerospike.Tender do
            last_tend_result: node.last_tend_result,
            generation_seen: node.generation_seen,
            counters: node.counters,
+           tend_histogram: node.tend_histogram,
            features: node.features
          }}
       end)
@@ -462,12 +500,17 @@ defmodule Aerospike.Tender do
   ## Tend cycle
 
   defp run_tend(state) do
-    state
-    |> bootstrap_if_needed()
-    |> refresh_nodes()
-    |> discover_peers()
-    |> maybe_refresh_partition_maps()
-    |> recompute_ready()
+    :telemetry.span(Telemetry.tend_cycle_span(), %{}, fn ->
+      new_state =
+        state
+        |> bootstrap_if_needed()
+        |> refresh_nodes()
+        |> discover_peers()
+        |> maybe_refresh_partition_maps()
+        |> recompute_ready()
+
+      {new_state, %{}}
+    end)
   end
 
   # Only fetches `replicas` once every `:active` node that produced a
@@ -475,19 +518,29 @@ defmodule Aerospike.Tender do
   # means the cluster is mid-transition; writing partition-map entries on
   # top of that transition risks mixing replica lists from different
   # cluster views, which is exactly the poisoning the guard prevents.
+  #
+  # Wrapped in a partition-map-refresh span so operators can separate
+  # the cost of fetching partition-generation (already inside
+  # `refresh_nodes/1`) from the cost of fetching and decoding the full
+  # `replicas` payload, which dominates wall-clock time in steady state.
   defp maybe_refresh_partition_maps(state) do
-    case verify_cluster_stable(state) do
-      {:ok, _hash_or_empty} ->
-        refresh_partition_maps(state)
+    :telemetry.span(Telemetry.partition_map_refresh_span(), %{}, fn ->
+      new_state =
+        case verify_cluster_stable(state) do
+          {:ok, _hash_or_empty} ->
+            refresh_partition_maps(state)
 
-      {:error, :disagreement, per_node_hashes} ->
-        Logger.warning(
-          "Aerospike.Tender: cluster-stable disagreement; skipping partition-map refresh: " <>
-            inspect(per_node_hashes)
-        )
+          {:error, :disagreement, per_node_hashes} ->
+            Logger.warning(
+              "Aerospike.Tender: cluster-stable disagreement; skipping partition-map refresh: " <>
+                inspect(per_node_hashes)
+            )
 
-        state
-    end
+            state
+        end
+
+      {new_state, %{}}
+    end)
   end
 
   # Returns `{:ok, hash}` if every `:active` node with a `cluster-stable`
@@ -585,8 +638,12 @@ defmodule Aerospike.Tender do
     # runs so no writer ever touches a counters ref; skipping the
     # allocation there keeps `:counters` consistently nil for that
     # mode and matches the "counters exist iff a pool exists"
-    # invariant used by the breaker in Task 6.
+    # invariant used by the breaker.
     counters = allocate_counters(state)
+    # The tend-latency histogram is always allocated (cluster-state-only
+    # mode still runs tend cycles and fetches partition maps, so the
+    # sampling call site runs regardless of whether a pool exists).
+    tend_histogram = TendHistogram.new()
 
     case ensure_pool(state, node_name, host, port, counters, features) do
       {:ok, pool_pid} ->
@@ -605,7 +662,8 @@ defmodule Aerospike.Tender do
           cluster_stable: nil,
           pool_pid: pool_pid,
           counters: counters,
-          features: features
+          features: features,
+          tend_histogram: tend_histogram
         }
 
         %{state | nodes: Map.put(state.nodes, node_name, node)}
@@ -804,9 +862,10 @@ defmodule Aerospike.Tender do
   # the node's `owners`/`node_gens` rows so the Router stops routing to
   # it, resets the `failures` counter so the next tend cycle can either
   # recover or fall through to a full drop, and drops the node's
-  # counters reference — the pool is gone, the breaker cannot sensibly
-  # read stale slots, and a fresh recovery will allocate a new reference
-  # via `register_new_node/6`.
+  # counters / tend-histogram references — the pool is gone, the breaker
+  # cannot sensibly read stale slots, and a fresh recovery will allocate
+  # new references via `register_new_node/6`. The `:atomics` term is
+  # GC'd once no process retains it.
   defp mark_inactive(state, name) do
     case Map.fetch(state.nodes, name) do
       {:ok, node} ->
@@ -821,7 +880,8 @@ defmodule Aerospike.Tender do
             pool_pid: nil,
             generation_seen: nil,
             applied_gen: nil,
-            counters: nil
+            counters: nil,
+            tend_histogram: nil
         }
 
         %{state | nodes: Map.put(state.nodes, name, updated)}
@@ -989,18 +1049,33 @@ defmodule Aerospike.Tender do
   defp partition_map_fetch_needed?(_node), do: true
 
   defp fetch_and_apply_replicas(state, node) do
-    case state.transport.info(node.conn, ["replicas"]) do
-      {:ok, %{"replicas" => value}} ->
-        apply_replicas(state, node, value)
+    # Measure the full replicas fetch + apply for this node. Per-node
+    # latency is the useful operator signal (a single slow node shows up
+    # here before it does in the cluster-wide tend_cycle span), so the
+    # sample lands in the node's own histogram rather than a cluster
+    # aggregate.
+    start_native = System.monotonic_time()
 
-      {:ok, _other} ->
-        register_failure(state, node.name)
+    result =
+      case state.transport.info(node.conn, ["replicas"]) do
+        {:ok, %{"replicas" => value}} ->
+          apply_replicas(state, node, value)
 
-      {:error, %Error{} = err} ->
-        Logger.debug("Aerospike.Tender: #{node.name} replicas failed: #{err.message}")
-        register_failure(state, node.name)
-    end
+        {:ok, _other} ->
+          register_failure(state, node.name)
+
+        {:error, %Error{} = err} ->
+          Logger.debug("Aerospike.Tender: #{node.name} replicas failed: #{err.message}")
+          register_failure(state, node.name)
+      end
+
+    record_tend_sample(node.tend_histogram, System.monotonic_time() - start_native)
+
+    result
   end
+
+  defp record_tend_sample(nil, _duration_native), do: :ok
+  defp record_tend_sample(ref, duration_native), do: TendHistogram.record(ref, duration_native)
 
   # Advances `applied_gen` to the node's `generation_seen` only when every
   # segment is accepted by the regime guard. If any segment is rejected as
