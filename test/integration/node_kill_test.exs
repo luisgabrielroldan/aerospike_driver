@@ -1,54 +1,27 @@
 defmodule Aerospike.Integration.NodeKillTest do
   @moduledoc """
-  Tier 2 exit-criteria integration test — node killed mid-traffic.
+  Integration test — node killed mid-traffic and brought back.
 
   Kills the local `aerospike_spike` docker container while a cluster
-  runs against it, then asserts that the Tier 2 substrate behaves as the
-  plan requires:
+  runs against it, then asserts that the cluster substrate behaves
+  correctly:
 
     * the node's lifecycle transitions `:active` → `:inactive` within
       the configured `failure_threshold` tend cycles;
     * in-flight GETs during the outage surface either a transport-class
       `%Aerospike.Error{}` (retry budget exhausted) or the router's
-      `:cluster_not_ready` atom once the owners table has been cleared;
+      `:cluster_not_ready` / `:unknown_node` atoms once the owners
+      table has been cleared;
     * the node's pool is stopped on the `:active` → `:inactive` flip
       (`Tender.node_handle/2` returns `{:error, :unknown_node}`);
     * `Tender.ready?/1` flips back to `false` and the owners table
-      stops routing to the dead node.
-
-  ## Escalation note — recovery is not covered here
-
-  The plan's Task 8 goal includes "the partition map converges within
-  one tend cycle when the node comes back" after a `docker start`. The
-  Tier 2 implementation — and the existing Task 1 findings in
-  `aerospike_driver_spike/docs/plans/tier-2-cluster-correctness/notes.md`
-  — make that scenario unreachable with a single-node cluster today:
-
-    * `Aerospike.Tender.bootstrap_if_needed/1` is single-shot
-      (`bootstrapped?: true` after the first successful seed dial).
-    * After the grace-cycle drop, `state.nodes` is empty, so
-      `refresh_nodes/1` has no nodes to probe and
-      `discover_peers/1` has no sources to ask for
-      `peers-clear-std`.
-    * The info socket to the dead node was already closed, so there
-      is no surviving channel to promote back to `:active`.
-
-  The practical consequence is that a single-node kill + restart yields
-  `{:error, :cluster_not_ready}` indefinitely for this Tender. Recovery
-  via re-bootstrap or peer rediscovery is Tier 3 TCP / auth scope (see
-  the `notes.md` Task 1 finding). Multi-node topology exercises the
-  rebalance / re-route path through surviving nodes, which Tier 2
-  covers via the Fake-transport unit tests for Tasks 4 and 7. The
-  escalation clause in Task 8's own text — "unit coverage via Fake
-  stands as the primary proof; document the gap and note that the full
-  scenario needs the multi-node harness deferred to a later plan" —
-  applies exactly here.
-
-  This test therefore asserts only the outage-direction of the
-  scenario (up to and including the drop) and restarts the container
-  in `on_exit/1` so subsequent integration runs still have a live
-  server. A full round-trip proof is deferred to the multi-node
-  harness plan.
+      stops routing to the dead node;
+    * once the container is restarted, the Tender's
+      `bootstrap_if_needed/1` re-enters on the next tend cycle (the
+      "empty `state.nodes` re-dial"), the node returns to `:active`
+      with a non-negative `partition-generation`, the partition map
+      converges within one tend cycle, and fresh GETs against the
+      recovered cluster succeed.
   """
 
   use ExUnit.Case, async: false
@@ -72,6 +45,11 @@ defmodule Aerospike.Integration.NodeKillTest do
   # pre-kill tend state machine).
   @inactive_timeout_ms 8_000
   @drop_timeout_ms 4_000
+  # `docker start` + partition-settlement lag runs ~1.7 s in practice
+  # (notes.md Task 8 finding); the Tender still needs another tend
+  # cycle to re-dial the seed and apply the partition map. Budget
+  # generously so CI noise does not flake the recovery half.
+  @recovery_timeout_ms 10_000
   @probe_interval_ms 100
 
   setup do
@@ -118,7 +96,7 @@ defmodule Aerospike.Integration.NodeKillTest do
     %{cluster: name}
   end
 
-  test "container stop mid-traffic demotes the node to :inactive and drops it", %{
+  test "container kill demotes the node and container restart recovers it", %{
     cluster: cluster
   } do
     assert Tender.ready?(cluster),
@@ -181,9 +159,9 @@ defmodule Aerospike.Integration.NodeKillTest do
     end)
 
     # The Tender must observe enough failing cycles to flip the node
-    # to :inactive. The transition is the single observable Tier 2
-    # acceptance criterion: lifecycle moves off :active, the pool is
-    # stopped (node_handle rejects), and owners clears for the node.
+    # to :inactive. The transition is the single observable acceptance
+    # criterion: lifecycle moves off :active, the pool is stopped
+    # (node_handle rejects), and owners clears for the node.
     assert_status_transition!(cluster, node_name, :inactive, @inactive_timeout_ms)
 
     assert {:error, :unknown_node} = Tender.node_handle(cluster, node_name),
@@ -197,6 +175,66 @@ defmodule Aerospike.Integration.NodeKillTest do
     # drop, ready? must reflect the empty topology.
     assert_node_dropped!(cluster, node_name, @drop_timeout_ms)
     refute Tender.ready?(cluster), "ready? must flip to false once all nodes are dropped"
+
+    # Recovery half (Task 9): restart the container and wait for the
+    # cluster-state subsystem to converge. The Tender's
+    # `bootstrap_if_needed/1` re-enters on the next tend cycle because
+    # `state.nodes == %{}`; the scheduled-seed dial re-registers the
+    # node and the subsequent `replicas` fetch re-applies the partition
+    # map within one cycle.
+    docker_start(@container)
+    wait_for_tcp(@host, @port, 15_000)
+    wait_for_aerospike_status(@container, 15_000)
+    wait_for_client_ready(@host, @port, 15_000)
+
+    assert_recovered!(cluster, @recovery_timeout_ms)
+
+    # Fresh GETs against the recovered cluster must succeed — proves the
+    # pool was re-started under the new node entry and the routing
+    # substrate can dispatch again.
+    key =
+      Key.new(
+        @namespace,
+        "kill_test",
+        "recovery_#{System.unique_integer([:positive])}"
+      )
+
+    assert {:error, %Error{code: :key_not_found}} =
+             Aerospike.get(cluster, key, :all, timeout: 2_000),
+           "fresh GET against a recovered cluster must reach the server (key is absent, " <>
+             "so the server-level :key_not_found is the expected success signal)"
+  end
+
+  defp assert_recovered!(cluster, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    wait_for_recovery(cluster, deadline)
+  end
+
+  defp wait_for_recovery(cluster, deadline) do
+    status = Tender.nodes_status(cluster)
+
+    recovered? =
+      Tender.ready?(cluster) and
+        map_size(status) > 0 and
+        Enum.all?(status, fn {_name, node} ->
+          node.status == :active and is_integer(node.generation_seen) and
+            node.generation_seen >= 0
+        end)
+
+    cond do
+      recovered? ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk(
+          "cluster did not recover within the budget " <>
+            "(last nodes_status=#{inspect(status)}, ready?=#{inspect(Tender.ready?(cluster))})"
+        )
+
+      true ->
+        Process.sleep(@probe_interval_ms)
+        wait_for_recovery(cluster, deadline)
+    end
   end
 
   defp run_outage_gets(cluster, count, timeout_ms) do
