@@ -13,8 +13,7 @@ defmodule Aerospike.Transport.Tcp do
   recv calls regardless of how the kernel delivers them. Coalescing the two
   reads is not possible because the body length lives in the header, and a
   per-connection read buffer would only pay off for pipelined in-flight
-  requests, which Tier 1.5 explicitly defers (see
-  `docs/plans/tier-1-5-pool-hardening/notes.md`, Finding 7).
+  requests, which this transport does not support.
 
   The read deadline is supplied per `command/3` call by the caller rather
   than stored on the connection, so a retry layer can budget each attempt
@@ -34,6 +33,10 @@ defmodule Aerospike.Transport.Tcp do
 
   @default_timeout 5_000
   @header_size 8
+  # Outbound requests below this size are sent uncompressed even when the
+  # caller sets `use_compression: true`. Matches Go
+  # `command.go:_COMPRESS_THRESHOLD` and Java `Command.COMPRESS_THRESHOLD`.
+  @compress_threshold 128
   @proto_version Message.proto_version()
   @type_info Message.type_info()
   @type_as_msg Message.type_as_msg()
@@ -82,12 +85,43 @@ defmodule Aerospike.Transport.Tcp do
   end
 
   @impl true
-  def command(%__MODULE__{} = conn, request, deadline_ms)
-      when is_integer(deadline_ms) and deadline_ms >= 0 do
-    with {:ok, version, type, body} <- send_recv(conn, request, deadline_ms),
+  def command(%__MODULE__{} = conn, request, deadline_ms, opts \\ [])
+      when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
+    framed = maybe_compress(request, opts)
+
+    with {:ok, version, type, body} <- send_recv(conn, framed, deadline_ms),
          :ok <- validate_version(version),
          :ok <- validate_command_type(type) do
       maybe_decompress(type, body)
+    end
+  end
+
+  # When `:use_compression` is set and the request is large enough for the
+  # reference-client threshold, compress it into a type-4 envelope. If the
+  # resulting envelope is not smaller than the original frame, fall back to
+  # the plain iodata — matching Java `Command.compress`'s
+  # `if (def.finished())` guard. The `:zlib` writer can produce output
+  # larger than its input for tiny payloads, so the threshold alone does
+  # not guarantee a win.
+  defp maybe_compress(request, opts) do
+    case Keyword.get(opts, :use_compression, false) do
+      true -> compress_if_worthwhile(request, IO.iodata_length(request))
+      false -> request
+    end
+  end
+
+  defp compress_if_worthwhile(request, uncompressed_size)
+       when uncompressed_size <= @compress_threshold,
+       do: request
+
+  defp compress_if_worthwhile(request, uncompressed_size) do
+    uncompressed_frame = IO.iodata_to_binary(request)
+    compressed = Message.encode_compressed_payload(uncompressed_frame)
+
+    if byte_size(compressed) < uncompressed_size do
+      compressed
+    else
+      request
     end
   end
 

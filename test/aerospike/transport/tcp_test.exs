@@ -2,13 +2,14 @@ defmodule Aerospike.Transport.TcpTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.Protocol.Message
   alias Aerospike.Transport.Tcp
 
-  # Tier 1.5 Task 4 — exercise `command/3`'s read-deadline plumbing end to
-  # end against a real loopback `:gen_tcp` listener. Integration GET tests
-  # already cover the happy path against a live Aerospike; these tests
-  # pin behaviour the happy-path can't observe (partial deadline blowout,
-  # connection closed mid-read).
+  # Exercise `command/3`'s read-deadline plumbing end to end against a
+  # real loopback `:gen_tcp` listener. Integration GET tests already cover
+  # the happy path against a live Aerospike; these tests pin behaviour the
+  # happy-path can't observe (partial deadline blowout, connection closed
+  # mid-read).
 
   setup do
     {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, packet: :raw, reuseaddr: true])
@@ -67,11 +68,10 @@ defmodule Aerospike.Transport.TcpTest do
   end
 
   describe "command/3 fragmentation" do
-    # Tier 1.5 Task 5 — passive `{:packet, :raw}` + `:gen_tcp.recv(socket,
-    # N, _)` already handles server-side TCP fragmentation transparently
-    # (see notes.md Finding 7). This test pins that guarantee so a future
-    # change to the recv shape — a switch to active mode, a buffering
-    # refactor — cannot silently regress it.
+    # Passive `{:packet, :raw}` + `:gen_tcp.recv(socket, N, _)` already
+    # handles server-side TCP fragmentation transparently. This test pins
+    # that guarantee so a future change to the recv shape — a switch to
+    # active mode, a buffering refactor — cannot silently regress it.
     test "reassembles a reply split across multiple sends", %{
       listener: listener,
       port: port
@@ -105,9 +105,9 @@ defmodule Aerospike.Transport.TcpTest do
   end
 
   describe "command/3 header validation" do
-    # Tier 2.5 Task 1 — the transport must route on `type` and validate
-    # `version == 2` before handing the body back. A reply with the wrong
-    # version or type is a typed `:parse_error`, never silently decoded.
+    # The transport must route on `type` and validate `version == 2`
+    # before handing the body back. A reply with the wrong version or
+    # type is a typed `:parse_error`, never silently decoded.
     test "rejects a reply with an unexpected proto version", %{
       listener: listener,
       port: port
@@ -152,10 +152,10 @@ defmodule Aerospike.Transport.TcpTest do
   end
 
   describe "command/3 compressed replies" do
-    # Tier 2.5 Task 2 — the transport must transparently inflate a type-4
-    # compressed AS_MSG reply and return the inner frame's body to the
-    # caller, matching the plain-reply shape. Layout: Go
-    # `command.go:3574-3627` + `multi_command.go:150-173`.
+    # The transport must transparently inflate a type-4 compressed AS_MSG
+    # reply and return the inner frame's body to the caller, matching the
+    # plain-reply shape. Layout: Go `command.go:3574-3627` +
+    # `multi_command.go:150-173`.
     test "returns the inflated inner body verbatim", %{listener: listener, port: port} do
       inner_body = <<99, 88, 77, 66, 55>>
       reply = compressed_reply_of(inner_body)
@@ -258,6 +258,126 @@ defmodule Aerospike.Transport.TcpTest do
     end
   end
 
+  describe "command/4 outbound compression" do
+    # With `use_compression: true` and a request larger than the 128-byte
+    # reference-client threshold, the wire frame is type 4 and its inner
+    # zlib-compressed payload matches the original request. Below the
+    # threshold or when compression would bloat the frame, the plain
+    # request is sent verbatim.
+    test "compresses requests above the 128-byte threshold", %{
+      listener: listener,
+      port: port
+    } do
+      request = request_frame(:binary.copy(<<0xA5>>, 200))
+      body = <<7, 7, 7, 7>>
+      reply = typed_header(2, 3, byte_size(body)) <> body
+
+      {server, received_ref} = spawn_echo_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+
+      assert {:ok, ^body} = Tcp.command(conn, request, 500, use_compression: true)
+
+      assert_receive {^received_ref, sent}, 500
+
+      <<header::binary-8, body_bytes::binary>> = sent
+      assert {:ok, {2, 4, length}} = Message.decode_header(header)
+      assert length == byte_size(body_bytes)
+
+      {:ok, {uncompressed_size, compressed}} =
+        Message.decode_compressed_payload(body_bytes)
+
+      assert uncompressed_size == IO.iodata_length(request)
+      assert :zlib.uncompress(compressed) == IO.iodata_to_binary(request)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "sends requests at or below the threshold uncompressed", %{
+      listener: listener,
+      port: port
+    } do
+      request = request_frame(:binary.copy(<<0xB1>>, 64))
+      body = <<3, 3, 3>>
+      reply = typed_header(2, 3, byte_size(body)) <> body
+
+      {server, received_ref} = spawn_echo_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+
+      assert {:ok, ^body} = Tcp.command(conn, request, 500, use_compression: true)
+
+      assert_receive {^received_ref, sent}, 500
+      assert sent == IO.iodata_to_binary(request)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "falls back to plain framing when compression would bloat the payload", %{
+      listener: listener,
+      port: port
+    } do
+      # Just above threshold but already high-entropy: zlib will add
+      # framing overhead that exceeds any gain, so we must fall back.
+      high_entropy = :crypto.strong_rand_bytes(140)
+      request = request_frame(high_entropy)
+      body = <<1>>
+      reply = typed_header(2, 3, byte_size(body)) <> body
+
+      {server, received_ref} = spawn_echo_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+
+      assert {:ok, ^body} = Tcp.command(conn, request, 500, use_compression: true)
+
+      assert_receive {^received_ref, sent}, 500
+      assert sent == IO.iodata_to_binary(request)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "defaults to no compression when the option is omitted", %{
+      listener: listener,
+      port: port
+    } do
+      request = request_frame(:binary.copy(<<0xC3>>, 400))
+      body = <<9>>
+      reply = typed_header(2, 3, byte_size(body)) <> body
+
+      {server, received_ref} = spawn_echo_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+
+      assert {:ok, ^body} = Tcp.command(conn, request, 500)
+
+      assert_receive {^received_ref, sent}, 500
+      assert sent == IO.iodata_to_binary(request)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "round-trips a compressed request against a compressed reply", %{
+      listener: listener,
+      port: port
+    } do
+      request = request_frame(:binary.copy(<<0xD4>>, 300))
+      inner_body = <<42, 42, 42, 42, 42>>
+      reply = compressed_reply_of(inner_body)
+
+      {server, received_ref} = spawn_echo_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, timeout: 1_000)
+
+      assert {:ok, ^inner_body} = Tcp.command(conn, request, 500, use_compression: true)
+
+      assert_receive {^received_ref, sent}, 500
+      <<outer_header::binary-8, _rest::binary>> = sent
+      assert {:ok, {2, 4, _}} = Message.decode_header(outer_header)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+  end
+
   describe "info/2 header validation" do
     test "rejects a reply with an unexpected proto version", %{
       listener: listener,
@@ -332,6 +452,41 @@ defmodule Aerospike.Transport.TcpTest do
       :ok = :gen_tcp.send(client_sock, reply)
       hold_client(client_sock)
     end)
+  end
+
+  # Accept one connection, buffer every byte the client sends until it
+  # stops writing, forward the buffer to the test for assertion, then
+  # send a prepared reply. The client-side `:gen_tcp.send/2` is a single
+  # flush, so one `recv(socket, 0, _)` covers the full request. The
+  # receive loop adds belt-and-suspenders for the rare case where the
+  # kernel fragments a large frame.
+  defp spawn_echo_server(listener, reply) do
+    parent = self()
+    ref = make_ref()
+
+    server =
+      spawn_server(listener, fn client_sock ->
+        sent = recv_all(client_sock, <<>>)
+        send(parent, {ref, sent})
+        :ok = :gen_tcp.send(client_sock, reply)
+        hold_client(client_sock)
+      end)
+
+    {server, ref}
+  end
+
+  defp recv_all(client_sock, acc) do
+    case :gen_tcp.recv(client_sock, 0, 200) do
+      {:ok, bytes} -> recv_all(client_sock, acc <> bytes)
+      {:error, _} -> acc
+    end
+  end
+
+  # Build a valid AS_MSG request frame (8-byte proto header + body). The
+  # body is arbitrary bytes — the transport's outbound path does not
+  # inspect it.
+  defp request_frame(body) when is_binary(body) do
+    typed_header(2, 3, byte_size(body)) <> body
   end
 
   defp spawn_server(listener, client_fn) do

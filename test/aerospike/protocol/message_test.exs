@@ -45,11 +45,38 @@ defmodule Aerospike.Protocol.MessageTest do
     end
   end
 
+  describe "encode_compressed_payload/1" do
+    # Symmetric with `decode_compressed_payload/1`. Wraps a complete
+    # AS_MSG frame in a type-4 proto envelope with the 8-byte
+    # uncompressed-size prefix Go / Java require. The inner frame is
+    # expected to already carry its own 8-byte proto header.
+    test "round-trips through decode + zlib.uncompress" do
+      inner_body = <<1, 2, 3, 4, 5, 6, 7, 8, 9, 10>>
+      inner_frame = Message.encode(2, 3, inner_body)
+
+      wire = Message.encode_compressed_payload(inner_frame)
+
+      assert {:ok, {2, 4, body}} = Message.decode(wire)
+      assert {:ok, {size, compressed}} = Message.decode_compressed_payload(body)
+      assert size == byte_size(inner_frame)
+      assert :zlib.uncompress(compressed) == inner_frame
+    end
+
+    test "sets the outer proto length to match the body size" do
+      inner_frame = Message.encode(2, 3, :binary.copy(<<0>>, 256))
+      wire = Message.encode_compressed_payload(inner_frame)
+
+      <<header::binary-8, body::binary>> = wire
+      assert {:ok, {2, 4, length}} = Message.decode_header(header)
+      assert length == byte_size(body)
+    end
+  end
+
   describe "decode_compressed_payload/1" do
-    # Tier 2.5 Task 2 — a compressed AS_MSG reply's body is an 8-byte
-    # big-endian uint64 (the uncompressed inner-frame size, header
-    # included) followed by the zlib-compressed inner-frame bytes.
-    # Layout reference: Go `command.go:3574-3627` + `multi_command.go:150-173`.
+    # A compressed AS_MSG reply's body is an 8-byte big-endian uint64
+    # (the uncompressed inner-frame size, header included) followed by
+    # the zlib-compressed inner-frame bytes. Layout reference: Go
+    # `command.go:3574-3627` + `multi_command.go:150-173`.
     test "splits the 8-byte uncompressed-size prefix from the compressed bytes" do
       compressed = <<1, 2, 3, 4, 5>>
       body = <<42::64-big, compressed::binary>>

@@ -210,9 +210,9 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @impl Aerospike.NodeTransport
-  def command(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms)
+  def command(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
-             deadline_ms >= 0 do
+             deadline_ms >= 0 and is_list(opts) do
     GenServer.call(fake, {:consume, ref, {:command, deadline_ms}})
   end
 

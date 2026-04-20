@@ -190,4 +190,28 @@ defmodule Aerospike.Protocol.Message do
   end
 
   def decode_compressed_payload(_), do: {:error, :incomplete_compressed_payload}
+
+  @doc """
+  Wraps an uncompressed AS_MSG frame in a type-4 (`AS_MSG_COMPRESSED`)
+  proto frame.
+
+  `uncompressed_frame` must already be a complete AS_MSG wire frame — its
+  own 8-byte proto header (`version=2`, `type=3`) plus body. The wrapper
+  layout mirrors `decode_compressed_payload/1`:
+
+  - outer 8-byte proto header: `version=2`, `type=4`,
+    `length = byte_size(compressed) + 8`
+  - next 8 bytes: big-endian `uint64` of the original uncompressed frame
+    size (header + body)
+  - remaining bytes: `:zlib.compress/1` of the original frame
+
+  Verified against Go `command.go:3574-3627` and Java
+  `Command.java:2829-2850`.
+  """
+  @spec encode_compressed_payload(binary()) :: binary()
+  def encode_compressed_payload(uncompressed_frame) when is_binary(uncompressed_frame) do
+    compressed = :zlib.compress(uncompressed_frame)
+    body = <<byte_size(uncompressed_frame)::64-big, compressed::binary>>
+    encode_header(@proto_version, @type_compressed, byte_size(body)) <> body
+  end
 end

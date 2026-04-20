@@ -48,6 +48,19 @@ defmodule Aerospike.NodeTransport do
   @callback info(conn(), commands :: [String.t()]) ::
               {:ok, %{String.t() => String.t()}} | {:error, Aerospike.Error.t()}
 
+  @typedoc """
+  Options accepted by `c:command/4`.
+
+    * `:use_compression` — when `true`, requests whose encoded size exceeds
+      a fixed 128-byte threshold are wrapped in a type-4
+      (`AS_MSG_COMPRESSED`) proto frame before being sent. Smaller requests
+      are sent plain even when the flag is set, matching the Go and Java
+      clients (`_COMPRESS_THRESHOLD = 128`). Implementations that ignore
+      compression (e.g. `Aerospike.Transport.Fake`) must still accept the
+      option without error. Defaults to `false`.
+  """
+  @type command_opts :: [use_compression: boolean()]
+
   @doc """
   Sends a pre-encoded AS_MSG request and returns the full reply bytes.
 
@@ -64,9 +77,18 @@ defmodule Aerospike.NodeTransport do
   monotonic deadline manually. The caller remains responsible for the
   overall operation budget — the transport does not enforce it.
 
+  `opts` is a keyword list documented by `t:command_opts/0`. The only key
+  currently recognised is `:use_compression`; implementations must accept
+  (and may ignore) it.
+
   Single request, single response — streaming and multi-frame replies
   (scan, query) are out of scope for this behaviour.
   """
-  @callback command(conn(), request :: iodata(), deadline_ms :: non_neg_integer()) ::
+  @callback command(
+              conn(),
+              request :: iodata(),
+              deadline_ms :: non_neg_integer(),
+              opts :: command_opts()
+            ) ::
               {:ok, binary()} | {:error, Aerospike.Error.t()}
 end
