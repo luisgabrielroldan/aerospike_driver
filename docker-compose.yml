@@ -99,3 +99,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  aerospike-ee-security-tls:
+    image: aerospike/aerospike-server-enterprise:latest
+    container_name: aerospike-ee-security-tls
+    hostname: aerospike-ee-security-tls
+    profiles: [enterprise]
+    ports:
+      - "3300:3000" # plaintext client protocol (asinfo healthcheck)
+      - "4433:4433" # TLS client protocol (security-enabled)
+      - "3301:3001" # fabric
+      - "3302:3002" # heartbeat
+    volumes:
+      - ./docker/aerospike-enterprise-security-tls.conf:/opt/aerospike/aerospike.conf
+      - ./test/support/fixtures/tls:/opt/aerospike/tls:ro
+      - ./docker/entrypoint-ee.sh:/usr/local/bin/entrypoint-ee.sh:ro
+    entrypoint: ["/usr/local/bin/entrypoint-ee.sh"]
+    command: ["/opt/aerospike/aerospike.conf"]
+    healthcheck:
+      test: ["CMD", "asinfo", "-U", "admin", "-P", "admin", "-v", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
