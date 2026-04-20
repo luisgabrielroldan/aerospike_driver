@@ -90,6 +90,7 @@ defmodule Aerospike.NodePool do
 
   alias Aerospike.Error
   alias Aerospike.NodeCounters
+  alias Aerospike.Telemetry
 
   require Logger
 
@@ -110,9 +111,24 @@ defmodule Aerospike.NodePool do
   @doc """
   Checks out a worker and runs `fun.(conn)` with a pool-owned connection.
 
+  Equivalent to `checkout!/4` with `node_name: nil`. Kept as a separate
+  entry point so tests that build a pool without a cluster context can
+  call the pool directly.
+  """
+  @spec checkout!(
+          NimblePool.pool(),
+          (conn :: term() -> {result(), term() | :close}),
+          timeout()
+        ) :: result() | {:error, Error.t()}
+  def checkout!(pool, fun, timeout), do: checkout!(nil, pool, fun, timeout)
+
+  @doc """
+  Checks out a worker on behalf of `node_name` and runs `fun.(conn)`
+  with a pool-owned connection.
+
   `fun` must return a two-tuple `{result, checkin_value}` where:
 
-    * `result` is returned verbatim from `checkout!/3`.
+    * `result` is returned verbatim from `checkout!/4`.
     * `checkin_value` controls worker lifecycle and node-health
       accounting. See `t:checkin_value/0`.
 
@@ -125,26 +141,57 @@ defmodule Aerospike.NodePool do
   These pool-level failures never bump the `:failed` counter because
   `fun` did not run against a live connection — there is no node-health
   signal to record.
+
+  Emits `[:aerospike, :pool, :checkout, :start | :stop | :exception]`
+  events around the checkout. Stop events fire for both the success
+  path and the pool-level error translations above; exception events
+  fire only for unexpected exits (which are then re-raised so the
+  supervision tree observes them). Metadata carries `:node_name` and
+  `:pool_pid`; measurements are `:system_time` on start and `:duration`
+  on stop/exception.
   """
   @spec checkout!(
+          String.t() | nil,
           NimblePool.pool(),
           (conn :: term() -> {result(), term() | :close}),
           timeout()
         ) :: result() | {:error, Error.t()}
-  def checkout!(pool, fun, timeout) when is_function(fun, 1) and is_integer(timeout) do
-    NimblePool.checkout!(
-      pool,
-      @checkout_reason,
-      fn _from, conn ->
-        fun.(conn)
-      end,
-      timeout
+  def checkout!(node_name, pool, fun, timeout)
+      when is_function(fun, 1) and is_integer(timeout) do
+    start_time = System.monotonic_time()
+    span_id = make_ref()
+    metadata = %{node_name: node_name, pool_pid: pool}
+
+    :telemetry.execute(
+      Telemetry.pool_checkout_span() ++ [:start],
+      %{system_time: System.system_time(), monotonic_time: start_time},
+      Map.put(metadata, :telemetry_span_context, span_id)
     )
+
+    do_checkout(pool, fun, timeout, start_time, metadata, span_id)
+  end
+
+  defp do_checkout(pool, fun, timeout, start_time, metadata, span_id) do
+    result =
+      NimblePool.checkout!(
+        pool,
+        @checkout_reason,
+        fn _from, conn ->
+          fun.(conn)
+        end,
+        timeout
+      )
+
+    emit_checkout_stop(start_time, metadata, span_id)
+    result
   catch
     :exit, {:timeout, {NimblePool, :checkout, _}} ->
+      emit_checkout_stop(start_time, metadata, span_id)
       {:error, Error.from_result_code(:pool_timeout)}
 
     :exit, {:noproc, {NimblePool, :checkout, _}} ->
+      emit_checkout_stop(start_time, metadata, span_id)
+
       {:error,
        %Error{
          code: :invalid_node,
@@ -152,11 +199,21 @@ defmodule Aerospike.NodePool do
        }}
 
     :exit, reason ->
+      emit_checkout_stop(start_time, metadata, span_id)
+
       {:error,
        %Error{
          code: :network_error,
          message: "Aerospike.NodePool: checkout exited: #{inspect(reason)}"
        }}
+  end
+
+  defp emit_checkout_stop(start_time, metadata, span_id) do
+    :telemetry.execute(
+      Telemetry.pool_checkout_span() ++ [:stop],
+      %{duration: System.monotonic_time() - start_time},
+      Map.put(metadata, :telemetry_span_context, span_id)
+    )
   end
 
   ## NimblePool callbacks
@@ -192,6 +249,14 @@ defmodule Aerospike.NodePool do
     port = Keyword.fetch!(pool_state, :port)
     connect_opts = Keyword.fetch!(pool_state, :connect_opts)
     node_name = Keyword.fetch!(pool_state, :node_name)
+
+    # Inject `:node_name` so transport implementations can stash it on
+    # their connection state and tag telemetry events emitted from
+    # worker-owned sockets. The bootstrap/peer info sockets opened by
+    # `Aerospike.Tender` do not pass through this path, so their events
+    # carry `node_name: nil` — acceptable because that traffic is
+    # cluster-state-only.
+    connect_opts = Keyword.put(connect_opts, :node_name, node_name)
 
     case transport.connect(host, port, connect_opts) do
       {:ok, conn} ->

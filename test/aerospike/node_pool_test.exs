@@ -4,6 +4,7 @@ defmodule Aerospike.NodePoolTest do
   alias Aerospike.Error
   alias Aerospike.NodeCounters
   alias Aerospike.NodePool
+  alias Aerospike.Telemetry
   alias Aerospike.Transport.Fake
 
   @host "10.0.0.1"
@@ -695,6 +696,120 @@ defmodule Aerospike.NodePoolTest do
                  1_000
                )
     end
+  end
+
+  describe "checkout telemetry" do
+    test "emits :start and :stop with :node_name and :pool_pid on the happy path" do
+      %{fake: fake, pool: pool} = start_pool!(1)
+      Fake.script_command(fake, @node_name, {:ok, <<"ok">>})
+
+      handler = attach_checkout_handler(:happy)
+
+      try do
+        assert {:ok, <<"ok">>} =
+                 NodePool.checkout!(
+                   @node_name,
+                   pool,
+                   fn conn -> {Fake.command(conn, <<"req">>, 1_000), conn} end,
+                   1_000
+                 )
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :start],
+                        %{system_time: _, monotonic_time: _},
+                        %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ctx}},
+                       500
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :stop], %{duration: _},
+                        %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ^ctx}},
+                       500
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
+    test "emits a :stop event when the pool checkout times out" do
+      %{pool: pool} = start_pool!(1)
+      parent = self()
+
+      # Hold the only worker so the next checkout hits pool_timeout.
+      Task.start(fn ->
+        NodePool.checkout!(
+          @node_name,
+          pool,
+          fn conn ->
+            send(parent, :holding)
+            Process.sleep(300)
+            {:ok, conn}
+          end,
+          5_000
+        )
+      end)
+
+      assert_receive :holding, 500
+
+      handler = attach_checkout_handler(:timeout)
+
+      try do
+        assert {:error, %Error{code: :pool_timeout}} =
+                 NodePool.checkout!(
+                   @node_name,
+                   pool,
+                   fn conn -> {:ok, conn} end,
+                   50
+                 )
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :start], _m,
+                        %{node_name: @node_name}},
+                       500
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :stop], %{duration: _},
+                        %{node_name: @node_name}},
+                       500
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
+    test "checkout!/3 degrades :node_name to nil in span metadata" do
+      %{fake: fake, pool: pool} = start_pool!(1)
+      Fake.script_command(fake, @node_name, {:ok, <<"ok">>})
+
+      handler = attach_checkout_handler(:nil_node)
+
+      try do
+        assert {:ok, <<"ok">>} =
+                 NodePool.checkout!(
+                   pool,
+                   fn conn -> {Fake.command(conn, <<"req">>, 1_000), conn} end,
+                   1_000
+                 )
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :start], _m, %{node_name: nil}},
+                       500
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :stop], _m, %{node_name: nil}},
+                       500
+      after
+        :telemetry.detach(handler)
+      end
+    end
+  end
+
+  # Captured forwarder to avoid the "local function handler" performance
+  # warning from `:telemetry.attach/4` for anonymous captures.
+  @doc false
+  def forward(event, measurements, metadata, test_pid) do
+    send(test_pid, {:event, event, measurements, metadata})
+  end
+
+  defp attach_checkout_handler(tag) do
+    handler_id = {__MODULE__, tag, make_ref()}
+    prefix = Telemetry.pool_checkout_span()
+    events = Enum.map([:start, :stop, :exception], &(prefix ++ [&1]))
+
+    :ok = :telemetry.attach_many(handler_id, events, &__MODULE__.forward/4, self())
+
+    handler_id
   end
 
   defp wait_until(check, timeout_ms, message) do

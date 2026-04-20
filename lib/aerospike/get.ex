@@ -61,6 +61,7 @@ defmodule Aerospike.Get do
   alias Aerospike.Record
   alias Aerospike.RetryPolicy
   alias Aerospike.Router
+  alias Aerospike.Telemetry
   alias Aerospike.Tender
 
   @default_timeout 5_000
@@ -154,49 +155,52 @@ defmodule Aerospike.Get do
   defp dispatch(ctx, node_name, attempt) do
     case Tender.node_handle(ctx.tender, node_name) do
       {:ok, handle} ->
-        check_breaker(ctx, handle, attempt)
+        check_breaker(ctx, node_name, handle, attempt)
 
       {:error, :unknown_node} = err ->
         # The node disappeared between pick and handle — treat as a
         # transport-class miss so the next attempt re-picks.
-        retry_after_error(ctx, attempt, err)
+        retry_after_error(ctx, node_name, attempt, err, :transport)
     end
   end
 
-  defp check_breaker(ctx, handle, attempt) do
+  defp check_breaker(ctx, node_name, handle, attempt) do
     case CircuitBreaker.allow?(handle.counters, handle.breaker) do
       :ok ->
         remaining = remaining_budget(ctx.deadline)
-        command_opts = [use_compression: handle.use_compression]
+        command_opts = [use_compression: handle.use_compression, attempt: attempt]
 
         result =
           NodePool.checkout!(
+            node_name,
             handle.pool,
             fn conn -> do_get(ctx.transport, conn, ctx.key, remaining, command_opts) end,
             remaining
           )
 
-        classify(ctx, attempt, result)
+        classify(ctx, node_name, attempt, result)
 
       {:error, %Error{code: :circuit_open}} = err ->
         # Breaker refusal is a node-health cue. Treat as transport class
         # so `:sequence` re-routes to a different replica on the next
-        # attempt without paying a checkout.
-        retry_after_error(ctx, attempt, err)
+        # attempt without paying a checkout. The classification stays
+        # `:circuit_open` so operator handlers can distinguish breaker
+        # refusals from actual socket / timeout failures.
+        retry_after_error(ctx, node_name, attempt, err, :circuit_open)
     end
   end
 
-  defp classify(ctx, attempt, result) do
+  defp classify(ctx, node_name, attempt, result) do
     cond do
       match?({:ok, _}, result) ->
         result
 
       RetryPolicy.rebalance?(result) ->
         trigger_tend_async(ctx.tender)
-        retry_after_error(ctx, attempt, result)
+        retry_after_error(ctx, node_name, attempt, result, :rebalance)
 
       RetryPolicy.transport?(result) ->
-        retry_after_error(ctx, attempt, result)
+        retry_after_error(ctx, node_name, attempt, result, :transport)
 
       true ->
         # Fatal: return verbatim. No retry for server logical errors.
@@ -204,9 +208,31 @@ defmodule Aerospike.Get do
     end
   end
 
-  defp retry_after_error(ctx, attempt, err) do
+  defp retry_after_error(ctx, node_name, attempt, err, classification) do
     maybe_sleep(ctx.policy)
-    attempt_loop(ctx, attempt + 1, err)
+    next_attempt = attempt + 1
+
+    emit_retry_event(ctx, node_name, next_attempt, classification)
+
+    attempt_loop(ctx, next_attempt, err)
+  end
+
+  # Fires `[:aerospike, :retry, :attempt]` for every retry beyond the
+  # first. The `next_attempt` index reflects the attempt the loop is
+  # about to run, matching the zero-indexed `:attempt` in the retry
+  # driver's bookkeeping. `:remaining_budget_ms` is the monotonic
+  # budget left after the sleep above, not the wall-clock budget the
+  # caller passed in.
+  defp emit_retry_event(ctx, node_name, next_attempt, classification) do
+    :telemetry.execute(
+      Telemetry.retry_attempt(),
+      %{remaining_budget_ms: max(remaining_budget(ctx.deadline), 0)},
+      %{
+        classification: classification,
+        attempt: next_attempt,
+        node_name: node_name
+      }
+    )
   end
 
   defp maybe_sleep(%{sleep_between_retries_ms: 0}), do: :ok

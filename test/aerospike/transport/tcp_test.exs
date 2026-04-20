@@ -3,6 +3,7 @@ defmodule Aerospike.Transport.TcpTest do
 
   alias Aerospike.Error
   alias Aerospike.Protocol.Message
+  alias Aerospike.Telemetry
   alias Aerospike.Transport.Tcp
 
   # Exercise `command/3`'s read-deadline plumbing end to end against a
@@ -516,6 +517,203 @@ defmodule Aerospike.Transport.TcpTest do
 
       stop_server(server)
     end
+  end
+
+  describe "command/4 telemetry" do
+    # `command/4` must emit a `[:aerospike, :command, :send]` span around
+    # the socket write and a `[:aerospike, :command, :recv]` span around
+    # the header + body read. Metadata must carry `:node_name`,
+    # `:attempt`, and `:deadline_ms`; `:recv` stop metadata must also
+    # carry `:bytes`.
+    test "emits send and recv spans tagged with :node_name and :attempt", %{
+      listener: listener,
+      port: port
+    } do
+      body = <<1, 2, 3, 4>>
+      reply = header(body) <> body
+
+      server = spawn_reply_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, node_name: "A1")
+
+      handler =
+        attach_span_handlers(:command_send_and_recv, [
+          Telemetry.command_send_span(),
+          Telemetry.command_recv_span()
+        ])
+
+      try do
+        assert {:ok, ^body} = Tcp.command(conn, <<"req">>, 500, attempt: 2)
+
+        assert_receive {:event, [:aerospike, :command, :send, :start], _m1,
+                        %{node_name: "A1", attempt: 2, deadline_ms: 500}}
+
+        assert_receive {:event, [:aerospike, :command, :send, :stop], %{duration: _},
+                        %{node_name: "A1", attempt: 2, deadline_ms: 500}}
+
+        assert_receive {:event, [:aerospike, :command, :recv, :start], _m2,
+                        %{node_name: "A1", attempt: 2, deadline_ms: 500}}
+
+        assert_receive {:event, [:aerospike, :command, :recv, :stop], %{duration: _},
+                        %{node_name: "A1", attempt: 2, deadline_ms: 500, bytes: 4}}
+      after
+        :telemetry.detach(handler)
+      end
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "send-span stop fires when the socket write fails", %{
+      listener: listener,
+      port: port
+    } do
+      # Accept, then close immediately so the client's next send fails.
+      server =
+        spawn_server(listener, fn client_sock ->
+          :gen_tcp.close(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, node_name: "A1")
+      # Give the server a moment to close the accepted socket so the
+      # next send hits a closed peer rather than succeeding.
+      Process.sleep(50)
+
+      handler =
+        attach_span_handlers(:command_send_failure, [
+          Telemetry.command_send_span(),
+          Telemetry.command_recv_span()
+        ])
+
+      try do
+        # The send either succeeds (kernel buffer) then recv fails, or
+        # the send fails outright. Either way the send span must fire a
+        # stop event, so we only assert that form.
+        _ = Tcp.command(conn, <<"req">>, 100, attempt: 0)
+
+        assert_receive {:event, [:aerospike, :command, :send, :start], _m,
+                        %{node_name: "A1", attempt: 0}}
+
+        assert_receive {:event, [:aerospike, :command, :send, :stop], %{duration: _},
+                        %{node_name: "A1", attempt: 0}}
+      after
+        :telemetry.detach(handler)
+      end
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "defaults :attempt metadata to 0 when the caller omits it", %{
+      listener: listener,
+      port: port
+    } do
+      body = <<>>
+      reply = header(body) <> body
+
+      server = spawn_reply_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, node_name: "A1")
+
+      handler = attach_span_handlers(:command_default_attempt, [Telemetry.command_send_span()])
+
+      try do
+        assert {:ok, _} = Tcp.command(conn, <<"req">>, 500)
+
+        assert_receive {:event, [:aerospike, :command, :send, :start], _m,
+                        %{node_name: "A1", attempt: 0}}
+      after
+        :telemetry.detach(handler)
+      end
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test ":node_name metadata falls back to nil when the opt is omitted", %{
+      listener: listener,
+      port: port
+    } do
+      body = <<0>>
+      reply = header(body) <> body
+
+      server = spawn_reply_server(listener, reply)
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+
+      handler = attach_span_handlers(:command_nil_node, [Telemetry.command_send_span()])
+
+      try do
+        assert {:ok, _} = Tcp.command(conn, <<"req">>, 500)
+
+        assert_receive {:event, [:aerospike, :command, :send, :start], _m, %{node_name: nil}}
+      after
+        :telemetry.detach(handler)
+      end
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+  end
+
+  describe "info/2 telemetry" do
+    test "emits a [:aerospike, :info, :rpc] span with :commands metadata", %{
+      listener: listener,
+      port: port
+    } do
+      # Minimal info-shaped reply: `key\tvalue\n` body typed as 1 (info).
+      body = "node\tabc\n"
+      reply = typed_header(2, 1, byte_size(body)) <> body
+
+      server = spawn_reply_server(listener, reply)
+
+      {:ok, conn} =
+        Tcp.connect("127.0.0.1", port,
+          connect_timeout_ms: 1_000,
+          info_timeout: 500,
+          node_name: "A1"
+        )
+
+      handler = attach_span_handlers(:info_rpc, [Telemetry.info_rpc_span()])
+
+      try do
+        assert {:ok, %{"node" => "abc"}} = Tcp.info(conn, ["node"])
+
+        assert_receive {:event, [:aerospike, :info, :rpc, :start], _m,
+                        %{node_name: "A1", commands: ["node"]}}
+
+        assert_receive {:event, [:aerospike, :info, :rpc, :stop], %{duration: _},
+                        %{node_name: "A1", commands: ["node"]}}
+      after
+        :telemetry.detach(handler)
+      end
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+  end
+
+  # Forwarder used by the telemetry handlers below. Captured as a module
+  # function to avoid the "local function handler" performance warning
+  # `:telemetry.attach/4` emits for anonymous captures.
+  @doc false
+  def forward(event, measurements, metadata, test_pid) do
+    send(test_pid, {:event, event, measurements, metadata})
+  end
+
+  # Attach a forwarding handler for the [:start, :stop, :exception] suffix
+  # of every span prefix in `prefixes`. Returns the handler id used to
+  # detach. `:telemetry.attach_many/4` requires a unique id per call, so
+  # tests must pass a distinct `tag` to avoid collisions with sibling
+  # tests running concurrently (async: true).
+  defp attach_span_handlers(tag, prefixes) do
+    handler_id = {__MODULE__, tag, make_ref()}
+
+    events =
+      for prefix <- prefixes,
+          suffix <- [:start, :stop, :exception],
+          do: prefix ++ [suffix]
+
+    :ok = :telemetry.attach_many(handler_id, events, &__MODULE__.forward/4, self())
+
+    handler_id
   end
 
   # Build a valid 8-byte AS proto header for a given body. Matches

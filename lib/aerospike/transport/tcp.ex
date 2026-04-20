@@ -49,9 +49,25 @@ defmodule Aerospike.Transport.Tcp do
       `{:recbuf, n}` (the `:gen_tcp` spelling of `SO_RCVBUF`). Left
       unset (default `nil`) the kernel picks its own receive-buffer
       size.
+    * `:node_name` — opaque label stashed on the returned connection
+      handle and attached to every telemetry event emitted for that
+      handle. `nil` (default) when the caller does not know the node
+      name yet — e.g. seed bootstrap and peer-discovery probes open
+      sockets before the `node` info key has been read.
 
   See `:inet.setopts/2` for the underlying semantics. Opt translation
   happens once in `connect/3`; callers pass the public names above.
+
+  ## Telemetry
+
+  Every `command/4` emits a `[:aerospike, :command, :send]` span around
+  the socket write and a `[:aerospike, :command, :recv]` span around
+  the header + body read. Every `info/2` emits a
+  `[:aerospike, :info, :rpc]` span around the full round trip. Metadata
+  keys follow `Aerospike.Telemetry`'s taxonomy (`:node_name`,
+  `:attempt`, `:deadline_ms` for commands; `:node_name`, `:commands`
+  for info). `command/4` callers that do not pass an `:attempt` key
+  (every retry-driver call does) default to `0` in metadata.
   """
 
   @behaviour Aerospike.NodeTransport
@@ -59,6 +75,7 @@ defmodule Aerospike.Transport.Tcp do
   alias Aerospike.Error
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Message
+  alias Aerospike.Telemetry
 
   @default_connect_timeout_ms 5_000
   @header_size 8
@@ -74,22 +91,24 @@ defmodule Aerospike.Transport.Tcp do
   @typedoc "Concrete connection handle returned by `connect/3`."
   @opaque conn :: %__MODULE__{
             socket: :gen_tcp.socket(),
-            info_timeout: non_neg_integer()
+            info_timeout: non_neg_integer(),
+            node_name: String.t() | nil
           }
 
   @enforce_keys [:socket, :info_timeout]
-  defstruct [:socket, :info_timeout]
+  defstruct [:socket, :info_timeout, node_name: nil]
 
   @impl true
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
     info_timeout = Keyword.get(opts, :info_timeout, connect_timeout_ms)
+    node_name = Keyword.get(opts, :node_name)
 
     tcp_opts = build_tcp_opts(opts, connect_timeout_ms)
 
     case :gen_tcp.connect(to_charlist(host), port, tcp_opts, connect_timeout_ms) do
       {:ok, socket} ->
-        {:ok, %__MODULE__{socket: socket, info_timeout: info_timeout}}
+        {:ok, %__MODULE__{socket: socket, info_timeout: info_timeout, node_name: node_name}}
 
       {:error, reason} ->
         {:error, connect_error(host, port, reason)}
@@ -148,27 +167,70 @@ defmodule Aerospike.Transport.Tcp do
   end
 
   @impl true
-  def info(%__MODULE__{info_timeout: timeout} = conn, commands) when is_list(commands) do
-    request = Info.encode_request(commands)
+  def info(%__MODULE__{info_timeout: timeout, node_name: node_name} = conn, commands)
+      when is_list(commands) do
+    :telemetry.span(
+      Telemetry.info_rpc_span(),
+      %{node_name: node_name, commands: commands},
+      fn ->
+        request = Info.encode_request(commands)
 
-    with {:ok, version, type, body} <- send_recv(conn, request, timeout),
-         :ok <- validate_version(version),
-         :ok <- validate_type(type, @type_info) do
-      Info.decode_response(body)
-    end
+        result =
+          with {:ok, version, type, body} <- send_recv(conn, request, timeout),
+               :ok <- validate_version(version),
+               :ok <- validate_type(type, @type_info) do
+            Info.decode_response(body)
+          end
+
+        {result, %{node_name: node_name, commands: commands}}
+      end
+    )
   end
 
   @impl true
-  def command(%__MODULE__{} = conn, request, deadline_ms, opts \\ [])
+  def command(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
       when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
     framed = maybe_compress(request, opts)
+    attempt = Keyword.get(opts, :attempt, 0)
 
-    with {:ok, version, type, body} <- send_recv(conn, framed, deadline_ms),
+    span_metadata = %{node_name: node_name, attempt: attempt, deadline_ms: deadline_ms}
+
+    with :ok <- send_framed(conn, framed, span_metadata),
+         {:ok, version, type, body} <- recv_framed(conn, deadline_ms, span_metadata),
          :ok <- validate_version(version),
          :ok <- validate_command_type(type) do
       maybe_decompress(type, body)
     end
   end
+
+  # Wraps the socket write in a `[:aerospike, :command, :send]` span so
+  # the caller's handler sees every send attempt (including transport
+  # failures via the span's `:exception` event).
+  defp send_framed(conn, framed, metadata) do
+    :telemetry.span(Telemetry.command_send_span(), metadata, fn ->
+      result =
+        case :gen_tcp.send(conn.socket, framed) do
+          :ok -> :ok
+          {:error, reason} -> {:error, transport_error(:send, reason)}
+        end
+
+      {result, metadata}
+    end)
+  end
+
+  # Wraps the two-recv reassembly in a `[:aerospike, :command, :recv]`
+  # span. The stop metadata carries `:bytes` so a handler can track
+  # payload size alongside latency without re-decoding the frame.
+  defp recv_framed(conn, deadline_ms, metadata) do
+    :telemetry.span(Telemetry.command_recv_span(), metadata, fn ->
+      result = recv_message(conn, deadline_ms)
+      stop_metadata = Map.put(metadata, :bytes, recv_bytes(result))
+      {result, stop_metadata}
+    end)
+  end
+
+  defp recv_bytes({:ok, _version, _type, body}), do: byte_size(body)
+  defp recv_bytes(_), do: 0
 
   # When `:use_compression` is set and the request is large enough for the
   # reference-client threshold, compress it into a type-4 envelope. If the

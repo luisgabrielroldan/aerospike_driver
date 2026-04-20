@@ -16,6 +16,7 @@ defmodule Aerospike.GetRetryTest do
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionMap
   alias Aerospike.TableOwner
+  alias Aerospike.Telemetry
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
@@ -233,6 +234,128 @@ defmodule Aerospike.GetRetryTest do
       assert {:error, %Error{code: :network_error, message: "fake"}} =
                Get.execute(tender, key, :all, max_retries: 0)
     end
+  end
+
+  describe "retry telemetry" do
+    test "emits :retry_attempt with :transport classification on transport retry", ctx do
+      script_two_replica_cluster(ctx.fake)
+
+      {:ok, tender} = start_tender(ctx, replica_policy: :sequence, max_retries: 2)
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:error, %Error{code: :network_error, message: "fake"}})
+      Fake.script_command(ctx.fake, "B1", {:ok, scripted_ok_body()})
+
+      handler = attach_retry_handler(:transport_retry)
+
+      try do
+        key = Key.new(@namespace, @set, @user_key)
+        assert {:ok, _record} = Get.execute(tender, key, :all)
+
+        assert_receive {:event, [:aerospike, :retry, :attempt], %{remaining_budget_ms: budget},
+                        %{classification: :transport, attempt: 1, node_name: "A1"}},
+                       500
+
+        assert is_integer(budget) and budget >= 0
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
+    test "emits :retry_attempt with :rebalance classification on PARTITION_UNAVAILABLE", ctx do
+      script_two_replica_cluster(ctx.fake)
+
+      {:ok, tender} = start_tender(ctx, replica_policy: :sequence, max_retries: 2)
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_rebalance_body()})
+      Fake.script_command(ctx.fake, "B1", {:ok, scripted_ok_body()})
+
+      handler = attach_retry_handler(:rebalance_retry)
+
+      try do
+        key = Key.new(@namespace, @set, @user_key)
+        assert {:ok, _record} = Get.execute(tender, key, :all)
+
+        assert_receive {:event, [:aerospike, :retry, :attempt], _m,
+                        %{classification: :rebalance, attempt: 1, node_name: "A1"}},
+                       500
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
+    test "emits :retry_attempt with :circuit_open classification when breaker refuses", ctx do
+      script_two_replica_cluster(ctx.fake)
+
+      {:ok, tender} =
+        start_tender(ctx,
+          replica_policy: :sequence,
+          max_retries: 2,
+          circuit_open_threshold: 1
+        )
+
+      :ok = Tender.tend_now(tender)
+
+      {:ok, counters} = Tender.node_counters(tender, "A1")
+      Aerospike.NodeCounters.incr_failed(counters)
+
+      Fake.script_command(ctx.fake, "B1", {:ok, scripted_ok_body()})
+
+      handler = attach_retry_handler(:circuit_retry)
+
+      try do
+        key = Key.new(@namespace, @set, @user_key)
+        assert {:ok, _record} = Get.execute(tender, key, :all)
+
+        assert_receive {:event, [:aerospike, :retry, :attempt], _m,
+                        %{classification: :circuit_open, attempt: 1, node_name: "A1"}},
+                       500
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
+    test "does not emit :retry_attempt on the first successful attempt", ctx do
+      script_two_replica_cluster(ctx.fake)
+
+      {:ok, tender} = start_tender(ctx, replica_policy: :sequence, max_retries: 2)
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_ok_body()})
+
+      handler = attach_retry_handler(:no_retry)
+
+      try do
+        key = Key.new(@namespace, @set, @user_key)
+        assert {:ok, _record} = Get.execute(tender, key, :all)
+
+        refute_receive {:event, [:aerospike, :retry, :attempt], _m, _meta}, 100
+      after
+        :telemetry.detach(handler)
+      end
+    end
+  end
+
+  # Captured forwarder to avoid the "local function handler" performance
+  # warning from `:telemetry.attach/4` for anonymous captures.
+  @doc false
+  def forward(event, measurements, metadata, test_pid) do
+    send(test_pid, {:event, event, measurements, metadata})
+  end
+
+  defp attach_retry_handler(tag) do
+    handler_id = {__MODULE__, tag, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        Telemetry.retry_attempt(),
+        &__MODULE__.forward/4,
+        self()
+      )
+
+    handler_id
   end
 
   ## Helpers
