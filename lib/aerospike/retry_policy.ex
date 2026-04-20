@@ -78,7 +78,7 @@ defmodule Aerospike.RetryPolicy do
       (so a `:max_retries` of `2` means up to 3 attempts total). Must be
       a non-negative integer. `0` disables retry entirely.
     * `:sleep_between_retries_ms` — fixed delay between attempts; no
-      jitter or exponential backoff in Tier 2.
+      jitter or exponential backoff.
     * `:replica_policy` — `:master` dispatches every attempt against the
       master replica (transport failures retry the same node); `:sequence`
       walks the replica list via `rem(attempt, length(replicas))` on each
@@ -106,8 +106,8 @@ defmodule Aerospike.RetryPolicy do
 
   Intended for the Tender's init path: validate the caller's start opts
   once and store the resulting map in `:meta`. Unknown keys are ignored
-  so Tier 2 can live alongside future policy knobs without a config
-  migration.
+  so the retry policy can live alongside future policy knobs without a
+  config migration.
   """
   @spec from_opts(keyword()) :: t()
   def from_opts(opts) when is_list(opts) do
@@ -147,7 +147,7 @@ defmodule Aerospike.RetryPolicy do
   Reads the cluster-default retry policy from the `:meta` ETS table.
 
   Falls back to `defaults/0` when the slot is absent so readers never
-  crash against a Tender that was started before Tier 2's retry plumbing
+  crash against a Tender that was started without the retry plumbing
   (a cluster-state-only test harness, for example, that skips the
   retry-opts init).
   """

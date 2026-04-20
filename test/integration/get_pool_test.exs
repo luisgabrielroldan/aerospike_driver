@@ -5,9 +5,9 @@ defmodule Aerospike.Integration.GetPoolTest do
   These tests exercise the `NodePool` checkout path end-to-end against a
   real Aerospike server: a serial batch that reuses the same pool, a
   concurrent batch that forces checkout queueing with a small pool size,
-  and a Tier 1.5 smoke test that drives a `pool_size: 10` pool with
-  100 concurrent GETs while asserting eager warm-up via NimblePool's
-  internal resource queue.
+  and a smoke test that drives a `pool_size: 10` pool with 100 concurrent
+  GETs while asserting eager warm-up via NimblePool's internal resource
+  queue.
 
   A separate test starts an `Aerospike.NodeSupervisor` directly and runs
   `NodePool.checkout!/3` against the real server with a short
@@ -113,13 +113,13 @@ defmodule Aerospike.Integration.GetPoolTest do
   end
 
   @tag pool_size: @smoke_pool_size
-  test "Tier 1.5 smoke: 100 concurrent GETs on a warmed pool_size: 10 pool", %{cluster: cluster} do
+  test "smoke: 100 concurrent GETs on a warmed pool_size: 10 pool", %{cluster: cluster} do
     assert Tender.ready?(cluster)
 
-    # The cluster has exactly one seed node in the dev docker setup. Tier
-    # 1.5's eager warm-up (`lazy: false` pinned in `NodeSupervisor`) must
-    # have opened every configured worker during `Supervisor.init/1`, so
-    # by the time `Tender.ready?` returns true the pool's resource queue
+    # The cluster has exactly one seed node in the dev docker setup.
+    # Eager warm-up (`lazy: false` pinned in `NodeSupervisor`) must have
+    # opened every configured worker during `Supervisor.init/1`, so by
+    # the time `Tender.ready?` returns true the pool's resource queue
     # holds all `@smoke_pool_size` workers. Reach into NimblePool's
     # GenServer state to prove it — assertions on wall-clock latency
     # would be flaky on a shared CI box.
@@ -151,13 +151,12 @@ defmodule Aerospike.Integration.GetPoolTest do
 
   test "idle pool left sitting past idle_timeout_ms evicts workers and reopens on next checkout" do
     # This test bypasses `Aerospike.start_link` because the Tender does
-    # not thread `:idle_timeout_ms` through to `NodeSupervisor.start_pool/2`
-    # today (Tier 1.5 kept that out of scope — the Tier 2 per-node state
-    # machine will). Starting the supervisor + pool directly still
-    # exercises the real `Transport.Tcp` transport against the docker
-    # server, which is the end-to-end guarantee Task 6 needs to prove:
-    # `handle_ping/2` closes a real TCP socket and `init_worker/1` opens
-    # a fresh one on the next checkout.
+    # not thread `:idle_timeout_ms` through to `NodeSupervisor.start_pool/2`.
+    # Starting the supervisor + pool directly still exercises the real
+    # `Transport.Tcp` transport against the docker server, which is the
+    # end-to-end guarantee this test needs to prove: `handle_ping/2`
+    # closes a real TCP socket and `init_worker/1` opens a fresh one on
+    # the next checkout.
     name = :"spike_idle_sup_#{System.unique_integer([:positive])}"
     {:ok, sup} = NodeSupervisor.start_link(name: name)
 

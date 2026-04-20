@@ -12,12 +12,10 @@ defmodule Aerospike.NodeCounters do
       decremented in `handle_checkin/4` (both `:ok` and `:remove`
       branches) and in `terminate_worker/3`.
 
-    * `@queued` (2) — reserved. Tier 2 does not maintain this slot.
+    * `@queued` (2) — reserved. No writer currently maintains this slot.
       NimblePool's queue length is available via `:sys.get_state/1`,
       which is a GenServer call. Until the circuit breaker proves it
-      needs a lock-free read, the slot stays at zero. Upgrade to a real
-      write in Task 6 only if the breaker's hot-path read cannot
-      tolerate the `:sys.get_state/1` cost.
+      needs a lock-free read, the slot stays at zero.
 
     * `@failed` (3) — number of transport-class command failures
       observed against this node. Incremented by `Aerospike.NodePool`
@@ -28,13 +26,13 @@ defmodule Aerospike.NodeCounters do
       slot. Pool-level errors that occur before `fun` runs
       (`:pool_timeout`, `:invalid_node`) likewise do not bump this slot.
       The Tender zeroes the slot on a successful tend cycle for the
-      node; the breaker in Task 6 reads it.
+      node; the circuit breaker reads it.
 
   Writer discipline:
 
     * `@in_flight` — single writer = `Aerospike.NodePool` (callbacks run
       inside the pool's own process).
-    * `@queued` — no writer in Tier 2.
+    * `@queued` — no writer.
     * `@failed` — two writers: `Aerospike.NodePool` (increment on
       transport-class failure) and `Aerospike.Tender` (zero on tend
       success, clear on node drop). `:counters` is atomic so this is
@@ -55,7 +53,7 @@ defmodule Aerospike.NodeCounters do
   # "the node itself is misbehaving" belong here. Server-side logical
   # errors (`:key_not_found`, `:generation_error`, etc.) are not failures
   # of the node; rebalance-class errors are a routing cue handled by the
-  # retry layer in Task 7.
+  # retry layer.
   @failure_codes [:network_error, :timeout, :connection_error]
 
   @type t :: :counters.counters_ref()
@@ -71,7 +69,7 @@ defmodule Aerospike.NodeCounters do
   @spec in_flight(t()) :: non_neg_integer()
   def in_flight(ref), do: :counters.get(ref, @in_flight)
 
-  @doc "Reads the `:queued` slot (always `0` in Tier 2)."
+  @doc "Reads the `:queued` slot (always `0`; no writer currently maintains it)."
   @spec queued(t()) :: non_neg_integer()
   def queued(ref), do: :counters.get(ref, @queued)
 

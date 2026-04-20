@@ -15,11 +15,11 @@ defmodule Aerospike.CircuitBreaker do
       the next successful tend cycle.
 
     * `:max_concurrent_ops_per_node` — ceiling on `in_flight + queued`.
-      `:queued` stays at zero in Tier 2, so this is effectively a cap
-      on in-flight commands per node. It backstops `NimblePool`'s own
-      checkout queue: the breaker rejects before the caller enters the
-      queue, so a wedged pool cannot accumulate a thundering herd of
-      stuck checkouts.
+      `:queued` currently has no writer and stays at zero, so this is
+      effectively a cap on in-flight commands per node. It backstops
+      `NimblePool`'s own checkout queue: the breaker rejects before the
+      caller enters the queue, so a wedged pool cannot accumulate a
+      thundering herd of stuck checkouts.
 
   ## Stateless by design
 

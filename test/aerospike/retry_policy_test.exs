@@ -5,7 +5,7 @@ defmodule Aerospike.RetryPolicyTest do
   alias Aerospike.RetryPolicy
 
   describe "defaults/0" do
-    test "returns the Tier 2 default policy" do
+    test "returns the default policy" do
       assert RetryPolicy.defaults() == %{
                max_retries: 2,
                sleep_between_retries_ms: 0,
@@ -30,7 +30,7 @@ defmodule Aerospike.RetryPolicyTest do
              }
     end
 
-    test "ignores unknown keys so future knobs can coexist with Tier 2" do
+    test "ignores unknown keys so future knobs can coexist with the current policy" do
       policy = RetryPolicy.from_opts(future_knob: 42, max_retries: 1)
       assert policy.max_retries == 1
       assert policy.replica_policy == :sequence

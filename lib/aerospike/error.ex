@@ -66,8 +66,7 @@ defmodule Aerospike.Error do
   # distinct from generic server errors, and Java's `PartitionTracker`
   # flips a partition's `retry` flag on the same code. If the Aerospike
   # server grows another "not-mine" result code in the future, widen this
-  # list after auditing the reference clients (see Task 4 notes in
-  # `spike-docs/plans/tier-2-cluster-correctness/`).
+  # list after auditing the reference clients.
   @rebalance_codes [:partition_unavailable]
 
   @doc """
