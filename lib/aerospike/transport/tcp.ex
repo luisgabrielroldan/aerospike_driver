@@ -34,7 +34,10 @@ defmodule Aerospike.Transport.Tcp do
 
   @default_timeout 5_000
   @header_size 8
+  @proto_version Message.proto_version()
   @type_info Message.type_info()
+  @type_as_msg Message.type_as_msg()
+  @type_compressed Message.type_compressed()
 
   @typedoc "Concrete connection handle returned by `connect/3`."
   @opaque conn :: %__MODULE__{
@@ -71,29 +74,132 @@ defmodule Aerospike.Transport.Tcp do
   def info(%__MODULE__{info_timeout: timeout} = conn, commands) when is_list(commands) do
     request = Info.encode_request(commands)
 
-    with {:ok, _version, @type_info, body} <- send_recv(conn, request, timeout),
-         {:ok, map} <- Info.decode_response(body) do
-      {:ok, map}
-    else
-      {:ok, _version, type, _body} ->
-        {:error,
-         %Error{
-           code: :parse_error,
-           message: "expected info reply (type #{@type_info}), got type #{type}"
-         }}
-
-      {:error, %Error{}} = err ->
-        err
+    with {:ok, version, type, body} <- send_recv(conn, request, timeout),
+         :ok <- validate_version(version),
+         :ok <- validate_type(type, @type_info) do
+      Info.decode_response(body)
     end
   end
 
   @impl true
   def command(%__MODULE__{} = conn, request, deadline_ms)
       when is_integer(deadline_ms) and deadline_ms >= 0 do
-    case send_recv(conn, request, deadline_ms) do
-      {:ok, _version, _type, body} -> {:ok, body}
-      {:error, %Error{}} = err -> err
+    with {:ok, version, type, body} <- send_recv(conn, request, deadline_ms),
+         :ok <- validate_version(version),
+         :ok <- validate_command_type(type) do
+      maybe_decompress(type, body)
     end
+  end
+
+  defp validate_version(@proto_version), do: :ok
+
+  defp validate_version(version) do
+    {:error,
+     %Error{
+       code: :parse_error,
+       message: "unexpected proto version from server: expected #{@proto_version}, got #{version}"
+     }}
+  end
+
+  defp validate_type(type, type), do: :ok
+  defp validate_type(type, expected), do: type_mismatch_error(type, [expected])
+
+  defp validate_command_type(@type_as_msg), do: :ok
+  defp validate_command_type(@type_compressed), do: :ok
+
+  defp validate_command_type(type),
+    do: type_mismatch_error(type, [@type_as_msg, @type_compressed])
+
+  # For a plain AS_MSG reply the body is returned verbatim. For a
+  # compressed reply (type 4, `AS_MSG_COMPRESSED`) we peel the 8-byte
+  # uncompressed-size prefix, inflate the remaining bytes, verify the
+  # inflated frame matches that prefix, and re-parse its own 8-byte proto
+  # header — the inner frame must be a plain AS_MSG (type 3, version 2).
+  # Layout reference: Go `command.go:3574-3627`,
+  # `multi_command.go:150-173` (see `notes.md` Finding 3).
+  defp maybe_decompress(@type_as_msg, body), do: {:ok, body}
+
+  defp maybe_decompress(@type_compressed, body) do
+    with {:ok, {uncompressed_size, compressed}} <- decode_compressed_payload(body),
+         {:ok, inflated} <- safe_uncompress(compressed),
+         :ok <- validate_uncompressed_size(inflated, uncompressed_size),
+         {:ok, {inner_version, inner_type, inner_body}} <- decode_inner_frame(inflated),
+         :ok <- validate_version(inner_version),
+         :ok <- validate_inner_type(inner_type) do
+      {:ok, inner_body}
+    end
+  end
+
+  defp decode_compressed_payload(body) do
+    case Message.decode_compressed_payload(body) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :incomplete_compressed_payload} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "compressed reply is missing its 8-byte uncompressed-size prefix"
+         }}
+    end
+  end
+
+  defp safe_uncompress(compressed) do
+    {:ok, :zlib.uncompress(compressed)}
+  rescue
+    e in ErlangError ->
+      {:error,
+       %Error{
+         code: :parse_error,
+         message: "failed to inflate compressed reply: #{inspect(e.original)}"
+       }}
+  end
+
+  defp validate_uncompressed_size(inflated, expected_size) do
+    actual = byte_size(inflated)
+
+    if actual == expected_size do
+      :ok
+    else
+      {:error,
+       %Error{
+         code: :parse_error,
+         message:
+           "compressed reply size mismatch: header advertised #{expected_size}, inflated #{actual}"
+       }}
+    end
+  end
+
+  defp decode_inner_frame(inflated) do
+    case Message.decode(inflated) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :incomplete_header} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "inflated compressed reply has an incomplete proto header"
+         }}
+
+      {:error, :incomplete_body} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "inflated compressed reply has a truncated body"
+         }}
+    end
+  end
+
+  defp validate_inner_type(@type_as_msg), do: :ok
+  defp validate_inner_type(type), do: type_mismatch_error(type, [@type_as_msg])
+
+  defp type_mismatch_error(type, expected) do
+    {:error,
+     %Error{
+       code: :parse_error,
+       message: "unexpected proto type from server: expected #{inspect(expected)}, got #{type}"
+     }}
   end
 
   defp send_recv(%__MODULE__{socket: socket} = conn, request, deadline_ms) do

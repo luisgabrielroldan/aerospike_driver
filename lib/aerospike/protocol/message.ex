@@ -67,7 +67,14 @@ defmodule Aerospike.Protocol.Message do
   end
 
   @doc """
-  Decodes an 8-byte protocol header into {version, type, length}.
+  Decodes an 8-byte protocol header into `{version, type, length}`.
+
+  All three fields are returned verbatim — callers are expected to validate
+  both `version` (always `2` for every released Aerospike server; any other
+  value is a parse error) and `type` (`1` info, `3` AS_MSG, `4` compressed)
+  against the context of the call before using the body. This module does
+  not enforce those checks so higher layers can build typed errors with
+  call-site context (e.g. "expected info reply, got AS_MSG").
 
   ## Examples
 
@@ -155,4 +162,32 @@ defmodule Aerospike.Protocol.Message do
     length = IO.iodata_length(payload)
     [encode_header(@proto_version, @type_as_msg, length) | payload]
   end
+
+  @doc """
+  Decodes a compressed AS_MSG payload wrapper.
+
+  The body of a type-4 (`AS_MSG_COMPRESSED`) proto frame has the layout:
+
+  - bytes 0..7: big-endian `uint64` — the uncompressed size of the inner
+    AS_MSG frame including its own 8-byte proto header
+  - bytes 8..: zlib-compressed bytes of the full uncompressed AS_MSG frame
+    (its own 8-byte proto header + body)
+
+  On success, returns `{:ok, {uncompressed_size, compressed_bytes}}`. On an
+  input that is too short to contain the 8-byte uncompressed-size prefix,
+  returns `{:error, :incomplete_compressed_payload}`. Callers are expected
+  to inflate the compressed bytes and verify that the inflated frame's
+  total size equals `uncompressed_size` before parsing the inner frame.
+
+  Verified against Go `command.go:3574-3627` and
+  `multi_command.go:150-173`.
+  """
+  @spec decode_compressed_payload(binary()) ::
+          {:ok, {non_neg_integer(), binary()}}
+          | {:error, :incomplete_compressed_payload}
+  def decode_compressed_payload(<<uncompressed_size::64-big, compressed::binary>>) do
+    {:ok, {uncompressed_size, compressed}}
+  end
+
+  def decode_compressed_payload(_), do: {:error, :incomplete_compressed_payload}
 end
