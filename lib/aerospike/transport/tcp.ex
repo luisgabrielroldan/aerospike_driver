@@ -2,10 +2,19 @@ defmodule Aerospike.Transport.Tcp do
   @moduledoc """
   Plaintext `:gen_tcp` implementation of `Aerospike.NodeTransport`.
 
-  One socket per connection, no pooling, no TLS, no auth, no compression.
+  One socket per connection, no pooling, no compression on by default.
   Each call is a single request/response over a passive (`active: false`) socket
   with `:packet, :raw` framing. The Aerospike 8-byte protocol header determines
   body length, so framing is owned by this module — not by `:gen_tcp`.
+
+  The connection struct stores the socket tagged with the module that owns it
+  (`:gen_tcp` here; `:ssl` when the handle is produced by
+  `Aerospike.Transport.Tls`). Every post-connect operation dispatches through
+  that module, so framing, compression, auth, and telemetry are shared
+  between the plaintext and TLS transports — the only real difference is
+  how the socket was opened. `Aerospike.Transport.Tls` delegates its
+  `command/4`, `info/2`, `close/1`, and `login/2` callbacks here for that
+  reason.
 
   Reads use `:gen_tcp.recv(socket, N, timeout)` with `N > 0`, which blocks
   inside the VM until exactly `N` bytes arrive, so server-side TCP
@@ -109,13 +118,14 @@ defmodule Aerospike.Transport.Tcp do
 
   @typedoc "Concrete connection handle returned by `connect/3`."
   @opaque conn :: %__MODULE__{
-            socket: :gen_tcp.socket(),
+            socket: :gen_tcp.socket() | :ssl.sslsocket(),
+            socket_mod: :gen_tcp | :ssl,
             info_timeout: non_neg_integer(),
             node_name: String.t() | nil
           }
 
   @enforce_keys [:socket, :info_timeout]
-  defstruct [:socket, :info_timeout, node_name: nil]
+  defstruct [:socket, :info_timeout, socket_mod: :gen_tcp, node_name: nil]
 
   @impl true
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
@@ -134,6 +144,40 @@ defmodule Aerospike.Transport.Tcp do
       {:error, reason} ->
         {:error, connect_error(host, port, reason)}
     end
+  end
+
+  @doc false
+  # Package-internal constructor used by `Aerospike.Transport.Tls.connect/3`
+  # to wrap a freshly upgraded `:ssl` socket in the same opaque struct the
+  # plaintext transport returns from `connect/3`. Keeping the struct field
+  # list in one place means dialyzer sees a single producer of `t:conn/0`
+  # and callers cannot accidentally assemble a malformed handle. Not part
+  # of the public `NodeTransport` contract.
+  @spec wrap_ssl_socket(:ssl.sslsocket(), keyword()) :: conn()
+  def wrap_ssl_socket(ssl_socket, opts) when is_list(opts) do
+    connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
+    info_timeout = Keyword.get(opts, :info_timeout, connect_timeout_ms)
+    node_name = Keyword.get(opts, :node_name)
+
+    %__MODULE__{
+      socket: ssl_socket,
+      socket_mod: :ssl,
+      info_timeout: info_timeout,
+      node_name: node_name
+    }
+  end
+
+  @doc false
+  # Package-internal entry point used by `Aerospike.Transport.Tls.connect/3`
+  # to run the admin-protocol login handshake on a freshly upgraded TLS
+  # socket. Splitting this out of `connect/3` lets the TLS transport reuse
+  # the handshake logic without duplicating the `maybe_login/5` selection
+  # cond. Not part of the public `NodeTransport` contract.
+  @spec maybe_login_after_handshake(conn(), keyword(), String.t(), :inet.port_number()) ::
+          {:ok, conn()} | {:error, Error.t()}
+  def maybe_login_after_handshake(%__MODULE__{} = conn, opts, host, port) do
+    timeout_ms = Keyword.get(opts, :login_timeout_ms, conn.info_timeout)
+    maybe_login(conn, opts, timeout_ms, host, port)
   end
 
   # Runs the admin-protocol login or authenticate handshake on a freshly
@@ -260,25 +304,27 @@ defmodule Aerospike.Transport.Tcp do
   end
 
   defp do_run_login_rpc(conn, frame, timeout_ms) do
+    %__MODULE__{socket_mod: mod, socket: socket} = conn
+
     with :ok <- send_login(conn, frame),
-         {:ok, header} <- recv_exact(conn.socket, @login_header_size, timeout_ms),
+         {:ok, header} <- recv_exact(mod, socket, @login_header_size, timeout_ms),
          {:ok, {result_code, field_count, body_length}} <- decode_login_header(header),
-         {:ok, body} <- recv_login_body(conn.socket, body_length, timeout_ms) do
+         {:ok, body} <- recv_login_body(mod, socket, body_length, timeout_ms) do
       interpret_login_reply(result_code, field_count, body)
     end
   end
 
-  defp send_login(%__MODULE__{socket: socket}, frame) do
-    case :gen_tcp.send(socket, frame) do
+  defp send_login(%__MODULE__{socket_mod: mod, socket: socket}, frame) do
+    case mod.send(socket, frame) do
       :ok -> :ok
       {:error, reason} -> {:error, transport_error(:send, reason)}
     end
   end
 
-  defp recv_login_body(_socket, 0, _timeout), do: {:ok, <<>>}
+  defp recv_login_body(_mod, _socket, 0, _timeout), do: {:ok, <<>>}
 
-  defp recv_login_body(socket, length, timeout) when length > 0 do
-    recv_exact(socket, length, timeout)
+  defp recv_login_body(mod, socket, length, timeout) when length > 0 do
+    recv_exact(mod, socket, length, timeout)
   end
 
   defp decode_login_header(header) do
@@ -331,8 +377,8 @@ defmodule Aerospike.Transport.Tcp do
      }}
   end
 
-  defp close_and_fail(%__MODULE__{socket: socket}, %Error{} = err, _host, _port) do
-    _ = :gen_tcp.close(socket)
+  defp close_and_fail(%__MODULE__{socket_mod: mod, socket: socket}, %Error{} = err, _host, _port) do
+    _ = mod.close(socket)
     {:error, err}
   end
 
@@ -382,8 +428,8 @@ defmodule Aerospike.Transport.Tcp do
   end
 
   @impl true
-  def close(%__MODULE__{socket: socket}) do
-    _ = :gen_tcp.close(socket)
+  def close(%__MODULE__{socket_mod: mod, socket: socket}) do
+    _ = mod.close(socket)
     :ok
   end
 
@@ -430,7 +476,7 @@ defmodule Aerospike.Transport.Tcp do
   defp send_framed(conn, framed, metadata) do
     :telemetry.span(Telemetry.command_send_span(), metadata, fn ->
       result =
-        case :gen_tcp.send(conn.socket, framed) do
+        case conn.socket_mod.send(conn.socket, framed) do
           :ok -> :ok
           {:error, reason} -> {:error, transport_error(:send, reason)}
         end
@@ -593,35 +639,36 @@ defmodule Aerospike.Transport.Tcp do
      }}
   end
 
-  defp send_recv(%__MODULE__{socket: socket} = conn, request, deadline_ms) do
-    case :gen_tcp.send(socket, request) do
+  defp send_recv(%__MODULE__{socket_mod: mod, socket: socket} = conn, request, deadline_ms) do
+    case mod.send(socket, request) do
       :ok -> recv_message(conn, deadline_ms)
       {:error, reason} -> {:error, transport_error(:send, reason)}
     end
   end
 
   # Two-recv framing: the 8-byte Aerospike header carries the body length,
-  # so we `recv_exact/3` the header, decode it, then `recv_exact/3` the
-  # body. `recv_exact/3` wraps `:gen_tcp.recv(socket, N, deadline)` which
-  # on a passive `{:packet, :raw}` socket blocks until exactly `N` bytes
-  # arrive — server-side TCP fragmentation is invisible to the caller. See
-  # the moduledoc for why we do not coalesce or buffer further.
-  defp recv_message(%__MODULE__{socket: socket}, deadline_ms) do
-    with {:ok, header} <- recv_exact(socket, @header_size, deadline_ms),
+  # so we `recv_exact/4` the header, decode it, then `recv_exact/4` the
+  # body. `recv_exact/4` wraps `mod.recv(socket, N, deadline)` (where `mod`
+  # is `:gen_tcp` for plaintext and `:ssl` for TLS) which on a passive
+  # `{:packet, :raw}` socket blocks until exactly `N` bytes arrive —
+  # server-side TCP fragmentation is invisible to the caller. See the
+  # moduledoc for why we do not coalesce or buffer further.
+  defp recv_message(%__MODULE__{socket_mod: mod, socket: socket}, deadline_ms) do
+    with {:ok, header} <- recv_exact(mod, socket, @header_size, deadline_ms),
          {:ok, {version, type, length}} <- decode_header(header),
-         {:ok, body} <- recv_body(socket, length, deadline_ms) do
+         {:ok, body} <- recv_body(mod, socket, length, deadline_ms) do
       {:ok, version, type, body}
     end
   end
 
-  defp recv_body(_socket, 0, _timeout), do: {:ok, <<>>}
+  defp recv_body(_mod, _socket, 0, _timeout), do: {:ok, <<>>}
 
-  defp recv_body(socket, length, timeout) when length > 0 do
-    recv_exact(socket, length, timeout)
+  defp recv_body(mod, socket, length, timeout) when length > 0 do
+    recv_exact(mod, socket, length, timeout)
   end
 
-  defp recv_exact(socket, length, timeout) do
-    case :gen_tcp.recv(socket, length, timeout) do
+  defp recv_exact(mod, socket, length, timeout) do
+    case mod.recv(socket, length, timeout) do
       {:ok, data} -> {:ok, data}
       {:error, reason} -> {:error, transport_error(:recv, reason)}
     end

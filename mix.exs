@@ -10,7 +10,7 @@ defmodule Aerospike.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       dialyzer: [
-        plt_add_apps: [:ex_unit],
+        plt_add_apps: [:ex_unit, :ssl, :public_key],
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
       ]
     ]
@@ -18,7 +18,7 @@ defmodule Aerospike.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :ssl, :public_key]
     ]
   end
 

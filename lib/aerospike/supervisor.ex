@@ -255,12 +255,88 @@ defmodule Aerospike.Supervisor do
         validate_optional_pos_integer!(connect_opts, :tcp_rcvbuf)
         validate_pos_integer!(connect_opts, :connect_timeout_ms)
         validate_pos_integer!(connect_opts, :info_timeout)
+        validate_tls_opts!(connect_opts)
         :ok
 
       {:ok, value} ->
         raise ArgumentError,
               "Aerospike.Supervisor: :connect_opts must be a keyword list, got #{inspect(value)}"
     end
+  end
+
+  # TLS-specific opt shape checks. The transport itself also raises on
+  # bad values, but catching them here gives `start_link/1` a synchronous
+  # failure point — operators see a typo in their config before the first
+  # pool worker tries to connect.
+  defp validate_tls_opts!(connect_opts) do
+    validate_string_or_nil!(connect_opts, :tls_name)
+    validate_path_or_nil!(connect_opts, :tls_cacertfile)
+    validate_path_or_nil!(connect_opts, :tls_certfile)
+    validate_path_or_nil!(connect_opts, :tls_keyfile)
+    validate_tls_verify!(connect_opts)
+    validate_tls_cert_key_pair!(connect_opts)
+    :ok
+  end
+
+  defp validate_string_or_nil!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, value} when is_binary(value) -> :ok
+      {:ok, value} -> raise_string!(key, value)
+    end
+  end
+
+  defp validate_path_or_nil!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, value} when is_binary(value) -> :ok
+      {:ok, value} -> raise_string!(key, value)
+    end
+  end
+
+  defp validate_tls_verify!(opts) do
+    case Keyword.fetch(opts, :tls_verify) do
+      :error -> :ok
+      {:ok, :verify_peer} -> :ok
+      {:ok, :verify_none} -> :ok
+      {:ok, value} -> raise_tls_verify!(value)
+    end
+  end
+
+  # `:tls_certfile` and `:tls_keyfile` ship together or not at all —
+  # mTLS requires both; standard TLS sets neither. A half-configured
+  # pair is a common copy-paste mistake worth rejecting synchronously.
+  defp validate_tls_cert_key_pair!(opts) do
+    cert = Keyword.get(opts, :tls_certfile)
+    key = Keyword.get(opts, :tls_keyfile)
+
+    case {cert, key} do
+      {nil, nil} ->
+        :ok
+
+      {c, k} when is_binary(c) and is_binary(k) ->
+        :ok
+
+      _ ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: connect_opts :tls_certfile and :tls_keyfile " <>
+                "must both be strings or both be absent, " <>
+                "got certfile=#{inspect(cert)} keyfile=#{inspect(key)}"
+    end
+  end
+
+  defp raise_string!(key, value) do
+    raise ArgumentError,
+          "Aerospike.Supervisor: connect_opts #{inspect(key)} must be a string or nil, " <>
+            "got #{inspect(value)}"
+  end
+
+  defp raise_tls_verify!(value) do
+    raise ArgumentError,
+          "Aerospike.Supervisor: connect_opts :tls_verify must be :verify_peer or " <>
+            ":verify_none, got #{inspect(value)}"
   end
 
   defp validate_bool!(opts, key) do
