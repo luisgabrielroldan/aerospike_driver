@@ -10,9 +10,8 @@ defmodule Aerospike.Supervisor do
        table names.
     2. `Aerospike.NodeSupervisor` — `DynamicSupervisor` for per-node
        `NimblePool` children. Lives independently of the Tender so the
-       Tender can restart without losing already-started pools — though
-       Tier 1 does not yet take advantage of that (Task 7 wires pools
-       to the Tender lifecycle with an orphan-cleanup sweep on restart).
+       Tender can restart without losing already-started pools; the
+       Tender's restart path sweeps orphans to reconcile.
     3. `Aerospike.Tender` — the single-writer cluster-state GenServer.
        Started last so its `init/1` can read the TableOwner's tables
        and reference the NodeSupervisor by name.
@@ -48,7 +47,7 @@ defmodule Aerospike.Supervisor do
 
   Every other option is forwarded verbatim to `Aerospike.Tender` (for
   example `:connect_opts`, `:failure_threshold`, `:tend_interval_ms`,
-  `:tend_trigger`).
+  `:tend_trigger`, `:use_compression`).
   """
   @type option ::
           {:name, atom()}

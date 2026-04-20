@@ -167,11 +167,12 @@ defmodule Aerospike.Get do
     case CircuitBreaker.allow?(handle.counters, handle.breaker) do
       :ok ->
         remaining = remaining_budget(ctx.deadline)
+        command_opts = [use_compression: handle.use_compression]
 
         result =
           NodePool.checkout!(
             handle.pool,
-            fn conn -> do_get(ctx.transport, conn, ctx.key, remaining) end,
+            fn conn -> do_get(ctx.transport, conn, ctx.key, remaining, command_opts) end,
             remaining
           )
 
@@ -244,11 +245,10 @@ defmodule Aerospike.Get do
   defp exhausted(last_error, _reason), do: last_error
 
   defp fatal(_last_error, routing_error) do
-    # Routing atoms (`:cluster_not_ready`, `:no_master`) surface directly —
-    # preserving the shape Tier 1.5 callers already expect for these
-    # cases. A prior transport error is not substituted because the
-    # router's verdict supersedes it: if we no longer have any replica
-    # to target, the last transport error is irrelevant.
+    # Routing atoms (`:cluster_not_ready`, `:no_master`) surface directly.
+    # A prior transport error is not substituted because the router's
+    # verdict supersedes it: if we no longer have any replica to target,
+    # the last transport error is irrelevant.
     routing_error
   end
 
@@ -266,10 +266,10 @@ defmodule Aerospike.Get do
   #   * `{:close, :failure}` — drop the worker *and* bump the node's
   #     `:failed` counter. Used for transport-level errors and parse
   #     errors so the Task 6 circuit breaker sees the rate.
-  defp do_get(transport, conn, key, deadline_ms) do
+  defp do_get(transport, conn, key, deadline_ms, command_opts) do
     request = encode_read(key)
 
-    case transport.command(conn, request, deadline_ms) do
+    case transport.command(conn, request, deadline_ms, command_opts) do
       {:ok, body} ->
         case decode_as_msg(body) do
           {:ok, msg} ->

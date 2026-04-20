@@ -1396,6 +1396,121 @@ defmodule Aerospike.TenderTest do
     end
   end
 
+  describe "node_handle/2 :use_compression gating" do
+    test "cluster flag off → handle reports compression disabled even if node advertises it",
+         ctx do
+      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      on_exit(fn -> stop_process(node_sup) end)
+
+      Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
+        "node" => "A1",
+        "features" => "compression;pipelining"
+      })
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      {:ok, pid} =
+        start_tender(ctx, "test",
+          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          pool_size: 1,
+          use_compression: false
+        )
+
+      :ok = Tender.tend_now(pid)
+
+      {:ok, handle} = Tender.node_handle(pid, "A1")
+      assert handle.use_compression == false
+    end
+
+    test "cluster flag on + node lacks :compression feature → handle reports disabled", ctx do
+      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      on_exit(fn -> stop_process(node_sup) end)
+
+      # Node advertises pipelining but not compression.
+      Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
+        "node" => "A1",
+        "features" => "pipelining"
+      })
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      {:ok, pid} =
+        start_tender(ctx, "test",
+          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          pool_size: 1,
+          use_compression: true
+        )
+
+      :ok = Tender.tend_now(pid)
+
+      {:ok, handle} = Tender.node_handle(pid, "A1")
+      assert handle.use_compression == false
+    end
+
+    test "cluster flag on + node advertises :compression → handle reports enabled", ctx do
+      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      on_exit(fn -> stop_process(node_sup) end)
+
+      Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
+        "node" => "A1",
+        "features" => "compression;pipelining"
+      })
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      {:ok, pid} =
+        start_tender(ctx, "test",
+          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          pool_size: 1,
+          use_compression: true
+        )
+
+      :ok = Tender.tend_now(pid)
+
+      {:ok, handle} = Tender.node_handle(pid, "A1")
+      assert handle.use_compression == true
+    end
+
+    test "default cluster flag is false", ctx do
+      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      on_exit(fn -> stop_process(node_sup) end)
+
+      Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
+        "node" => "A1",
+        "features" => "compression"
+      })
+
+      script_cycle(ctx.fake, "A1",
+        gen: 1,
+        peers: "0,3000,[]",
+        replicas: ReplicasFixture.all_master("test", 1)
+      )
+
+      {:ok, pid} =
+        start_tender(ctx, "test",
+          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          pool_size: 1
+        )
+
+      :ok = Tender.tend_now(pid)
+
+      {:ok, handle} = Tender.node_handle(pid, "A1")
+      assert handle.use_compression == false
+    end
+  end
+
   describe "`:failed` counter decay on successful tend cycles" do
     test "a successful refresh-node info cycle zeroes the `:failed` slot", ctx do
       {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
@@ -1519,6 +1634,7 @@ defmodule Aerospike.TenderTest do
         :max_concurrent_ops_per_node,
         Keyword.get(opts, :max_concurrent_ops_per_node)
       )
+      |> maybe_put(:use_compression, Keyword.get(opts, :use_compression))
 
     {:ok, pid} = Tender.start_link(tender_opts)
 

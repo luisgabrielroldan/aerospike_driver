@@ -109,6 +109,14 @@ defmodule Aerospike.Tender do
     * `:replica_policy` — `:master` or `:sequence`. Default `:sequence`
       so retries walk the replica list; set to `:master` to pin every
       attempt to the master replica.
+    * `:use_compression` — boolean, default `false`. Cluster-wide opt-in
+      for outbound AS_MSG compression. When `true`, command dispatch
+      asks the underlying transport to compress requests above the
+      reference threshold — but only against nodes whose `features`
+      capability set advertises `:compression`. The per-node gating
+      happens inside the Tender, not at the call site, so a cluster
+      with mixed-capability nodes never sends a compressed frame to a
+      node that cannot decode it.
   """
   @type option ::
           {:name, GenServer.name()}
@@ -127,6 +135,7 @@ defmodule Aerospike.Tender do
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:replica_policy, :master | :sequence}
+          | {:use_compression, boolean()}
 
   @spec start_link([option()]) :: GenServer.on_start()
   def start_link(opts) do
@@ -202,6 +211,11 @@ defmodule Aerospike.Tender do
     * `:counters` — the node's `Aerospike.NodeCounters` reference.
     * `:breaker` — breaker thresholds the caller passes to
       `Aerospike.CircuitBreaker.allow?/2`.
+    * `:use_compression` — whether the command path should ask the
+      transport to compress the request for this attempt. Computed as
+      `cluster_use_compression and node_supports_compression?` at
+      handle time, so a single cluster flag composes with the node's
+      live `features` set without per-call policy state.
   """
   @type node_handle :: %{
           pool: pid(),
@@ -209,7 +223,8 @@ defmodule Aerospike.Tender do
           breaker: %{
             circuit_open_threshold: non_neg_integer(),
             max_concurrent_ops_per_node: pos_integer()
-          }
+          },
+          use_compression: boolean()
         }
 
   @doc """
@@ -317,6 +332,7 @@ defmodule Aerospike.Tender do
       pool_size: pool_size,
       breaker_opts: breaker_opts,
       retry_opts: retry_opts,
+      use_compression: Keyword.get(opts, :use_compression, false),
       owners_tab: owners_tab,
       node_gens_tab: node_gens_tab,
       meta_tab: meta_tab,
@@ -365,9 +381,15 @@ defmodule Aerospike.Tender do
 
   def handle_call({:node_handle, node_name}, _from, state) do
     case Map.fetch(state.nodes, node_name) do
-      {:ok, %{status: :active, pool_pid: pool, counters: counters}}
+      {:ok, %{status: :active, pool_pid: pool, counters: counters, features: features}}
       when is_pid(pool) and not is_nil(counters) ->
-        handle = %{pool: pool, counters: counters, breaker: state.breaker_opts}
+        handle = %{
+          pool: pool,
+          counters: counters,
+          breaker: state.breaker_opts,
+          use_compression: state.use_compression and MapSet.member?(features, :compression)
+        }
+
         {:reply, {:ok, handle}, state}
 
       _ ->

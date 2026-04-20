@@ -173,6 +173,18 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @doc """
+  Returns the `opts` keyword list passed to the most recent `command/4`
+  call for any connection addressing `node_id`, or `nil` if `command/4`
+  has not been called for that node yet. Lets tests assert that callers
+  plumbed capability-gated options (currently `:use_compression`) through
+  the behaviour.
+  """
+  @spec last_command_opts(pid(), node_id()) :: keyword() | nil
+  def last_command_opts(fake, node_id) do
+    GenServer.call(fake, {:last_command_opts, node_id})
+  end
+
+  @doc """
   Clears a prior `disconnect/2` for `node_id`. Scripted replies resume.
   """
   @spec reconnect(pid(), node_id()) :: :ok
@@ -213,7 +225,7 @@ defmodule Aerospike.Transport.Fake do
   def command(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
-    GenServer.call(fake, {:consume, ref, {:command, deadline_ms}})
+    GenServer.call(fake, {:consume, ref, {:command, deadline_ms, opts}})
   end
 
   ## GenServer callbacks
@@ -227,6 +239,7 @@ defmodule Aerospike.Transport.Fake do
       connect_counts: %{},
       close_counts: %{},
       last_command_deadlines: %{},
+      last_command_opts: %{},
       conns: %{},
       disconnected: MapSet.new(),
       default_reply: Keyword.get(opts, :default_reply, default_no_script_reply())
@@ -275,6 +288,10 @@ defmodule Aerospike.Transport.Fake do
 
   def handle_call({:last_command_deadline, node_id}, _from, state) do
     {:reply, Map.get(state.last_command_deadlines, node_id), state}
+  end
+
+  def handle_call({:last_command_opts, node_id}, _from, state) do
+    {:reply, Map.get(state.last_command_opts, node_id), state}
   end
 
   def handle_call({:connect, host, port}, _from, state) do
@@ -402,10 +419,14 @@ defmodule Aerospike.Transport.Fake do
   end
 
   defp script_key(node_id, {:info, commands}), do: {:info, node_id, commands}
-  defp script_key(node_id, {:command, _deadline_ms}), do: {:command, node_id}
+  defp script_key(node_id, {:command, _deadline_ms, _opts}), do: {:command, node_id}
 
-  defp record_command_deadline(state, node_id, {:command, deadline_ms}) do
-    %{state | last_command_deadlines: Map.put(state.last_command_deadlines, node_id, deadline_ms)}
+  defp record_command_deadline(state, node_id, {:command, deadline_ms, opts}) do
+    %{
+      state
+      | last_command_deadlines: Map.put(state.last_command_deadlines, node_id, deadline_ms),
+        last_command_opts: Map.put(state.last_command_opts, node_id, opts)
+    }
   end
 
   defp record_command_deadline(state, _node_id, {:info, _commands}), do: state

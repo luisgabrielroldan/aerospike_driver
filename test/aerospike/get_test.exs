@@ -118,6 +118,58 @@ defmodule Aerospike.GetTest do
     end
   end
 
+  describe ":use_compression plumbing" do
+    # The matrix of (cluster flag, node feature) that decides whether a
+    # command is dispatched with `use_compression: true`. The Fake
+    # transport captures the opts passed to each `command/4` call so we
+    # can assert the boolean without touching the wire path.
+
+    test "cluster flag off + node advertises :compression → command sent plain", ctx do
+      script_bootstrap_with_features(ctx.fake, "A1", "compression;pipelining")
+
+      {:ok, tender} = start_tender(ctx, use_compression: false)
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", scripted_key_not_found_body())
+
+      key = Key.new("test", "spike", "any")
+      assert {:error, %Error{code: :key_not_found}} = Get.execute(tender, key, :all)
+
+      opts = Fake.last_command_opts(ctx.fake, "A1")
+      assert Keyword.get(opts, :use_compression) == false
+    end
+
+    test "cluster flag on + node lacks :compression → command sent plain", ctx do
+      script_bootstrap_with_features(ctx.fake, "A1", "pipelining")
+
+      {:ok, tender} = start_tender(ctx, use_compression: true)
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", scripted_key_not_found_body())
+
+      key = Key.new("test", "spike", "any")
+      assert {:error, %Error{code: :key_not_found}} = Get.execute(tender, key, :all)
+
+      opts = Fake.last_command_opts(ctx.fake, "A1")
+      assert Keyword.get(opts, :use_compression) == false
+    end
+
+    test "cluster flag on + node advertises :compression → command sent with flag true", ctx do
+      script_bootstrap_with_features(ctx.fake, "A1", "compression;pipelining")
+
+      {:ok, tender} = start_tender(ctx, use_compression: true)
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", scripted_key_not_found_body())
+
+      key = Key.new("test", "spike", "any")
+      assert {:error, %Error{code: :key_not_found}} = Get.execute(tender, key, :all)
+
+      opts = Fake.last_command_opts(ctx.fake, "A1")
+      assert Keyword.get(opts, :use_compression) == true
+    end
+  end
+
   ## Helpers
 
   defp start_tender(ctx, opts) do
@@ -138,6 +190,7 @@ defmodule Aerospike.GetTest do
         :max_concurrent_ops_per_node,
         Keyword.get(opts, :max_concurrent_ops_per_node)
       )
+      |> maybe_put(:use_compression, Keyword.get(opts, :use_compression))
 
     {:ok, pid} = Tender.start_link(tender_opts)
     on_exit(fn -> stop_quietly(pid) end)
@@ -157,6 +210,19 @@ defmodule Aerospike.GetTest do
       gen: partition_gen,
       peers: "0,3000,[]",
       replicas: replicas_value
+    )
+  end
+
+  defp script_bootstrap_with_features(fake, node_name, features) do
+    Fake.script_info(fake, node_name, ["node", "features"], %{
+      "node" => node_name,
+      "features" => features
+    })
+
+    script_cycle(fake, node_name,
+      gen: 1,
+      peers: "0,3000,[]",
+      replicas: ReplicasFixture.all_master("test", 1)
     )
   end
 
