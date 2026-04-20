@@ -1,0 +1,6 @@
+[req]
+distinguished_name=req_distinguished_name
+[req_distinguished_name]
+[v3_req]
+subjectAltName=DNS:localhost,IP:127.0.0.1
+extendedKeyUsage=serverAuth
