@@ -70,7 +70,7 @@ defmodule Aerospike.Get do
   defp run_via_pool(pool, transport, key, timeout) do
     NodePool.checkout!(
       pool,
-      fn conn -> do_get(transport, conn, key) end,
+      fn conn -> do_get(transport, conn, key, timeout) end,
       timeout
     )
   end
@@ -79,10 +79,17 @@ defmodule Aerospike.Get do
   # `{result_for_caller, checkin_value}`. `:close` as the checkin value
   # asks the pool to drop the worker; returning the `conn` returns it to
   # the pool for reuse.
-  defp do_get(transport, conn, key) do
+  #
+  # Tier 1.5 reuses the caller's `:timeout` verbatim as the per-read
+  # deadline passed to `NodeTransport.command/3`. GET issues one request
+  # and reads one reply, so the whole op budget covers the read — encode,
+  # send, decode are effectively free compared to a remote `recv`. Tier 2
+  # retry work will pick a smaller per-attempt deadline derived from a
+  # monotonic op budget.
+  defp do_get(transport, conn, key, deadline_ms) do
     request = encode_read(key)
 
-    case transport.command(conn, request) do
+    case transport.command(conn, request, deadline_ms) do
       {:ok, body} ->
         case decode_as_msg(body) do
           {:ok, msg} ->

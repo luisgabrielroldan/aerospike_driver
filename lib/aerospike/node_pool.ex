@@ -10,8 +10,32 @@ defmodule Aerospike.NodePool do
   the caller returns `:close` at check-in to have the worker torn down
   and replaced.
 
-  Tier 1 deliberately omits login/auth, TLS, idle-deadline refresh,
-  warm-up, and telemetry: those are scheduled for Tier 2 and Tier 3.
+  Tier 1 deliberately omits login/auth, TLS, and telemetry: those are
+  scheduled for Tier 2 and Tier 3. Tier 1.5 adds idle-deadline eviction
+  via `handle_ping/2` (see "Idle eviction" below).
+
+  ## Warm-up
+
+  The pool is non-lazy: NimblePool calls `init_worker/1` for every
+  configured worker during `Supervisor.init/1` before any checkout can
+  succeed. Each successful connect is logged at `:debug` and each
+  failure at `:warning`. A failed `init_worker/1` returns
+  `{:remove, {:connect_failed, _}}`, which NimblePool re-schedules
+  asynchronously; the pool stays usable on the workers that did connect
+  and the failed slot retries later. Tier 1.5 does not escalate "all
+  workers failed" — that decision belongs to the Tier 2 per-node state
+  machine.
+
+  ## Idle eviction
+
+  `handle_ping/2` returns `{:remove, :idle}` for every worker that has
+  sat unused past the pool's `:worker_idle_timeout`, so NimblePool tears
+  the socket down via `terminate_worker/3` (which calls
+  `transport.close/1`). Tier 1.5 does not eagerly re-open evicted
+  workers; NimblePool re-initialises them on the next checkout. The
+  default idle deadline is chosen by `Aerospike.NodeSupervisor` to stay
+  below Aerospike's default `proto-fd-idle-ms` of 60_000 ms so the
+  client closes the socket before the server would.
 
   ## Pool state
 
@@ -110,14 +134,17 @@ defmodule Aerospike.NodePool do
     host = Keyword.fetch!(pool_state, :host)
     port = Keyword.fetch!(pool_state, :port)
     connect_opts = Keyword.fetch!(pool_state, :connect_opts)
+    node_name = Keyword.fetch!(pool_state, :node_name)
 
     case transport.connect(host, port, connect_opts) do
       {:ok, conn} ->
+        Logger.debug(fn ->
+          "Aerospike.NodePool: connected worker for #{node_name} at #{host}:#{port}"
+        end)
+
         {:ok, conn, pool_state}
 
       {:error, %Error{} = err} ->
-        node_name = Keyword.fetch!(pool_state, :node_name)
-
         Logger.warning(
           "Aerospike.NodePool: connect failed for #{node_name} at #{host}:#{port}: #{err.message}"
         )
@@ -138,6 +165,17 @@ defmodule Aerospike.NodePool do
 
   def handle_checkin(conn, _from, _prev, pool_state) do
     {:ok, conn, pool_state}
+  end
+
+  @impl NimblePool
+  def handle_ping(_conn, pool_state) do
+    node_name = Keyword.fetch!(pool_state, :node_name)
+
+    Logger.debug(fn ->
+      "Aerospike.NodePool: evicting idle worker for #{node_name}"
+    end)
+
+    {:remove, :idle}
   end
 
   @impl NimblePool

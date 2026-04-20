@@ -56,9 +56,17 @@ defmodule Aerospike.NodeTransport do
   The reply is the full response payload; framing/parsing is the caller's
   responsibility.
 
+  `deadline_ms` is a per-socket-read deadline in milliseconds applied to
+  each `:gen_tcp.recv/3` call (header and body are read separately on
+  passive `{:packet, :raw}` sockets; see `Aerospike.Transport.Tcp`). It is
+  deliberately separate from the caller's total-operation budget: a slow
+  node can blow its read deadline without the caller having to track a
+  monotonic deadline manually. The caller remains responsible for the
+  overall operation budget — the transport does not enforce it.
+
   Single request, single response — streaming and multi-frame replies
   (scan, query) are out of scope for this behaviour.
   """
-  @callback command(conn(), request :: iodata()) ::
+  @callback command(conn(), request :: iodata(), deadline_ms :: non_neg_integer()) ::
               {:ok, binary()} | {:error, Aerospike.Error.t()}
 end

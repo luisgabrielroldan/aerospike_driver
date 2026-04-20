@@ -7,6 +7,21 @@ defmodule Aerospike.Transport.Tcp do
   with `:packet, :raw` framing. The Aerospike 8-byte protocol header determines
   body length, so framing is owned by this module — not by `:gen_tcp`.
 
+  Reads use `:gen_tcp.recv(socket, N, timeout)` with `N > 0`, which blocks
+  inside the VM until exactly `N` bytes arrive, so server-side TCP
+  fragmentation is transparent: the header and body are read in two exact
+  recv calls regardless of how the kernel delivers them. Coalescing the two
+  reads is not possible because the body length lives in the header, and a
+  per-connection read buffer would only pay off for pipelined in-flight
+  requests, which Tier 1.5 explicitly defers (see
+  `docs/plans/tier-1-5-pool-hardening/notes.md`, Finding 7).
+
+  The read deadline is supplied per `command/3` call by the caller rather
+  than stored on the connection, so a retry layer can budget each attempt
+  independently (see `Aerospike.NodeTransport.command/3`). `info/2` still
+  uses the default connect-time timeout because it is only issued from the
+  Tender path, which has no per-call deadline of its own.
+
   Failures are returned as `{:error, %Aerospike.Error{}}` — sockets are not
   reused after an error and the caller is expected to `close/1` them.
   """
@@ -24,22 +39,22 @@ defmodule Aerospike.Transport.Tcp do
   @typedoc "Concrete connection handle returned by `connect/3`."
   @opaque conn :: %__MODULE__{
             socket: :gen_tcp.socket(),
-            recv_timeout: non_neg_integer()
+            info_timeout: non_neg_integer()
           }
 
-  @enforce_keys [:socket, :recv_timeout]
-  defstruct [:socket, :recv_timeout]
+  @enforce_keys [:socket, :info_timeout]
+  defstruct [:socket, :info_timeout]
 
   @impl true
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
-    recv_timeout = Keyword.get(opts, :recv_timeout, timeout)
+    info_timeout = Keyword.get(opts, :info_timeout, timeout)
 
     tcp_opts = [:binary, {:active, false}, {:packet, :raw}, {:send_timeout, timeout}]
 
     case :gen_tcp.connect(to_charlist(host), port, tcp_opts, timeout) do
       {:ok, socket} ->
-        {:ok, %__MODULE__{socket: socket, recv_timeout: recv_timeout}}
+        {:ok, %__MODULE__{socket: socket, info_timeout: info_timeout}}
 
       {:error, reason} ->
         {:error, connect_error(host, port, reason)}
@@ -53,10 +68,10 @@ defmodule Aerospike.Transport.Tcp do
   end
 
   @impl true
-  def info(%__MODULE__{} = conn, commands) when is_list(commands) do
+  def info(%__MODULE__{info_timeout: timeout} = conn, commands) when is_list(commands) do
     request = Info.encode_request(commands)
 
-    with {:ok, _version, @type_info, body} <- send_recv(conn, request),
+    with {:ok, _version, @type_info, body} <- send_recv(conn, request, timeout),
          {:ok, map} <- Info.decode_response(body) do
       {:ok, map}
     else
@@ -73,24 +88,31 @@ defmodule Aerospike.Transport.Tcp do
   end
 
   @impl true
-  def command(%__MODULE__{} = conn, request) do
-    case send_recv(conn, request) do
+  def command(%__MODULE__{} = conn, request, deadline_ms)
+      when is_integer(deadline_ms) and deadline_ms >= 0 do
+    case send_recv(conn, request, deadline_ms) do
       {:ok, _version, _type, body} -> {:ok, body}
       {:error, %Error{}} = err -> err
     end
   end
 
-  defp send_recv(%__MODULE__{socket: socket} = conn, request) do
+  defp send_recv(%__MODULE__{socket: socket} = conn, request, deadline_ms) do
     case :gen_tcp.send(socket, request) do
-      :ok -> recv_message(conn)
+      :ok -> recv_message(conn, deadline_ms)
       {:error, reason} -> {:error, transport_error(:send, reason)}
     end
   end
 
-  defp recv_message(%__MODULE__{socket: socket, recv_timeout: timeout}) do
-    with {:ok, header} <- recv_exact(socket, @header_size, timeout),
+  # Two-recv framing: the 8-byte Aerospike header carries the body length,
+  # so we `recv_exact/3` the header, decode it, then `recv_exact/3` the
+  # body. `recv_exact/3` wraps `:gen_tcp.recv(socket, N, deadline)` which
+  # on a passive `{:packet, :raw}` socket blocks until exactly `N` bytes
+  # arrive — server-side TCP fragmentation is invisible to the caller. See
+  # the moduledoc for why we do not coalesce or buffer further.
+  defp recv_message(%__MODULE__{socket: socket}, deadline_ms) do
+    with {:ok, header} <- recv_exact(socket, @header_size, deadline_ms),
          {:ok, {version, type, length}} <- decode_header(header),
-         {:ok, body} <- recv_body(socket, length, timeout) do
+         {:ok, body} <- recv_body(socket, length, deadline_ms) do
       {:ok, version, type, body}
     end
   end

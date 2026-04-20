@@ -124,6 +124,55 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @doc """
+  Appends a scripted `connect/3` outcome for `node_id`. The next
+  `connect/3` call resolving to that node consumes the head of the queue
+  instead of the default success path. When the queue is empty the
+  default behaviour resumes (success unless the node is `disconnect/2`-ed).
+
+  This lets tests script per-connect-attempt failures during pool warm-up
+  without flipping the global disconnected flag.
+  """
+  @spec script_connect(pid(), node_id(), :ok | {:error, Error.t()}) :: :ok
+  def script_connect(fake, node_id, :ok) do
+    GenServer.call(fake, {:script_connect, node_id, :ok})
+  end
+
+  def script_connect(fake, node_id, {:error, %Error{}} = reply) do
+    GenServer.call(fake, {:script_connect, node_id, reply})
+  end
+
+  @doc """
+  Returns the number of times `connect/3` was invoked for `node_id`,
+  including failures from `script_connect/3` and `disconnect/2`.
+  """
+  @spec connect_count(pid(), node_id()) :: non_neg_integer()
+  def connect_count(fake, node_id) do
+    GenServer.call(fake, {:connect_count, node_id})
+  end
+
+  @doc """
+  Returns the number of times `close/1` was invoked for a connection
+  addressing `node_id`. Useful for asserting idle eviction: a connect
+  followed by a close without a checkout in between indicates a
+  `handle_ping/2` eviction.
+  """
+  @spec close_count(pid(), node_id()) :: non_neg_integer()
+  def close_count(fake, node_id) do
+    GenServer.call(fake, {:close_count, node_id})
+  end
+
+  @doc """
+  Returns the deadline (in milliseconds) passed to the most recent
+  `command/3` call for any connection addressing `node_id`, or `nil` if
+  `command/3` has not been called for that node yet. Lets tests assert
+  that callers plumbed a read deadline through the behaviour.
+  """
+  @spec last_command_deadline(pid(), node_id()) :: non_neg_integer() | nil
+  def last_command_deadline(fake, node_id) do
+    GenServer.call(fake, {:last_command_deadline, node_id})
+  end
+
+  @doc """
   Clears a prior `disconnect/2` for `node_id`. Scripted replies resume.
   """
   @spec reconnect(pid(), node_id()) :: :ok
@@ -161,9 +210,10 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @impl Aerospike.NodeTransport
-  def command(%__MODULE__{fake: fake, ref: ref}, request)
-      when is_binary(request) or is_list(request) do
-    GenServer.call(fake, {:consume, ref, :command})
+  def command(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms)
+      when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
+             deadline_ms >= 0 do
+    GenServer.call(fake, {:consume, ref, {:command, deadline_ms}})
   end
 
   ## GenServer callbacks
@@ -173,6 +223,10 @@ defmodule Aerospike.Transport.Fake do
     state = %{
       nodes: %{},
       scripts: %{},
+      connect_scripts: %{},
+      connect_counts: %{},
+      close_counts: %{},
+      last_command_deadlines: %{},
       conns: %{},
       disconnected: MapSet.new(),
       default_reply: Keyword.get(opts, :default_reply, default_no_script_reply())
@@ -205,16 +259,30 @@ defmodule Aerospike.Transport.Fake do
     {:reply, :ok, %{state | default_reply: reply}}
   end
 
+  def handle_call({:script_connect, node_id, outcome}, _from, state) do
+    queue = Map.get(state.connect_scripts, node_id, :queue.new())
+    scripts = Map.put(state.connect_scripts, node_id, :queue.in(outcome, queue))
+    {:reply, :ok, %{state | connect_scripts: scripts}}
+  end
+
+  def handle_call({:connect_count, node_id}, _from, state) do
+    {:reply, Map.get(state.connect_counts, node_id, 0), state}
+  end
+
+  def handle_call({:close_count, node_id}, _from, state) do
+    {:reply, Map.get(state.close_counts, node_id, 0), state}
+  end
+
+  def handle_call({:last_command_deadline, node_id}, _from, state) do
+    {:reply, Map.get(state.last_command_deadlines, node_id), state}
+  end
+
   def handle_call({:connect, host, port}, _from, state) do
     case Map.fetch(state.nodes, {host, port}) do
       {:ok, node_id} ->
-        if MapSet.member?(state.disconnected, node_id) do
-          {:reply, {:error, connection_refused_error(host, port)}, state}
-        else
-          ref = make_ref()
-          conn = %__MODULE__{fake: self(), node_id: node_id, ref: ref}
-          {:reply, {:ok, conn}, %{state | conns: Map.put(state.conns, ref, node_id)}}
-        end
+        state = bump_connect_count(state, node_id)
+        {outcome, state} = next_connect_outcome(state, node_id)
+        do_connect(state, node_id, host, port, outcome)
 
       :error ->
         {:reply, {:error, unknown_host_error(host, port)}, state}
@@ -222,12 +290,19 @@ defmodule Aerospike.Transport.Fake do
   end
 
   def handle_call({:close, ref}, _from, state) do
+    state =
+      case Map.fetch(state.conns, ref) do
+        {:ok, node_id} -> bump_close_count(state, node_id)
+        :error -> state
+      end
+
     {:reply, :ok, %{state | conns: Map.delete(state.conns, ref)}}
   end
 
   def handle_call({:consume, ref, kind}, _from, state) do
     with {:ok, node_id} <- fetch_conn(state, ref),
          :ok <- check_connected(state, node_id) do
+      state = record_command_deadline(state, node_id, kind)
       {reply, state} = consume_script(state, node_id, kind)
       {:reply, reply, state}
     else
@@ -236,6 +311,54 @@ defmodule Aerospike.Transport.Fake do
   end
 
   ## Helpers
+
+  defp bump_connect_count(state, node_id) do
+    counts = Map.update(state.connect_counts, node_id, 1, &(&1 + 1))
+    %{state | connect_counts: counts}
+  end
+
+  defp bump_close_count(state, node_id) do
+    counts = Map.update(state.close_counts, node_id, 1, &(&1 + 1))
+    %{state | close_counts: counts}
+  end
+
+  defp next_connect_outcome(state, node_id) do
+    case Map.get(state.connect_scripts, node_id) do
+      nil ->
+        {:default, state}
+
+      queue ->
+        case :queue.out(queue) do
+          {{:value, outcome}, rest} ->
+            {outcome, %{state | connect_scripts: Map.put(state.connect_scripts, node_id, rest)}}
+
+          {:empty, _} ->
+            {:default, state}
+        end
+    end
+  end
+
+  defp do_connect(state, _node_id, _host, _port, {:error, %Error{}} = err) do
+    {:reply, err, state}
+  end
+
+  defp do_connect(state, node_id, host, port, :ok) do
+    open_conn(state, node_id, host, port)
+  end
+
+  defp do_connect(state, node_id, host, port, :default) do
+    if MapSet.member?(state.disconnected, node_id) do
+      {:reply, {:error, connection_refused_error(host, port)}, state}
+    else
+      open_conn(state, node_id, host, port)
+    end
+  end
+
+  defp open_conn(state, node_id, _host, _port) do
+    ref = make_ref()
+    conn = %__MODULE__{fake: self(), node_id: node_id, ref: ref}
+    {:reply, {:ok, conn}, %{state | conns: Map.put(state.conns, ref, node_id)}}
+  end
 
   defp register_node_reduce({node_id, host, port}, state) when is_binary(host) do
     put_node(state, node_id, host, port)
@@ -279,7 +402,13 @@ defmodule Aerospike.Transport.Fake do
   end
 
   defp script_key(node_id, {:info, commands}), do: {:info, node_id, commands}
-  defp script_key(node_id, :command), do: {:command, node_id}
+  defp script_key(node_id, {:command, _deadline_ms}), do: {:command, node_id}
+
+  defp record_command_deadline(state, node_id, {:command, deadline_ms}) do
+    %{state | last_command_deadlines: Map.put(state.last_command_deadlines, node_id, deadline_ms)}
+  end
+
+  defp record_command_deadline(state, _node_id, {:info, _commands}), do: state
 
   defp default_no_script_reply do
     {:error,

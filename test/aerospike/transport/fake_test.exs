@@ -62,7 +62,7 @@ defmodule Aerospike.Transport.FakeTest do
     end
   end
 
-  describe "command/2" do
+  describe "command/3" do
     setup :fake_with_a1
 
     test "returns the next scripted reply regardless of request bytes", %{
@@ -71,14 +71,27 @@ defmodule Aerospike.Transport.FakeTest do
     } do
       Fake.script_command(fake, "A1", {:ok, <<1, 2, 3>>})
 
-      assert {:ok, <<1, 2, 3>>} = Fake.command(conn, <<"anything">>)
+      assert {:ok, <<1, 2, 3>>} = Fake.command(conn, <<"anything">>, 1_000)
     end
 
     test "surfaces scripted errors", %{conn: conn, fake: fake} do
       err = %Error{code: :timeout, message: "scripted"}
       Fake.script_command(fake, "A1", {:error, err})
 
-      assert {:error, ^err} = Fake.command(conn, <<>>)
+      assert {:error, ^err} = Fake.command(conn, <<>>, 1_000)
+    end
+
+    test "records the last deadline passed for assertions", %{conn: conn, fake: fake} do
+      Fake.script_command(fake, "A1", {:ok, <<1>>})
+      Fake.script_command(fake, "A1", {:ok, <<2>>})
+
+      assert Fake.last_command_deadline(fake, "A1") == nil
+
+      assert {:ok, <<1>>} = Fake.command(conn, <<"req">>, 750)
+      assert Fake.last_command_deadline(fake, "A1") == 750
+
+      assert {:ok, <<2>>} = Fake.command(conn, <<"req">>, 1_250)
+      assert Fake.last_command_deadline(fake, "A1") == 1_250
     end
   end
 
@@ -97,7 +110,7 @@ defmodule Aerospike.Transport.FakeTest do
       :ok = Fake.close(conn)
 
       assert {:error, %Error{code: :network_error}} = Fake.info(conn, ["node"])
-      assert {:error, %Error{code: :network_error}} = Fake.command(conn, <<>>)
+      assert {:error, %Error{code: :network_error}} = Fake.command(conn, <<>>, 1_000)
     end
   end
 
