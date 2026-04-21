@@ -1,6 +1,6 @@
 defmodule Aerospike.Page do
   @moduledoc """
-  One page of scan or query results with a resumable cursor.
+  One page of collected query results with a resumable partition cursor.
   """
 
   alias Aerospike.Cursor

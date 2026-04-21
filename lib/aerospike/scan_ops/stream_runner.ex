@@ -3,42 +3,132 @@ defmodule Aerospike.ScanOps.StreamRunner do
 
   alias Aerospike.CircuitBreaker
   alias Aerospike.Error
-  alias Aerospike.PartitionFilter
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionTracker
+  alias Aerospike.ExecuteTask
+  alias Aerospike.NodePool
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
   alias Aerospike.Scan
+  alias Aerospike.ScanOps.PageRunner
   alias Aerospike.Tender
 
   @default_timeout 5_000
-  @default_pool_checkout_timeout 5_000
-
   @spec stream(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream(tender, scannable, opts) when is_list(opts) do
-    stream_internal(tender, scannable, opts, nil)
+    stream_internal(tender, scannable, opts, nil, nil, &ScanResponse.parse_stream_chunk/3)
   end
 
   @spec stream_node(GenServer.server(), String.t(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream_node(tender, node_name, scannable, opts)
       when is_binary(node_name) and is_list(opts) do
-    stream_internal(tender, scannable, opts, node_name)
+    stream_internal(tender, scannable, opts, node_name, nil, &ScanResponse.parse_stream_chunk/3)
   end
 
-  defp stream_internal(tender, scannable, opts, node_filter) do
-    with {:ok, runtime} <- runtime(tender),
-         {:ok, node_requests} <- prepare_node_requests(runtime, scannable, node_filter, opts) do
+  @spec query_aggregate(GenServer.server(), Query.t(), keyword(), String.t(), String.t(), list()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t()}
+  def query_aggregate(tender, %Query{} = query, opts, package, function, args)
+      when is_list(opts) and is_binary(package) and is_binary(function) and is_list(args) do
+    stream_internal(
+      tender,
+      query,
+      opts,
+      nil,
+      fn q, node_partitions, run_opts ->
+        ScanQuery.build_query_aggregate(q, node_partitions, package, function, args, run_opts)
+      end,
+      &ScanResponse.parse_aggregate_stream_chunk/3
+    )
+  end
+
+  @spec query_execute(GenServer.server(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_execute(tender, %Query{} = query, ops, opts \\ [])
+      when is_list(ops) and is_list(opts) do
+    run_background_query(
+      tender,
+      query,
+      opts,
+      nil,
+      fn q, node_partitions, run_opts ->
+        ScanQuery.build_query_execute(q, node_partitions, ops, run_opts)
+      end,
+      :query_execute
+    )
+  end
+
+  @spec query_execute_node(GenServer.server(), String.t(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_execute_node(tender, node_name, %Query{} = query, ops, opts \\ [])
+      when is_binary(node_name) and is_list(ops) and is_list(opts) do
+    run_background_query(
+      tender,
+      query,
+      opts,
+      node_name,
+      fn q, node_partitions, run_opts ->
+        ScanQuery.build_query_execute(q, node_partitions, ops, run_opts)
+      end,
+      :query_execute
+    )
+  end
+
+  @spec query_udf(GenServer.server(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_udf(tender, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    run_background_query(
+      tender,
+      query,
+      opts,
+      nil,
+      fn q, node_partitions, run_opts ->
+        ScanQuery.build_query_udf(q, node_partitions, package, function, args, run_opts)
+      end,
+      :query_udf
+    )
+  end
+
+  @spec query_udf_node(
+          GenServer.server(),
+          String.t(),
+          Query.t(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_udf_node(tender, node_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(node_name) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    run_background_query(
+      tender,
+      query,
+      opts,
+      node_name,
+      fn q, node_partitions, run_opts ->
+        ScanQuery.build_query_udf(q, node_partitions, package, function, args, run_opts)
+      end,
+      :query_udf
+    )
+  end
+
+  defp stream_internal(tender, scannable, opts, node_filter, wire_builder, parser) do
+    with {:ok, runtime} <- PageRunner.runtime(tender, scannable),
+         {:ok, _tracker, node_requests} <-
+           PageRunner.prepare_node_requests(runtime, scannable, node_filter, opts) do
       task_timeout = Keyword.get(opts, :task_timeout, :infinity)
       max_concurrency = max_concurrency(opts, length(node_requests))
 
       stream =
         node_requests
         |> Task.async_stream(
-          fn node_request -> run_node_request(runtime, scannable, node_request, opts) end,
+          fn node_request ->
+            run_node_request(runtime, scannable, node_request, opts, wire_builder, parser)
+          end,
           ordered: true,
           max_concurrency: max_concurrency,
           timeout: task_timeout,
@@ -50,149 +140,68 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp runtime(tender) do
-    if Tender.ready?(tender) do
-      {:ok,
-       %{
-         tender: tender,
-         transport: Tender.transport(tender),
-         tables: Tender.tables(tender)
-       }}
-    else
-      {:error,
-       Error.from_result_code(:cluster_not_ready, message: "scan requires a ready cluster")}
-    end
-  end
-
-  defp prepare_node_requests(runtime, %Scan{} = scan, node_filter, opts) do
-    with {:ok, node_names} <- active_nodes(runtime.tender, node_filter),
-         {:ok, tracker} <- new_tracker(scan, node_names, node_filter),
-         {:ok, partition_map} <- partition_map(runtime, scan),
-         {:ok, tracker, node_partitions} <-
-           PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
-      {:ok, build_node_requests(tracker, node_partitions, scan, opts)}
-    end
-  end
-
-  defp prepare_node_requests(runtime, %Query{} = query, node_filter, opts) do
-    with {:ok, node_names} <- active_nodes(runtime.tender, node_filter),
-         {:ok, tracker} <- new_tracker(query, node_names, node_filter),
-         {:ok, partition_map} <- partition_map(runtime, query),
-         {:ok, tracker, node_partitions} <-
-           PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
-      {:ok, build_node_requests(tracker, node_partitions, query, opts)}
-    end
-  end
-
-  defp active_nodes(tender, nil) do
-    tender
-    |> Tender.nodes_status()
-    |> Enum.filter(fn {_node_name, meta} -> Map.get(meta, :status) == :active end)
-    |> Enum.map(&elem(&1, 0))
-    |> case do
-      [] ->
-        {:error,
-         Error.from_result_code(:cluster_not_ready, message: "scan requires active nodes")}
-
-      active ->
-        {:ok, active}
-    end
-  end
-
-  defp active_nodes(tender, node_name) do
-    case Tender.nodes_status(tender) |> Map.fetch(node_name) do
-      {:ok, %{status: :active}} -> {:ok, [node_name]}
-      {:ok, %{status: :inactive}} -> {:error, unknown_node(node_name)}
-      :error -> {:error, unknown_node(node_name)}
-    end
-  end
-
-  defp new_tracker(%Scan{} = scan, node_names, node_filter) do
-    filter = scan.partition_filter || PartitionFilter.all()
-
-    {:ok,
-     PartitionTracker.new(filter,
-       nodes: node_names,
-       max_records: scan.max_records || 0,
-       node_filter: node_filter
-     )}
-  rescue
-    err in [ArgumentError] ->
-      {:error, Error.from_result_code(:invalid_argument, message: err.message)}
-  end
-
-  defp new_tracker(%Query{} = query, node_names, node_filter) do
-    filter = query.partition_filter || PartitionFilter.all()
-
-    {:ok,
-     PartitionTracker.new(filter,
-       nodes: node_names,
-       max_records: query.max_records || 0,
-       node_filter: node_filter
-     )}
-  rescue
-    err in [ArgumentError] ->
-      {:error, Error.from_result_code(:invalid_argument, message: err.message)}
-  end
-
-  defp partition_map(runtime, %Scan{namespace: namespace}) do
-    owners_tab = runtime.tables.owners
-    count = PartitionMap.partition_count()
-
-    0..(count - 1)
-    |> Enum.reduce_while({:ok, %{}}, fn partition_id, {:ok, acc} ->
-      case PartitionMap.owners(owners_tab, namespace, partition_id) do
-        {:ok, %{replicas: replicas}} ->
-          {:cont, {:ok, Map.put(acc, partition_id, replicas)}}
-
-        {:error, :unknown_partition} ->
-          {:halt,
-           {:error,
-            Error.from_result_code(:cluster_not_ready, message: "scan requires a ready cluster")}}
-      end
-    end)
-  end
-
-  defp partition_map(runtime, %Query{namespace: namespace}) do
-    owners_tab = runtime.tables.owners
-    count = PartitionMap.partition_count()
-
-    0..(count - 1)
-    |> Enum.reduce_while({:ok, %{}}, fn partition_id, {:ok, acc} ->
-      case PartitionMap.owners(owners_tab, namespace, partition_id) do
-        {:ok, %{replicas: replicas}} ->
-          {:cont, {:ok, Map.put(acc, partition_id, replicas)}}
-
-        {:error, :unknown_partition} ->
-          {:halt,
-           {:error,
-            Error.from_result_code(:cluster_not_ready, message: "scan requires a ready cluster")}}
-      end
-    end)
-  end
-
-  defp build_node_requests(_tracker, node_partitions, scannable, opts) do
+  defp run_background_query(tender, query, opts, node_filter, wire_builder, kind) do
     task_id = Keyword.get(opts, :task_id, System.unique_integer([:positive]))
-    request_opts = [timeout: Keyword.get(opts, :timeout, @default_timeout), task_id: task_id]
+    opts = Keyword.put_new(opts, :task_id, task_id)
 
-    Enum.map(node_partitions, fn node_partitions_item ->
-      %{
-        node_name: node_partitions_item.node,
-        node_partitions: node_partitions_item,
-        request_opts: request_opts,
-        scannable: scannable,
-        pool_checkout_timeout:
-          Keyword.get(opts, :pool_checkout_timeout, @default_pool_checkout_timeout)
-      }
-    end)
+    with {:ok, runtime} <- PageRunner.runtime(tender, query),
+         {:ok, _tracker, node_requests} <-
+           PageRunner.prepare_node_requests(runtime, query, node_filter, opts) do
+      task_timeout = Keyword.get(opts, :task_timeout, :infinity)
+      max_concurrency = max_concurrency(opts, length(node_requests))
+
+      results =
+        node_requests
+        |> Task.async_stream(
+          fn node_request ->
+            run_background_node_request(runtime, query, node_request, opts, wire_builder)
+          end,
+          ordered: true,
+          max_concurrency: max_concurrency,
+          timeout: task_timeout,
+          on_timeout: :kill_task
+        )
+        |> Enum.to_list()
+
+      case background_results(results) do
+        :ok ->
+          {:ok,
+           %ExecuteTask{
+             conn: tender,
+             namespace: query.namespace,
+             set: query.set,
+             task_id: task_id,
+             kind: kind,
+             node_name: node_filter
+           }}
+
+        {:error, %Error{} = err} ->
+          {:error, err}
+      end
+    end
   end
 
-  defp run_node_request(runtime, scannable, %{node_name: node_name} = node_request, opts) do
+  defp run_node_request(
+         runtime,
+         scannable,
+         %{node_name: node_name} = node_request,
+         opts,
+         wire_builder,
+         parser
+       ) do
     case Tender.node_handle(runtime.tender, node_name) do
       {:ok, handle} ->
         case CircuitBreaker.allow?(handle.counters, handle.breaker) do
           :ok ->
-            connect_and_stream(runtime, scannable, node_request, handle, opts)
+            connect_and_stream(
+              runtime,
+              scannable,
+              node_request,
+              handle,
+              opts,
+              wire_builder,
+              parser
+            )
 
           {:error, %Error{} = err} ->
             {:error, err}
@@ -203,18 +212,19 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp connect_and_stream(runtime, scannable, node_request, handle, opts) do
+  defp connect_and_stream(runtime, scannable, node_request, handle, opts, wire_builder, parser) do
     transport = runtime.transport
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     node_opts = [use_compression: handle.use_compression, attempt: 0]
 
-    request = build_wire(scannable, node_request.node_partitions, node_request.request_opts)
+    request =
+      build_wire(scannable, node_request.node_partitions, node_request.request_opts, wire_builder)
 
     case transport.connect(handle.host, handle.port, handle.connect_opts) do
       {:ok, conn} ->
         case transport.stream_open(conn, request, timeout, node_opts) do
           {:ok, stream} ->
-            read_stream(transport, stream, timeout, namespace(scannable), set(scannable))
+            read_stream(transport, stream, timeout, namespace(scannable), set(scannable), parser)
 
           {:error, %Error{} = err} ->
             {:error, err}
@@ -225,16 +235,16 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp read_stream(transport, stream, timeout, namespace, set) do
-    result = do_read_stream(transport, stream, timeout, namespace, set, [])
+  defp read_stream(transport, stream, timeout, namespace, set, parser) do
+    result = do_read_stream(transport, stream, timeout, namespace, set, parser, [])
     _ = transport.stream_close(stream)
     result
   end
 
-  defp do_read_stream(transport, stream, timeout, namespace, set, acc) do
+  defp do_read_stream(transport, stream, timeout, namespace, set, parser, acc) do
     case transport.stream_read(stream, timeout) do
       {:ok, frame} ->
-        handle_stream_frame(transport, stream, timeout, namespace, set, acc, frame)
+        handle_stream_frame(transport, stream, timeout, namespace, set, parser, acc, frame)
 
       :done ->
         {:ok, Enum.reverse(acc)}
@@ -244,21 +254,20 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp handle_stream_frame(transport, stream, timeout, namespace, set, acc, frame) do
+  defp handle_stream_frame(transport, stream, timeout, namespace, set, parser, acc, frame) do
     with {:ok, body} <- decode_stream_body(frame),
-         {:ok, records, _partition_done, done?} <-
-           ScanResponse.parse_stream_chunk(body, namespace, set) do
+         {:ok, records, _partition_done, done?} <- parser.(body, namespace, set) do
       next_acc = Enum.reverse(records, acc)
-      continue_stream(transport, stream, timeout, namespace, set, next_acc, done?)
+      continue_stream(transport, stream, timeout, namespace, set, parser, next_acc, done?)
     end
   end
 
-  defp continue_stream(_transport, _stream, _timeout, _namespace, _set, acc, true) do
+  defp continue_stream(_transport, _stream, _timeout, _namespace, _set, _parser, acc, true) do
     {:ok, Enum.reverse(acc)}
   end
 
-  defp continue_stream(transport, stream, timeout, namespace, set, acc, false) do
-    do_read_stream(transport, stream, timeout, namespace, set, acc)
+  defp continue_stream(transport, stream, timeout, namespace, set, parser, acc, false) do
+    do_read_stream(transport, stream, timeout, namespace, set, parser, acc)
   end
 
   defp request_partitions(%{parts_full: full, parts_partial: partials, record_max: record_max}) do
@@ -276,6 +285,17 @@ defmodule Aerospike.ScanOps.StreamRunner do
   defp build_wire(%Query{} = query, node_partitions, opts) do
     ScanQuery.build_query(query, request_partitions(node_partitions), opts)
   end
+
+  defp build_wire(%Query{} = query, node_partitions, opts, wire_builder)
+       when is_function(wire_builder, 3) do
+    wire_builder.(query, request_partitions(node_partitions), opts)
+  end
+
+  defp build_wire(%Scan{} = scan, node_partitions, opts, nil),
+    do: build_wire(scan, node_partitions, opts)
+
+  defp build_wire(%Query{} = query, node_partitions, opts, nil),
+    do: build_wire(query, node_partitions, opts)
 
   defp namespace(%Scan{namespace: namespace}), do: namespace
   defp namespace(%Query{namespace: namespace}), do: namespace
@@ -299,6 +319,101 @@ defmodule Aerospike.ScanOps.StreamRunner do
 
   defp flatten_task_result({:exit, reason}) do
     raise Error.from_result_code(:network_error, message: "scan task exited: #{inspect(reason)}")
+  end
+
+  defp background_results(results) do
+    case Enum.find(results, fn
+           {:ok, {:error, %Error{}}} -> true
+           {:exit, _} -> true
+           _ -> false
+         end) do
+      {:ok, {:error, %Error{} = err}} ->
+        {:error, err}
+
+      {:exit, reason} ->
+        {:error,
+         Error.from_result_code(:network_error,
+           message: "background task exited: #{inspect(reason)}"
+         )}
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp run_background_node_request(
+         runtime,
+         query,
+         %{node_name: node_name} = node_request,
+         opts,
+         wire_builder
+       ) do
+    case Tender.node_handle(runtime.tender, node_name) do
+      {:ok, handle} ->
+        case CircuitBreaker.allow?(handle.counters, handle.breaker) do
+          :ok ->
+            connect_and_run_background(runtime, query, node_request, handle, opts, wire_builder)
+
+          {:error, %Error{} = err} ->
+            {:error, err}
+        end
+
+      {:error, :unknown_node} ->
+        {:error, unknown_node(node_name)}
+    end
+  end
+
+  defp connect_and_run_background(runtime, query, node_request, handle, opts, wire_builder) do
+    transport = runtime.transport
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    node_opts = [use_compression: handle.use_compression, attempt: 0]
+
+    request =
+      build_wire(query, node_request.node_partitions, node_request.request_opts, wire_builder)
+
+    NodePool.checkout!(
+      node_request.node_name,
+      handle.pool,
+      fn conn ->
+        case transport.command(conn, request, timeout, node_opts) do
+          {:ok, body} ->
+            result = decode_background_response(body)
+            {result, background_checkin_value(result, conn)}
+
+          {:error, %Error{} = err} ->
+            result = {:error, err}
+            {result, background_checkin_value(result, conn)}
+        end
+      end,
+      node_request.pool_checkout_timeout
+    )
+  end
+
+  defp decode_background_response(body) when is_binary(body) do
+    with {:ok, msg} <- Response.decode_as_msg(body) do
+      Response.parse_record_metadata_response(msg)
+    end
+  end
+
+  defp background_checkin_value(result, conn) do
+    case background_checkin_classification(result) do
+      %{close_connection?: true, node_failure?: true} -> {:close, :failure}
+      %{close_connection?: true} -> :close
+      _ -> conn
+    end
+  end
+
+  defp background_checkin_classification(result) do
+    case result do
+      {:ok, _} ->
+        %{close_connection?: false, node_failure?: false}
+
+      {:error, %Error{code: code}} when code in [:network_error, :timeout, :connection_error] ->
+        %{close_connection?: true, node_failure?: true}
+
+      {:error, %Error{}} ->
+        %{close_connection?: false, node_failure?: false}
+    end
   end
 
   defp max_concurrency(opts, fallback) do

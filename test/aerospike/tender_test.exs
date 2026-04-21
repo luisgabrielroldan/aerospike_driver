@@ -50,6 +50,18 @@ defmodule Aerospike.TenderTest do
         assert po.replicas == ["A1"]
       end
     end
+
+    test "tables/1 publishes the full TableOwner snapshot including transaction tracking", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+      :ok = Tender.tend_now(pid)
+
+      tables = Tender.tables(pid)
+
+      assert tables == ctx.tables
+      assert is_atom(tables.txn_tracking)
+    end
   end
 
   describe "bootstrap captures the node's `features` info-key reply" do
@@ -1323,7 +1335,7 @@ defmodule Aerospike.TenderTest do
 
       assert {:ok, handle} = Tender.node_handle(pid, "A1")
       # Pool and counters must match the ones the individual accessors
-      # hand out so callers can mix `node_handle/2` with the Task 5
+      # hand out so callers can mix `node_handle/2` with the legacy
       # accessors during the transition.
       assert {:ok, pool} = Tender.pool_pid(pid, "A1")
       assert handle.pool == pool

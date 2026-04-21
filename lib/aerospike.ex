@@ -4,38 +4,59 @@ defmodule Aerospike do
 
   The spike now proves a small unary command family on one shared
   execution path plus one narrow batch read helper. It now also proves
-  a narrow scan surface over the shared streaming substrate:
+  scan and secondary-index query helpers over one shared scan/query
+  setup path:
 
     * `get/3` reads all bins for a key
     * `put/4` writes a bin map
     * `exists/2` performs a header-only existence probe
     * `touch/2` updates record metadata
     * `delete/2` removes a record
-    * `operate/4` runs a narrow write-plus-read operation list
+    * `operate/4` runs simple and CDT-style unary operation lists
     * `batch_get/4` reads multiple keys and returns per-key results in
       caller order
+    * `query_stream!/3`, `query_all/3`, `query_count/3`, and
+      `query_aggregate/6` run secondary-index queries through the same
+      node-preparation pipeline, with lazy outer streams but
+      node-buffered record delivery
+    * `query_execute/4`, `query_execute_node/5`, `query_udf/6`, and
+      `query_udf_node/7` run background query jobs on that same setup
+      path and return pollable task handles
     * `stream!/3`, `all/3`, and `count/3` run scan fan-out across the
-      shared stream substrate
+      same scan/runtime setup, again with lazy outer streams and
+      node-buffered record delivery
     * `scan_stream_node!/4`, `scan_all_node/4`, and `scan_count_node/4`
       target one named node for the same scan surface
 
-  Broader batch semantics, query, expressions, and the wider policy
-  surface remain out of scope until later spike work proves them.
+  The public `Stream` helpers are honest only about lazy enumeration at
+  the API boundary. The current runtime still drains each node stream
+  into memory before yielding that node's records downstream, so it does
+  not promise frame-by-frame cross-node backpressure or cancellation
+  coordination.
+
+  Broader batch semantics, the remaining expression surface, and the
+  wider policy surface remain out of scope until later spike work
+  proves them.
   """
 
+  alias Aerospike.Admin
   alias Aerospike.BatchGet
   alias Aerospike.Delete
+  alias Aerospike.ExecuteTask
   alias Aerospike.Exists
   alias Aerospike.Get
+  alias Aerospike.IndexTask
   alias Aerospike.Key
-  alias Aerospike.Page
-  alias Aerospike.Query
   alias Aerospike.Operate
+  alias Aerospike.Page
   alias Aerospike.Put
+  alias Aerospike.Query
   alias Aerospike.Scan
   alias Aerospike.ScanOps
   alias Aerospike.Supervisor, as: ClusterSupervisor
   alias Aerospike.Touch
+  alias Aerospike.Txn
+  alias Aerospike.TxnRoll
 
   @typedoc """
   Identifier for a running cluster, i.e. an `Aerospike.Tender` process
@@ -146,9 +167,10 @@ defmodule Aerospike do
   @doc """
   Returns a lazy `Stream` of records from a scan.
 
-  The scan surface currently proves cluster-wide fan-out and node-targeted
-  scan execution over the shared stream substrate. It accepts the narrow
-  `Aerospike.Scan` builder and a small streaming policy surface.
+  The returned stream is lazy at the Enumerable boundary, but the current
+  runtime drains each node response fully before yielding that node's
+  records downstream. It does not promise frame-by-frame backpressure or
+  an explicit cancellation API.
   """
   @spec stream!(cluster(), Scan.t(), keyword()) :: Enumerable.t()
   def stream!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
@@ -160,6 +182,10 @@ defmodule Aerospike do
 
   @doc """
   Returns a lazy `Stream` of records from a secondary-index query.
+
+  Like `stream!/3`, this is lazy only at the outer Enumerable boundary.
+  The current runtime buffers each node's query results before yielding
+  them to the caller.
   """
   @spec query_stream(cluster(), Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
@@ -180,6 +206,9 @@ defmodule Aerospike do
 
   @doc """
   Returns a lazy `Stream` of query records from one named node.
+
+  Node targeting narrows the source node only; it does not change the
+  current node-buffered delivery semantics.
   """
   @spec query_stream_node(cluster(), node_name(), Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
@@ -211,6 +240,9 @@ defmodule Aerospike do
 
   @doc """
   Eagerly collects query records into a list.
+
+  `query.max_records` must be set because this helper advances through
+  the query in repeated page-sized steps until the cursor is exhausted.
   """
   @spec query_all(cluster(), Query.t(), keyword()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
@@ -231,6 +263,9 @@ defmodule Aerospike do
 
   @doc """
   Eagerly collects query records from one named node.
+
+  `query.max_records` must be set because this helper advances through
+  the query in repeated page-sized steps until the cursor is exhausted.
   """
   @spec query_all_node(cluster(), node_name(), Query.t(), keyword()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
@@ -273,6 +308,9 @@ defmodule Aerospike do
 
   @doc """
   Counts query matches without materializing the records.
+
+  This still walks the query stream and counts client-side. It is not a
+  separate server-side count primitive.
   """
   @spec query_count(cluster(), Query.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
@@ -293,6 +331,9 @@ defmodule Aerospike do
 
   @doc """
   Counts query matches on one named node.
+
+  This still walks the query stream and counts client-side. It is not a
+  separate server-side count primitive.
   """
   @spec query_count_node(cluster(), node_name(), Query.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
@@ -314,7 +355,35 @@ defmodule Aerospike do
   end
 
   @doc """
-  Returns a single query page and a resumable cursor when more records remain.
+  Creates a secondary index and returns a pollable task handle.
+  """
+  @spec create_index(cluster(), String.t(), String.t(), keyword()) ::
+          {:ok, IndexTask.t()} | {:error, Aerospike.Error.t()}
+  def create_index(cluster, namespace, set, opts \\ [])
+      when is_binary(namespace) and is_binary(set) and is_list(opts) do
+    Admin.create_index(cluster, namespace, set, opts)
+  end
+
+  @doc """
+  Drops a secondary index.
+  """
+  @spec drop_index(cluster(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def drop_index(cluster, namespace, index_name, opts \\ [])
+      when is_binary(namespace) and is_binary(index_name) and is_list(opts) do
+    Admin.drop_index(cluster, namespace, index_name, opts)
+  end
+
+  @doc """
+  Returns one collected query page and a resumable cursor when more
+  records remain.
+
+  `query.max_records` is required because it seeds the partition-tracker
+  budget for the page walk. On multi-node queries that budget is
+  distributed across active nodes, so a page is resumable but not
+  guaranteed to contain exactly `query.max_records` records. The cursor
+  resumes partition progress from the prior page; it is not a stable
+  snapshot token.
   """
   @spec query_page(cluster(), Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Aerospike.Error.t()}
@@ -334,7 +403,11 @@ defmodule Aerospike do
   end
 
   @doc """
-  Returns a single query page from one named node.
+  Returns one collected query page from one named node.
+
+  `query.max_records` is required because it seeds the partition-tracker
+  budget for the page walk. The cursor resumes partition progress from
+  the prior page; it is not a stable snapshot token.
   """
   @spec query_page_node(cluster(), node_name(), Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Aerospike.Error.t()}
@@ -356,6 +429,146 @@ defmodule Aerospike do
   end
 
   @doc """
+  Streams aggregate query values over the same node-buffered query
+  runtime used by `query_stream/3`.
+  """
+  @spec query_aggregate(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
+  def query_aggregate(cluster, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    ScanOps.query_aggregate(cluster, query, package, function, args, opts)
+  end
+
+  @doc """
+  Starts a background query write job that applies the given operations.
+
+  This returns a pollable task handle, not a resumable record stream.
+  """
+  @spec query_execute(cluster(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
+  def query_execute(cluster, %Query{} = query, ops, opts \\ [])
+      when is_list(ops) and is_list(opts) do
+    ScanOps.query_execute(cluster, query, ops, opts)
+  end
+
+  @doc """
+  Starts a background query write job on one named node.
+
+  This returns a pollable task handle, not a resumable record stream.
+  """
+  @spec query_execute_node(cluster(), node_name(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
+  def query_execute_node(cluster, node_name, %Query{} = query, ops, opts \\ [])
+      when is_binary(node_name) and is_list(ops) and is_list(opts) do
+    ScanOps.query_execute_node(cluster, node_name, query, ops, opts)
+  end
+
+  @doc """
+  Starts a background query UDF job.
+
+  This returns a pollable task handle, not a resumable record stream.
+  """
+  @spec query_udf(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
+  def query_udf(cluster, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    ScanOps.query_udf(cluster, query, package, function, args, opts)
+  end
+
+  @doc """
+  Starts a background query UDF job on one named node.
+
+  This returns a pollable task handle, not a resumable record stream.
+  """
+  @spec query_udf_node(
+          cluster(),
+          node_name(),
+          Query.t(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
+  def query_udf_node(cluster, node_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(node_name) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    ScanOps.query_udf_node(cluster, node_name, query, package, function, args, opts)
+  end
+
+  @doc """
+  Commits a transaction.
+
+  This only works for a transaction handle whose tracking row is already
+  initialized on `conn`. A fresh `%Aerospike.Txn{}` is not enough by itself.
+  In the current spike, public code initializes that runtime state only when
+  `transaction/2` or `transaction/3` enters its callback.
+  """
+  @spec commit(cluster(), Txn.t()) ::
+          {:ok, :committed | :already_committed} | {:error, Aerospike.Error.t()}
+  def commit(conn, %Txn{} = txn) when is_atom(conn) do
+    TxnRoll.commit(conn, txn, [])
+  end
+
+  @doc """
+  Aborts a transaction.
+
+  Like `commit/2`, this requires a handle with initialized runtime tracking on
+  `conn`. It is for an already-open transaction; it does not create one.
+  """
+  @spec abort(cluster(), Txn.t()) ::
+          {:ok, :aborted | :already_aborted} | {:error, Aerospike.Error.t()}
+  def abort(conn, %Txn{} = txn) when is_atom(conn) do
+    TxnRoll.abort(conn, txn, [])
+  end
+
+  @doc """
+  Returns the current state of a transaction.
+
+  This reflects only the in-flight states backed by the runtime tracking row.
+  After commit or abort, the spike cleans that row up, so `txn_status/2`
+  returns an error instead of a terminal `:committed` or `:aborted` state.
+  """
+  @spec txn_status(cluster(), Txn.t()) ::
+          {:ok, :open | :verified | :committed | :aborted}
+          | {:error, Aerospike.Error.t()}
+  def txn_status(conn, %Txn{} = txn) when is_atom(conn) do
+    TxnRoll.txn_status(conn, txn)
+  end
+
+  @doc """
+  Runs a function within a new transaction.
+
+  The callback owns the public transaction lifecycle. The spike initializes the
+  runtime tracking row before invoking `fun`, then commits on success or aborts
+  on any failure path. Do not call `commit/2` or `abort/2` from inside the
+  callback.
+
+  The `%Aerospike.Txn{}` passed to `fun` is safe only for sequential use within
+  that transaction. Do not share it across concurrent processes, and do not use
+  scans or queries with it; the current transaction proof covers only
+  transaction-aware single-record commands.
+  """
+  @spec transaction(cluster(), (Txn.t() -> term())) ::
+          {:ok, term()} | {:error, Aerospike.Error.t()}
+  def transaction(conn, fun) when is_atom(conn) and is_function(fun, 1) do
+    TxnRoll.transaction(conn, [], fun)
+  end
+
+  @doc """
+  Runs a function within a transaction using a provided handle or options.
+
+  When `txn_or_opts` is a `%Aerospike.Txn{}`, the spike initializes fresh
+  runtime tracking for that handle on `conn` at callback entry. Reusing the
+  same handle concurrently or against another cluster is unsupported.
+  """
+  @spec transaction(cluster(), Txn.t() | keyword(), (Txn.t() -> term())) ::
+          {:ok, term()} | {:error, Aerospike.Error.t()}
+  def transaction(conn, txn_or_opts, fun)
+      when is_atom(conn) and is_function(fun, 1) do
+    TxnRoll.transaction(conn, txn_or_opts, fun)
+  end
+
+  @doc """
   Same as `count/3` but returns the count or raises `Aerospike.Error`.
   """
   @spec count!(cluster(), Scan.t(), keyword()) :: non_neg_integer()
@@ -368,6 +581,9 @@ defmodule Aerospike do
 
   @doc """
   Returns a lazy `Stream` of scan records from one named node.
+
+  Node targeting narrows the source node only; it does not change the
+  current node-buffered delivery semantics.
   """
   @spec scan_stream_node!(cluster(), node_name(), Scan.t(), keyword()) :: Enumerable.t()
   def scan_stream_node!(cluster, node_name, %Scan{} = scan, opts \\ [])
@@ -493,18 +709,23 @@ defmodule Aerospike do
 
     * `{:write, bin, value}` — simple bin write
     * `{:read, bin}` — simple bin read
+    * `{:add, bin, delta}` — numeric increment
+    * `{:append, bin, suffix}` — string suffix mutation
+    * `{:prepend, bin, prefix}` — string prefix mutation
+    * `:touch` — refresh record metadata
+    * `:delete` — remove the record
 
-  The list must include at least one write operation. The spike uses
-  write/master routing for `operate` in this phase, so read-only operate
-  remains out of scope until dispatch can vary per command input.
+  The command routes per input batch: read-only lists use read routing;
+  any list that includes a write uses write routing.
 
   Supported opts are `:timeout`, `:max_retries`,
   `:sleep_between_retries_ms`, `:ttl`, and `:generation`.
 
-  Returns decoded operation values in request order.
+  Accepted operations include the simple tuple form plus the public
+  `Aerospike.Op` helpers for primitive and CDT-style operations.
   """
-  @spec operate(cluster(), Key.t(), [Operate.simple_operation()], keyword()) ::
-          {:ok, [term()]}
+  @spec operate(cluster(), Key.t(), [Operate.operation_input()], keyword()) ::
+          {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
   def operate(cluster, %Key{} = key, operations, opts \\ []) do

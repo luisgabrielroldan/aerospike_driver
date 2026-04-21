@@ -14,6 +14,7 @@ defmodule Aerospike.ScanOps.PageRunner do
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
   alias Aerospike.Record
+  alias Aerospike.Router
   alias Aerospike.Scan
   alias Aerospike.ScanOps
   alias Aerospike.Tender
@@ -21,7 +22,13 @@ defmodule Aerospike.ScanOps.PageRunner do
   @default_timeout 5_000
   @default_pool_checkout_timeout 5_000
 
-  @spec page(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
+  @typep runtime :: %{
+           tender: GenServer.server(),
+           transport: module(),
+           tables: Router.tables()
+         }
+
+  @spec page(GenServer.server(), Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Error.t()}
   def page(tender, scannable, opts) when is_list(opts) do
     {cursor, opts2} = Keyword.pop(opts, :cursor)
@@ -31,7 +38,7 @@ defmodule Aerospike.ScanOps.PageRunner do
     end
   end
 
-  @spec page_node(GenServer.server(), String.t(), Scan.t() | Query.t(), keyword()) ::
+  @spec page_node(GenServer.server(), String.t(), Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Error.t()}
   def page_node(tender, node_name, scannable, opts)
       when is_binary(node_name) and is_list(opts) do
@@ -58,6 +65,44 @@ defmodule Aerospike.ScanOps.PageRunner do
     with :ok <- require_max_records(query),
          {:ok, first_page} <- page_node(tender, node_name, query, opts) do
       collect_all_node(tender, node_name, query, opts, first_page.records, first_page)
+    end
+  end
+
+  @doc false
+  @spec runtime(GenServer.server(), Scan.t() | Query.t()) ::
+          {:ok, runtime()} | {:error, Error.t()}
+  def runtime(tender, scannable) do
+    if Tender.ready?(tender) do
+      {:ok,
+       %{
+         tender: tender,
+         transport: Tender.transport(tender),
+         tables: Tender.tables(tender)
+       }}
+    else
+      {:error,
+       Error.from_result_code(
+         :cluster_not_ready,
+         message: "#{operation_name(scannable)} requires a ready cluster"
+       )}
+    end
+  end
+
+  @doc false
+  @spec prepare_node_requests(
+          runtime(),
+          Scan.t() | Query.t(),
+          String.t() | nil,
+          keyword()
+        ) :: {:ok, PartitionTracker.t(), [map()]} | {:error, Error.t()}
+  def prepare_node_requests(runtime, scannable, node_filter, opts) do
+    with {:ok, node_names} <- active_nodes(runtime.tender, node_filter, scannable),
+         {:ok, tracker} <- new_tracker(scannable, node_names, node_filter),
+         {:ok, partition_map} <- partition_map(runtime, scannable),
+         {:ok, tracker, node_partitions} <-
+           PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
+      tracker = activate_record_budget(tracker, scannable)
+      {:ok, tracker, build_node_requests(node_partitions, scannable, opts)}
     end
   end
 
@@ -98,41 +143,14 @@ defmodule Aerospike.ScanOps.PageRunner do
   end
 
   defp page_internal(tender, scannable, opts, node_filter) do
-    with {:ok, runtime} <- runtime(tender),
+    with {:ok, runtime} <- runtime(tender, scannable),
          {:ok, tracker, node_requests} <-
-           prepare_node_requests(runtime, scannable, node_filter, opts),
-         {:ok, page} <-
-           run_tracker_page(tender, scannable, opts, node_filter, runtime, tracker, node_requests) do
-      {:ok, page}
+           prepare_node_requests(runtime, scannable, node_filter, opts) do
+      run_tracker_page(tender, scannable, opts, node_filter, runtime, tracker, node_requests)
     end
   end
 
-  defp runtime(tender) do
-    if Tender.ready?(tender) do
-      {:ok,
-       %{
-         tender: tender,
-         transport: Tender.transport(tender),
-         tables: Tender.tables(tender)
-       }}
-    else
-      {:error,
-       Error.from_result_code(:cluster_not_ready, message: "query requires a ready cluster")}
-    end
-  end
-
-  defp prepare_node_requests(runtime, scannable, node_filter, opts) do
-    with {:ok, node_names} <- active_nodes(runtime.tender, node_filter),
-         {:ok, tracker} <- new_tracker(scannable, node_names, node_filter),
-         {:ok, partition_map} <- partition_map(runtime, scannable),
-         {:ok, tracker, node_partitions} <-
-           PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
-      tracker = activate_record_budget(tracker, scannable)
-      {:ok, tracker, build_node_requests(tracker, node_partitions, scannable, opts)}
-    end
-  end
-
-  defp active_nodes(tender, nil) do
+  defp active_nodes(tender, nil, scannable) do
     tender
     |> Tender.nodes_status()
     |> Enum.filter(fn {_node_name, meta} -> Map.get(meta, :status) == :active end)
@@ -140,14 +158,17 @@ defmodule Aerospike.ScanOps.PageRunner do
     |> case do
       [] ->
         {:error,
-         Error.from_result_code(:cluster_not_ready, message: "query requires active nodes")}
+         Error.from_result_code(
+           :cluster_not_ready,
+           message: "#{operation_name(scannable)} requires active nodes"
+         )}
 
       active ->
         {:ok, active}
     end
   end
 
-  defp active_nodes(tender, node_name) do
+  defp active_nodes(tender, node_name, _scannable) do
     case Tender.nodes_status(tender) |> Map.fetch(node_name) do
       {:ok, %{status: :active}} -> {:ok, [node_name]}
       {:ok, %{status: :inactive}} -> {:error, unknown_node(node_name)}
@@ -209,7 +230,7 @@ defmodule Aerospike.ScanOps.PageRunner do
     end)
   end
 
-  defp build_node_requests(_tracker, node_partitions, scannable, opts) do
+  defp build_node_requests(node_partitions, scannable, opts) do
     task_id = Keyword.get(opts, :task_id, System.unique_integer([:positive]))
     request_opts = [timeout: Keyword.get(opts, :timeout, @default_timeout), task_id: task_id]
 
@@ -259,19 +280,15 @@ defmodule Aerospike.ScanOps.PageRunner do
           {:continue, tracker2} ->
             maybe_sleep_between_iterations(tracker2)
 
-            with {:ok, next_tracker, next_node_requests} <-
-                   prepare_iteration(tender, scannable, opts, tracker2, node_filter) do
-              run_tracker_page(
-                tender,
-                scannable,
-                opts,
-                node_filter,
-                runtime,
-                next_tracker,
-                next_node_requests,
-                all_records
-              )
-            end
+            continue_tracker_page(
+              tender,
+              scannable,
+              opts,
+              node_filter,
+              runtime,
+              tracker2,
+              all_records
+            )
 
           {:error, %Error{} = err, _tracker2} ->
             {:error, err}
@@ -289,7 +306,34 @@ defmodule Aerospike.ScanOps.PageRunner do
       tracker =
         activate_record_budget(%{tracker | node_partitions_list: node_partitions_list}, scannable)
 
-      {:ok, tracker, build_node_requests(tracker, node_partitions_list, scannable, opts)}
+      {:ok, tracker, build_node_requests(node_partitions_list, scannable, opts)}
+    end
+  end
+
+  defp continue_tracker_page(
+         tender,
+         scannable,
+         opts,
+         node_filter,
+         runtime,
+         tracker,
+         all_records
+       ) do
+    case prepare_iteration(tender, scannable, opts, tracker, node_filter) do
+      {:ok, next_tracker, next_node_requests} ->
+        run_tracker_page(
+          tender,
+          scannable,
+          opts,
+          node_filter,
+          runtime,
+          next_tracker,
+          next_node_requests,
+          all_records
+        )
+
+      {:error, %Error{} = err} ->
+        {:error, err}
     end
   end
 
@@ -368,14 +412,7 @@ defmodule Aerospike.ScanOps.PageRunner do
       {:ok, conn} ->
         case transport.stream_open(conn, request, timeout, node_opts) do
           {:ok, stream} ->
-            read_stream(
-              transport,
-              stream,
-              timeout,
-              namespace(scannable),
-              set(scannable),
-              node_request
-            )
+            read_stream(transport, stream, timeout, scannable, node_request)
 
           {:error, %Error{} = err} ->
             {:error, err}
@@ -386,21 +423,20 @@ defmodule Aerospike.ScanOps.PageRunner do
     end
   end
 
-  defp read_stream(transport, stream, timeout, namespace, set, node_request) do
-    result = do_read_stream(transport, stream, timeout, namespace, set, node_request, [], [])
+  defp read_stream(transport, stream, timeout, scannable, node_request) do
+    result = do_read_stream(transport, stream, timeout, scannable, node_request, [], [])
     _ = transport.stream_close(stream)
     result
   end
 
-  defp do_read_stream(transport, stream, timeout, namespace, set, node_request, records, parts) do
+  defp do_read_stream(transport, stream, timeout, scannable, node_request, records, parts) do
     case transport.stream_read(stream, timeout) do
       {:ok, frame} ->
         handle_stream_frame(
           transport,
           stream,
           timeout,
-          namespace,
-          set,
+          scannable,
           node_request,
           records,
           parts,
@@ -419,8 +455,7 @@ defmodule Aerospike.ScanOps.PageRunner do
          transport,
          stream,
          timeout,
-         namespace,
-         set,
+         scannable,
          node_request,
          records,
          parts,
@@ -428,7 +463,7 @@ defmodule Aerospike.ScanOps.PageRunner do
        ) do
     with {:ok, body} <- decode_stream_body(frame),
          {:ok, new_records, new_parts, done?} <-
-           ScanResponse.parse_stream_chunk(body, namespace, set) do
+           ScanResponse.parse_stream_chunk(body, namespace(scannable), set(scannable)) do
       next_records = Enum.reverse(new_records, records)
       next_parts = Enum.reverse(new_parts, parts)
 
@@ -439,8 +474,7 @@ defmodule Aerospike.ScanOps.PageRunner do
           transport,
           stream,
           timeout,
-          namespace,
-          set,
+          scannable,
           node_request,
           next_records,
           next_parts
@@ -512,10 +546,6 @@ defmodule Aerospike.ScanOps.PageRunner do
   defp cursor_from_filter(%PartitionFilter{done?: true}), do: nil
   defp cursor_from_filter(%PartitionFilter{partitions: parts}), do: %Cursor{partitions: parts}
 
-  defp attach_cursor(%Scan{} = scan, %Cursor{partitions: partitions}) do
-    %{scan | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
-  end
-
   defp attach_cursor(%Query{} = query, %Cursor{partitions: partitions}) do
     %{query | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
   end
@@ -548,10 +578,6 @@ defmodule Aerospike.ScanOps.PageRunner do
   defp apply_optional_cursor(_scannable, other) do
     {:error,
      Error.from_result_code(:parameter_error, message: "invalid cursor: #{inspect(other)}")}
-  end
-
-  defp attach_cursor_partition_filter(%Scan{} = scan, %Cursor{partitions: partitions}) do
-    %{scan | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
   end
 
   defp attach_cursor_partition_filter(%Query{} = query, %Cursor{partitions: partitions}) do
@@ -602,6 +628,9 @@ defmodule Aerospike.ScanOps.PageRunner do
   defp unknown_node(node_name) do
     Error.from_result_code(:invalid_node, message: "query target node unavailable: #{node_name}")
   end
+
+  defp operation_name(%Scan{}), do: "scan"
+  defp operation_name(%Query{}), do: "query"
 
   defp decode_stream_body(frame) do
     case Message.decode(frame) do

@@ -71,7 +71,7 @@ defmodule Aerospike.Tender do
     * `:seeds` — list of `{host, port}` tuples (required, non-empty).
     * `:namespaces` — list of configured namespaces the cluster must serve
       before `:ready` flips to `true` (required, non-empty).
-    * `:tables` — `%{owners: atom(), node_gens: atom(), meta: atom()}`
+    * `:tables` — `%{owners: atom(), node_gens: atom(), meta: atom(), txn_tracking: atom()}`
       map of ETS table names, as returned by `Aerospike.TableOwner.tables/1`
       (required). The Tender does not create tables; it reads and writes
       the tables created by the TableOwner so the partition map survives
@@ -202,7 +202,12 @@ defmodule Aerospike.Tender do
   `:ready`) so hot-path readers can consult cluster state without a
   `GenServer.call` into the Tender.
   """
-  @spec tables(GenServer.server()) :: %{owners: atom(), node_gens: atom(), meta: atom()}
+  @spec tables(GenServer.server()) :: %{
+          owners: atom(),
+          node_gens: atom(),
+          meta: atom(),
+          txn_tracking: atom()
+        }
   def tables(server) do
     GenServer.call(server, :tables)
   end
@@ -292,7 +297,7 @@ defmodule Aerospike.Tender do
   direct-connect details for `node_name` in one GenServer hop.
 
   Replaces the sequence of `pool_pid/2` + `node_counters/2` that the
-  command path used in Task 5; commands now pay one round trip per op
+  command path used previously; commands now pay one round trip per op
   instead of two. Returns `{:error, :unknown_node}` under the same
   conditions as `pool_pid/2` and `node_counters/2` (unknown node,
   `:inactive` node, or cluster-state-only mode with no pool).
@@ -408,6 +413,7 @@ defmodule Aerospike.Tender do
       use_services_alternate: Keyword.get(opts, :use_services_alternate, false),
       user: user,
       password: password,
+      tables: tables,
       owners_tab: owners_tab,
       node_gens_tab: node_gens_tab,
       meta_tab: meta_tab,
@@ -441,8 +447,7 @@ defmodule Aerospike.Tender do
   end
 
   def handle_call(:tables, _from, state) do
-    {:reply, %{owners: state.owners_tab, node_gens: state.node_gens_tab, meta: state.meta_tab},
-     state}
+    {:reply, state.tables, state}
   end
 
   def handle_call({:pool_pid, node_name}, _from, state) do

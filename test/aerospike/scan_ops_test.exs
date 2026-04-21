@@ -3,13 +3,14 @@ defmodule Aerospike.ScanOpsTest do
 
   alias Aerospike
   alias Aerospike.Cursor
+  alias Aerospike.Filter
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionFilter
-  alias Aerospike.Query
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
+  alias Aerospike.Query
   alias Aerospike.Scan
   alias Aerospike.TableOwner
   alias Aerospike.Tender
@@ -67,14 +68,14 @@ defmodule Aerospike.ScanOpsTest do
     assert record.bins["payload"] == "A1-only"
   end
 
-  test "query fan-out and page/cursor helpers reuse the same stream substrate", ctx do
+  test "query helpers expose a lazy outer stream and resumable collected pages", ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
     :ok = Tender.tend_now(tender)
 
     query =
       Query.new(@namespace, "scan_ops")
-      |> Query.where(<<0xCA, 0xFE>>)
+      |> Query.where(Filter.range("payload", 0, 9))
 
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("Q-A1-1"), frame("Q-A1-2"), last_frame()]})
     Fake.script_stream(ctx.fake, "B1", {:ok, [frame("Q-B1-1"), last_frame()]})
@@ -116,6 +117,62 @@ defmodule Aerospike.ScanOpsTest do
 
     assert [%{bins: %{"payload" => "page-3"}}] = page2.records
     assert %Cursor{} = page2.cursor
+  end
+
+  test "query collection helpers require an explicit max_records budget", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+
+    assert {:error, %Aerospike.Error{code: :max_records_required}} =
+             Aerospike.query_all(tender, query)
+
+    assert {:error, %Aerospike.Error{code: :max_records_required}} =
+             Aerospike.query_page(tender, query)
+  end
+
+  test "stream, page, and background query helpers share node-targeting validation", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    assert {:error, %Aerospike.Error{code: :invalid_node}} =
+             Aerospike.query_stream_node(tender, "missing", query)
+
+    assert {:error, %Aerospike.Error{code: :invalid_node}} =
+             Aerospike.query_page_node(tender, "missing", query)
+
+    assert {:error, %Aerospike.Error{code: :invalid_node}} =
+             Aerospike.query_execute_node(tender, "missing", query, [])
+  end
+
+  test "background query execution reuses the shared node preparation seam", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+
+    Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
+    Fake.script_command(ctx.fake, "B1", {:ok, scripted_reply_body(0, 4, 60)})
+
+    assert {:ok,
+            %Aerospike.ExecuteTask{
+              kind: :query_execute,
+              namespace: @namespace,
+              set: "scan_ops"
+            }} = Aerospike.query_execute(tender, query, [])
   end
 
   defp start_tender(ctx) do
@@ -213,6 +270,10 @@ defmodule Aerospike.ScanOpsTest do
 
   defp digest_fixture(seed) do
     :crypto.hash(:ripemd160, seed)
+  end
+
+  defp scripted_reply_body(result_code, generation, ttl) do
+    <<22, 0, 0, 0, 0, result_code::8, generation::32-big, ttl::32-big, 0::32, 0::16, 0::16>>
   end
 
   defp stop_quietly(pid) when is_pid(pid) do

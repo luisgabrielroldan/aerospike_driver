@@ -2,9 +2,11 @@ defmodule Aerospike.Cursor do
   @dialyzer :no_match
 
   @moduledoc """
-  Opaque pagination cursor for scans and queries.
+  Opaque partition-resume cursor for paged queries.
 
   Serialize with `encode/1` for storage or URLs; restore with `decode/1`.
+  The cursor captures partition progress, not a stable snapshot of the
+  result set.
   """
 
   import Bitwise
