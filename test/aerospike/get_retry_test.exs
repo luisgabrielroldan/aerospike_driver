@@ -1,6 +1,7 @@
 defmodule Aerospike.GetRetryTest do
   @moduledoc """
-  Unit tests for the Task 7 retry driver inside `Aerospike.Get.execute/4`.
+  Unit tests for the retry driver exercised through
+  `Aerospike.Get.execute/4`.
 
   The tests script the Fake transport so the command path consumes one
   scripted AS_MSG reply per attempt and assert the retry loop's

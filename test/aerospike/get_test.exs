@@ -1,8 +1,7 @@
 defmodule Aerospike.GetTest do
   @moduledoc """
   Unit tests for `Aerospike.Get.execute/4` that cover decisions the
-  command path makes *before* it touches the transport — specifically
-  the Task 6 circuit-breaker short-circuit.
+  command path makes *before* it touches the transport.
 
   Transport-level paths (encode, decode, error classification) are
   covered by integration tests and the per-module protocol tests; this
@@ -12,6 +11,7 @@ defmodule Aerospike.GetTest do
 
   use ExUnit.Case, async: true
 
+  alias Aerospike
   alias Aerospike.Error
   alias Aerospike.Get
   alias Aerospike.Key
@@ -115,6 +115,22 @@ defmodule Aerospike.GetTest do
 
       key = Key.new("test", "spike", "any")
       assert {:error, %Error{code: :circuit_open}} = Get.execute(tender, key, :all)
+    end
+  end
+
+  describe "unsupported GET shapes" do
+    test "Get.execute/4 rejects named-bin requests in the spike" do
+      key = Key.new("test", "spike", "any")
+
+      assert {:error, %Error{code: :invalid_argument}} =
+               Get.execute(:unused_tender, key, ["bin_a"])
+    end
+
+    test "Aerospike.get/4 preserves the same named-bin rejection surface" do
+      key = Key.new("test", "spike", "any")
+
+      assert {:error, %Error{code: :invalid_argument}} =
+               Aerospike.get(:unused_cluster, key, ["bin_a"])
     end
   end
 

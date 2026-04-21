@@ -1,56 +1,18 @@
 defmodule Aerospike.Get do
   @moduledoc """
-  End-to-end GET command path for the spike.
+  GET command adapter for the spike.
 
-  ## Control flow per command
+  `Aerospike.UnaryExecutor` owns the shared unary control flow:
+  routing, node-handle resolution, breaker checks, pool checkout,
+  transport dispatch, reply classification, and retry budgeting.
 
-  One `execute/4` call delegates the shared unary execution flow to
-  `Aerospike.UnaryExecutor`. That executor owns the retry loop around
-  `Aerospike.Router` (partition routing) + `Aerospike.Tender.node_handle/2`
-  (pool + counters + breaker thresholds) + `Aerospike.CircuitBreaker.allow?/2`
-  + pool checkout + `NodeTransport.command/3`. GET stays responsible for
-  building the read request and parsing the reply. The shared loop
-  respects a monotonic total-op budget derived from the caller's
-  `:timeout` and a configurable attempt cap from the cluster's
-  `Aerospike.RetryPolicy`.
+  This module stays intentionally narrow. Its responsibilities are:
 
-  Per attempt:
-
-    1. `Router.pick_for_read/4` chooses a replica. `:sequence` walks the
-       replica list by attempt index; `:master` pins every attempt to
-       the master.
-    2. `Tender.node_handle/2` resolves that replica to a concrete
-       `{pool, counters, breaker}` triple — one GenServer hop.
-    3. `CircuitBreaker.allow?/2` short-circuits if the node has too many
-       recent transport failures or is at its concurrency cap. A
-       short-circuit returns `{:error, %Error{code: :circuit_open}}`
-       which the driver classifies as transport-class: the next attempt
-       re-picks, skipping the refused node on `:sequence`.
-    4. `NodePool.checkout!/3` borrows a worker and sends the AS_MSG.
-
-  Classification for retry:
-
-    * `{:ok, record}` — return immediately.
-    * rebalance bucket → trigger an asynchronous `Tender.tend_now/1`
-      so the partition map catches up, then retry with `attempt + 1`
-      if the budget allows. The Router's next pick is deterministic
-      once the map updates.
-    * transport bucket (`:network_error`, `:timeout`,
-      `:connection_error`, `:pool_timeout`, `:invalid_node`,
-      `:circuit_open`) → retry with `attempt + 1` if the budget
-      allows. `:sequence` replica rotation re-targets the next node
-      automatically.
-    * routing-refusal and server-fatal buckets → return verbatim. No
-      retry.
-
-  On budget exhaustion or the retry cap, the most recent error is
-  returned as-is. The monotonic clock is used so system-time adjustments
-  mid-command cannot lie about the remaining budget.
-
-  The pool discards a worker with a `:failed` counter bump when the
-  command body returns a transport-class error; rebalance errors never
-  bump `:failed` because they are a routing cue, not a node-health
-  signal.
+    * reject spike-unsupported GET shapes such as named-bin requests
+    * build the read request for a `%Aerospike.Key{}`
+    * parse the reply body into the GET result surface
+    * trigger an asynchronous tend when the shared retry driver sees a
+      rebalance response
   """
 
   alias Aerospike.Error
@@ -97,30 +59,9 @@ defmodule Aerospike.Get do
   def execute(tender, key, bins, opts \\ [])
 
   def execute(tender, %Key{} = key, :all, opts) do
-    tables = Tender.tables(tender)
-    transport = Tender.transport(tender)
+    runtime = runtime_ctx(tender)
 
-    executor =
-      UnaryExecutor.new!(
-        base_policy: RetryPolicy.load(tables.meta),
-        command_opts: opts,
-        on_rebalance: fn -> trigger_tend_async(tender) end
-      )
-
-    command =
-      UnaryCommand.new!(
-        name: __MODULE__,
-        build_request: &encode_read/1,
-        parse_response: &parse_record_response/2
-      )
-
-    UnaryExecutor.run_command(executor, command, %{
-      tender: tender,
-      tables: tables,
-      transport: transport,
-      route_key: key,
-      command_input: key
-    })
+    UnaryExecutor.run_command(executor(runtime, opts), command(), dispatch_ctx(runtime, key))
   end
 
   def execute(_tender, %Key{}, _bins, _opts) do
@@ -148,6 +89,40 @@ defmodule Aerospike.Get do
       end)
 
     :ok
+  end
+
+  defp executor(runtime, opts) do
+    UnaryExecutor.new!(
+      base_policy: RetryPolicy.load(runtime.tables.meta),
+      command_opts: opts,
+      on_rebalance: fn -> trigger_tend_async(runtime.tender) end
+    )
+  end
+
+  defp command do
+    UnaryCommand.new!(
+      name: __MODULE__,
+      build_request: &encode_read/1,
+      parse_response: &parse_record_response/2
+    )
+  end
+
+  defp dispatch_ctx(runtime, %Key{} = key) do
+    %{
+      tender: runtime.tender,
+      tables: runtime.tables,
+      transport: runtime.transport,
+      route_key: key,
+      command_input: key
+    }
+  end
+
+  defp runtime_ctx(tender) do
+    %{
+      tender: tender,
+      tables: Tender.tables(tender),
+      transport: Tender.transport(tender)
+    }
   end
 
   defp encode_read(%Key{} = key) do

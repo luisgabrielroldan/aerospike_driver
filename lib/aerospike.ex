@@ -63,8 +63,11 @@ defmodule Aerospike do
   end
 
   @doc """
-  Reads `key` from `cluster`. `bins` must be `:all` in the spike —
-  named-bin reads will be added with `put` in a later milestone.
+  Reads `key` from `cluster`.
+
+  The spike currently supports only `bins: :all`. Named-bin reads remain
+  out of scope until the unary command surface proves they fall out of
+  the same request/parse contract without extra public API work.
 
   Options:
 
