@@ -3,6 +3,7 @@ defmodule Aerospike.Integration.StreamTransportTest do
 
   @moduletag :integration
 
+  alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Message
   alias Aerospike.Test.StreamProof
   alias Aerospike.Transport.Tcp
@@ -51,7 +52,7 @@ defmodule Aerospike.Integration.StreamTransportTest do
 
     Enum.each(frames, fn frame ->
       assert {:ok, {2, 3, body}} = Message.decode(frame)
-      assert {:ok, msg} = Aerospike.Protocol.AsmMsg.decode(body)
+      assert {:ok, msg} = AsmMsg.decode(body)
       assert msg.result_code == 0
     end)
 

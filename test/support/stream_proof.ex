@@ -10,7 +10,6 @@ defmodule Aerospike.Test.StreamProof do
 
   @write_timeout_ms 5_000
   @scan_timeout_ms 5_000
-  @write_op_type 2
   @partition_done 0x04
 
   @spec seed_records!(
@@ -75,42 +74,17 @@ defmodule Aerospike.Test.StreamProof do
   end
 
   defp put_request(%Key{} = key, bin_name, value) do
-    key_field = Field.key_from_user_key(key)
+    {:ok, operation} = Operation.write(bin_name, value)
 
-    fields =
-      [
-        Field.namespace(key.namespace),
-        Field.set(key.set),
-        Field.digest(key.digest)
-      ] ++ if key_field, do: [key_field], else: []
-
-    msg = %AsmMsg{
-      info2: 0x01,
-      expiration: 0,
-      timeout: @write_timeout_ms,
-      fields: fields,
-      operations: [write_operation(bin_name, value)]
-    }
+    msg =
+      AsmMsg.key_command(key, [operation],
+        write: true,
+        send_key: true,
+        ttl: 0,
+        timeout: @write_timeout_ms
+      )
 
     Message.encode_as_msg_iodata(AsmMsg.encode(msg))
-  end
-
-  defp write_operation(bin_name, value) when is_binary(value) do
-    %Operation{
-      op_type: @write_op_type,
-      particle_type: 3,
-      bin_name: bin_name,
-      data: value
-    }
-  end
-
-  defp write_operation(bin_name, value) when is_integer(value) do
-    %Operation{
-      op_type: @write_op_type,
-      particle_type: 1,
-      bin_name: bin_name,
-      data: <<value::64-signed-big>>
-    }
   end
 
   defp uint32_field(type, value) do

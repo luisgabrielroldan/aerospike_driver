@@ -135,6 +135,21 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @doc """
+  Appends a scripted multi-frame command reply for `node_id`.
+
+  The reply is returned verbatim by the next `command_stream/4` call for a
+  connection addressing that node, regardless of request bytes.
+  """
+  @spec script_command_stream(pid(), node_id(), {:ok, binary()} | {:error, Error.t()}) :: :ok
+  def script_command_stream(fake, node_id, {:ok, bytes} = reply) when is_binary(bytes) do
+    GenServer.call(fake, {:script, {:command_stream, node_id}, reply})
+  end
+
+  def script_command_stream(fake, node_id, {:error, %Error{}} = reply) do
+    GenServer.call(fake, {:script, {:command_stream, node_id}, reply})
+  end
+
+  @doc """
   Appends a scripted stream-open reply for `node_id`.
 
   Successful stream scripts must include `:done` to terminate cleanly. The
@@ -272,6 +287,13 @@ defmodule Aerospike.Transport.Fake do
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
     GenServer.call(fake, {:consume, ref, {:command, deadline_ms, opts}})
+  end
+
+  @impl Aerospike.NodeTransport
+  def command_stream(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
+      when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
+             deadline_ms >= 0 and is_list(opts) do
+    GenServer.call(fake, {:consume, ref, {:command_stream, deadline_ms, opts}})
   end
 
   @impl Aerospike.NodeTransport
@@ -535,9 +557,18 @@ defmodule Aerospike.Transport.Fake do
 
   defp script_key(node_id, {:info, commands}), do: {:info, node_id, commands}
   defp script_key(node_id, {:command, _deadline_ms, _opts}), do: {:command, node_id}
+  defp script_key(node_id, {:command_stream, _deadline_ms, _opts}), do: {:command_stream, node_id}
   defp script_key(node_id, {:stream_open, _request, _deadline_ms, _opts}), do: {:stream, node_id}
 
   defp record_command_deadline(state, node_id, {:command, deadline_ms, opts}) do
+    %{
+      state
+      | last_command_deadlines: Map.put(state.last_command_deadlines, node_id, deadline_ms),
+        last_command_opts: Map.put(state.last_command_opts, node_id, opts)
+    }
+  end
+
+  defp record_command_deadline(state, node_id, {:command_stream, deadline_ms, opts}) do
     %{
       state
       | last_command_deadlines: Map.put(state.last_command_deadlines, node_id, deadline_ms),

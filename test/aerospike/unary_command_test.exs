@@ -53,4 +53,24 @@ defmodule Aerospike.UnaryCommandTest do
     assert {{:error, %Error{code: :parse_error}}, :close} =
              UnaryCommand.run_transport(command, TestTransport, :conn, "k1", 50, [])
   end
+
+  test "defaults dispatch to :read and allows explicit :write commands" do
+    read_command =
+      UnaryCommand.new!(
+        name: __MODULE__,
+        build_request: fn _key -> "request" end,
+        parse_response: fn _body, _key -> {:ok, :unused} end
+      )
+
+    write_command =
+      UnaryCommand.new!(
+        name: __MODULE__,
+        dispatch: :write,
+        build_request: fn _key -> "request" end,
+        parse_response: fn _body, _key -> {:ok, :unused} end
+      )
+
+    assert UnaryCommand.dispatch_kind(read_command) == :read
+    assert UnaryCommand.dispatch_kind(write_command) == :write
+  end
 end

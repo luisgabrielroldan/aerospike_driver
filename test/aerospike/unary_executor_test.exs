@@ -143,7 +143,7 @@ defmodule Aerospike.UnaryExecutorTest do
                  transport: __MODULE__.TransportStub,
                  route_key: :route_key,
                  command_input: :payload,
-                 pick_node: fn :fake_tables, :route_key, :sequence, 0 -> {:ok, "A1"} end,
+                 pick_node: fn :read, :fake_tables, :route_key, :sequence, 0 -> {:ok, "A1"} end,
                  resolve_handle: fn :fake_tender, "A1" -> {:ok, fake_handle()} end,
                  allow_dispatch: fn _counters, _breaker ->
                    {:error, Error.from_result_code(:circuit_open)}
@@ -167,7 +167,7 @@ defmodule Aerospike.UnaryExecutorTest do
                  transport: __MODULE__.TransportStub,
                  route_key: :route_key,
                  command_input: :payload,
-                 pick_node: fn :fake_tables, :route_key, :sequence, attempt ->
+                 pick_node: fn :read, :fake_tables, :route_key, :sequence, attempt ->
                    {:ok, Enum.fetch!(["A1", "B1"], attempt)}
                  end,
                  resolve_handle: fn :fake_tender, node_name ->
@@ -208,7 +208,7 @@ defmodule Aerospike.UnaryExecutorTest do
                  transport: __MODULE__.TransportStub,
                  route_key: :route_key,
                  command_input: :payload,
-                 pick_node: fn :fake_tables, :route_key, :sequence, attempt ->
+                 pick_node: fn :read, :fake_tables, :route_key, :sequence, attempt ->
                    {:ok, Enum.fetch!(["A1", "B1"], attempt)}
                  end,
                  resolve_handle: fn :fake_tender, node_name ->
@@ -252,7 +252,7 @@ defmodule Aerospike.UnaryExecutorTest do
                  transport: __MODULE__.TransportStub,
                  route_key: :route_key,
                  command_input: :payload,
-                 pick_node: fn :fake_tables, :route_key, :sequence, attempt ->
+                 pick_node: fn :read, :fake_tables, :route_key, :sequence, attempt ->
                    {:ok, Enum.fetch!(["A1", "B1"], attempt)}
                  end,
                  resolve_handle: fn :fake_tender, node_name ->
@@ -265,6 +265,46 @@ defmodule Aerospike.UnaryExecutorTest do
                })
 
       assert_receive :rebalance_triggered, 500
+    end
+
+    test "write-routed commands reuse the same retry and checkout path" do
+      executor = executor_for(max_retries: 1)
+      command = test_command(dispatch: :write)
+      parent = self()
+      __MODULE__.TransportStub.put_results([{:ok, {:ok, :done}}])
+
+      assert {:ok, :done} =
+               UnaryExecutor.run_command(executor, command, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :write, :fake_tables, :route_key, :sequence, attempt ->
+                   send(parent, {:pick_node, attempt})
+                   {:ok, Enum.fetch!(["A1", "B1"], attempt)}
+                 end,
+                 resolve_handle: fn :fake_tender, node_name ->
+                   {:ok, fake_handle(pool: {:pool, node_name})}
+                 end,
+                 allow_dispatch: fn _counters, _breaker -> :ok end,
+                 checkout: fn node_name, pool, fun, timeout ->
+                   send(parent, {:checkout, node_name, pool, timeout})
+
+                   case node_name do
+                     "A1" -> {:error, Error.from_result_code(:pool_timeout)}
+                     "B1" -> elem(fun.(:conn_b1), 0)
+                   end
+                 end
+               })
+
+      assert_receive {:pick_node, 0}
+      assert_receive {:checkout, "A1", {:pool, "A1"}, timeout_a}
+      assert is_integer(timeout_a)
+
+      assert_receive {:pick_node, 1}
+      assert_receive {:checkout, "B1", {:pool, "B1"}, timeout_b}
+      assert is_integer(timeout_b)
     end
   end
 
@@ -302,9 +342,10 @@ defmodule Aerospike.UnaryExecutorTest do
     handler_id
   end
 
-  defp test_command do
+  defp test_command(opts \\ []) do
     UnaryCommand.new!(
       name: __MODULE__,
+      dispatch: Keyword.get(opts, :dispatch, :read),
       build_request: fn _ -> :request end,
       parse_response: fn
         {:ok, value}, _input -> {:ok, value}

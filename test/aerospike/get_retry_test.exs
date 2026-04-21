@@ -9,7 +9,7 @@ defmodule Aerospike.GetRetryTest do
   relying on timing side channels.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Aerospike.Error
   alias Aerospike.Get

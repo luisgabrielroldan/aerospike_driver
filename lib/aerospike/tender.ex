@@ -271,6 +271,8 @@ defmodule Aerospike.Tender do
       `cluster_use_compression and node_supports_compression?` at
       handle time, so a single cluster flag composes with the node's
       live `features` set without per-call policy state.
+    * `:host`, `:port`, and `:connect_opts` — direct-connect details the
+      stream path uses to open a dedicated socket for long-lived reads.
   """
   @type node_handle :: %{
           pool: pid(),
@@ -279,12 +281,15 @@ defmodule Aerospike.Tender do
             circuit_open_threshold: non_neg_integer(),
             max_concurrent_ops_per_node: pos_integer()
           },
-          use_compression: boolean()
+          use_compression: boolean(),
+          host: String.t(),
+          port: :inet.port_number(),
+          connect_opts: keyword()
         }
 
   @doc """
-  Returns the pool pid, counters reference, and breaker thresholds for
-  `node_name` in one GenServer hop.
+  Returns the pool pid, counters reference, breaker thresholds, and
+  direct-connect details for `node_name` in one GenServer hop.
 
   Replaces the sequence of `pool_pid/2` + `node_counters/2` that the
   command path used in Task 5; commands now pay one round trip per op
@@ -472,13 +477,25 @@ defmodule Aerospike.Tender do
 
   def handle_call({:node_handle, node_name}, _from, state) do
     case Map.fetch(state.nodes, node_name) do
-      {:ok, %{status: :active, pool_pid: pool, counters: counters, features: features}}
+      {:ok,
+       %{
+         status: :active,
+         pool_pid: pool,
+         counters: counters,
+         features: features,
+         host: host,
+         port: port,
+         session: session
+       }}
       when is_pid(pool) and not is_nil(counters) ->
         handle = %{
           pool: pool,
           counters: counters,
           breaker: state.breaker_opts,
-          use_compression: state.use_compression and MapSet.member?(features, :compression)
+          use_compression: state.use_compression and MapSet.member?(features, :compression),
+          host: host,
+          port: port,
+          connect_opts: Keyword.put(pool_connect_opts(state, session), :node_name, node_name)
         }
 
         {:reply, {:ok, handle}, state}

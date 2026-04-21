@@ -21,10 +21,8 @@ defmodule Aerospike.Get do
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
-  alias Aerospike.RetryPolicy
-  alias Aerospike.Tender
   alias Aerospike.UnaryCommand
-  alias Aerospike.UnaryExecutor
+  alias Aerospike.UnarySupport
 
   @type option ::
           {:timeout, non_neg_integer()}
@@ -59,9 +57,7 @@ defmodule Aerospike.Get do
   def execute(tender, key, bins, opts \\ [])
 
   def execute(tender, %Key{} = key, :all, opts) do
-    runtime = runtime_ctx(tender)
-
-    UnaryExecutor.run_command(executor(runtime, opts), command(), dispatch_ctx(runtime, key))
+    UnarySupport.run_command(tender, key, opts, command(), key)
   end
 
   def execute(_tender, %Key{}, _bins, _opts) do
@@ -72,57 +68,13 @@ defmodule Aerospike.Get do
      }}
   end
 
-  # Fire a tend cycle without blocking the command path. Retaining the
-  # returned task pid is unnecessary — if the tend fails, the existing
-  # map is still the best we have, and the next retry will either hit
-  # the same rebalance (and the budget burns out) or see the updated
-  # map. Spawn with `:transient` (no link) so a transient failure cannot
-  # tear down the caller.
-  defp trigger_tend_async(tender) do
-    _ =
-      spawn(fn ->
-        try do
-          Tender.tend_now(tender)
-        catch
-          :exit, _ -> :ok
-        end
-      end)
-
-    :ok
-  end
-
-  defp executor(runtime, opts) do
-    UnaryExecutor.new!(
-      base_policy: RetryPolicy.load(runtime.tables.meta),
-      command_opts: opts,
-      on_rebalance: fn -> trigger_tend_async(runtime.tender) end
-    )
-  end
-
   defp command do
     UnaryCommand.new!(
       name: __MODULE__,
+      dispatch: :read,
       build_request: &encode_read/1,
       parse_response: &parse_record_response/2
     )
-  end
-
-  defp dispatch_ctx(runtime, %Key{} = key) do
-    %{
-      tender: runtime.tender,
-      tables: runtime.tables,
-      transport: runtime.transport,
-      route_key: key,
-      command_input: key
-    }
-  end
-
-  defp runtime_ctx(tender) do
-    %{
-      tender: tender,
-      tables: Tender.tables(tender),
-      transport: Tender.transport(tender)
-    }
   end
 
   defp encode_read(%Key{} = key) do
@@ -132,23 +84,7 @@ defmodule Aerospike.Get do
     |> Message.encode_as_msg_iodata()
   end
 
-  defp decode_as_msg(body) do
-    case AsmMsg.decode(body) do
-      {:ok, _} = ok ->
-        ok
-
-      {:error, reason} ->
-        {:error, %Error{code: :parse_error, message: "failed to decode AS_MSG reply: #{reason}"}}
-    end
-  end
-
   defp parse_record_response(body, key) do
-    case decode_as_msg(body) do
-      {:ok, msg} ->
-        Response.parse_record_response(msg, key)
-
-      {:error, %Error{}} = err ->
-        err
-    end
+    UnarySupport.parse_as_msg(body, &Response.parse_record_response(&1, key))
   end
 end

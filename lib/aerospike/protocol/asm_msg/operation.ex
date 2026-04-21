@@ -1,6 +1,14 @@
 defmodule Aerospike.Protocol.AsmMsg.Operation do
   @moduledoc false
 
+  alias Aerospike.Error
+  alias Aerospike.Protocol.AsmMsg.Value
+
+  @op_read 1
+  @op_write 2
+  @op_touch 11
+  @op_delete 14
+
   # `read_header`: when true, this is a header-only read (generation/TTL, no bins).
   # Wire `op_type` matches `READ` (1); flagging is used only for operate header flags.
   #
@@ -21,6 +29,92 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
           read_header: boolean(),
           map_cdt: boolean()
         }
+
+  @doc "Returns the READ operation type."
+  @spec op_read() :: 1
+  def op_read, do: @op_read
+
+  @doc "Returns the WRITE operation type."
+  @spec op_write() :: 2
+  def op_write, do: @op_write
+
+  @doc "Returns the TOUCH operation type."
+  @spec op_touch() :: 11
+  def op_touch, do: @op_touch
+
+  @doc "Returns the DELETE operation type."
+  @spec op_delete() :: 14
+  def op_delete, do: @op_delete
+
+  @doc """
+  Builds a named-bin read operation.
+  """
+  @spec read(String.t()) :: t()
+  def read(bin_name) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    %__MODULE__{op_type: @op_read, bin_name: bin_name}
+  end
+
+  @doc """
+  Builds one supported simple operation from a narrow internal tuple shape.
+  """
+  @spec from_simple(term()) :: {:ok, t()} | {:error, Error.t()}
+  def from_simple({:read, bin_name}) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    {:ok, read(bin_name)}
+  end
+
+  def from_simple({:write, bin_name, value}) do
+    write(bin_name, value)
+  end
+
+  def from_simple(:touch), do: {:ok, touch()}
+  def from_simple(:delete), do: {:ok, delete()}
+
+  def from_simple(other) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message:
+         "unsupported simple operation #{inspect(other)}; supported shapes: {:read, bin}, {:write, bin, value}, :touch, :delete"
+     )}
+  end
+
+  @doc """
+  Builds a simple write operation for the supported spike value subset.
+  """
+  @spec write(String.t(), term()) :: {:ok, t()} | {:error, Error.t()}
+  def write(bin_name, value) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    with {:ok, {particle_type, data}} <- Value.encode_value(value) do
+      {:ok,
+       %__MODULE__{
+         op_type: @op_write,
+         particle_type: particle_type,
+         bin_name: bin_name,
+         data: data
+       }}
+    end
+  end
+
+  def write(bin_name, _value) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "write bin name must be a non-empty binary, got: #{inspect(bin_name)}"
+     )}
+  end
+
+  @doc """
+  Builds a touch operation.
+  """
+  @spec touch() :: t()
+  def touch do
+    %__MODULE__{op_type: @op_touch}
+  end
+
+  @doc """
+  Builds an operate delete operation.
+  """
+  @spec delete() :: t()
+  def delete do
+    %__MODULE__{op_type: @op_delete}
+  end
 
   @doc """
   Encodes an operation into binary format.

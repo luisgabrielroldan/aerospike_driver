@@ -3,6 +3,7 @@ defmodule Aerospike.Protocol.AsmMsg do
 
   import Bitwise
 
+  alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
 
@@ -11,6 +12,17 @@ defmodule Aerospike.Protocol.AsmMsg do
   # Info1 flags
   @info1_read 0x01
   @info1_get_all 0x02
+  @info1_batch 0x08
+  @info1_nobindata 0x20
+
+  # Info2 flags
+  @info2_write 0x01
+  @info2_delete 0x02
+  @info2_generation 0x04
+  @info2_respond_all_ops 0x80
+
+  # Info3 flags
+  @info3_last 0x01
 
   defstruct info1: 0,
             info2: 0,
@@ -43,6 +55,34 @@ defmodule Aerospike.Protocol.AsmMsg do
   @doc "Returns the INFO1_GET_ALL flag value."
   @spec info1_get_all() :: 0x02
   def info1_get_all, do: @info1_get_all
+
+  @doc "Returns the INFO1_BATCH flag value."
+  @spec info1_batch() :: 0x08
+  def info1_batch, do: @info1_batch
+
+  @doc "Returns the INFO1_NOBINDATA flag value."
+  @spec info1_nobindata() :: 0x20
+  def info1_nobindata, do: @info1_nobindata
+
+  @doc "Returns the INFO2_WRITE flag value."
+  @spec info2_write() :: 0x01
+  def info2_write, do: @info2_write
+
+  @doc "Returns the INFO2_DELETE flag value."
+  @spec info2_delete() :: 0x02
+  def info2_delete, do: @info2_delete
+
+  @doc "Returns the INFO2_GENERATION flag value."
+  @spec info2_generation() :: 0x04
+  def info2_generation, do: @info2_generation
+
+  @doc "Returns the INFO2_RESPOND_ALL_OPS flag value."
+  @spec info2_respond_all_ops() :: 0x80
+  def info2_respond_all_ops, do: @info2_respond_all_ops
+
+  @doc "Returns the INFO3_LAST flag value."
+  @spec info3_last() :: 0x01
+  def info3_last, do: @info3_last
 
   @doc """
   Encodes an AsmMsg struct into binary format.
@@ -174,4 +214,85 @@ defmodule Aerospike.Protocol.AsmMsg do
       ]
     }
   end
+
+  @doc """
+  Builds a homogeneous batch read-style request around a pre-encoded batch field.
+  """
+  @spec batch_read_command(binary()) :: t()
+  def batch_read_command(batch_field_data) when is_binary(batch_field_data) do
+    %__MODULE__{
+      info1: @info1_read ||| @info1_batch,
+      fields: [
+        %Field{type: Field.type_batch_index_with_set(), data: batch_field_data}
+      ]
+    }
+  end
+
+  @doc """
+  Builds a key-scoped request for unary writes, header reads, and simple operate.
+
+  The caller chooses the request attributes explicitly through `opts` so
+  command modules do not need to hardcode wire flags inline.
+  """
+  @spec key_command(Key.t(), [Operation.t()], keyword()) :: t()
+  def key_command(%Key{} = key, operations, opts \\ []) when is_list(operations) do
+    %__MODULE__{
+      info1: info1_from_opts(opts),
+      info2: info2_from_opts(opts),
+      generation: generation_from_opts(opts),
+      expiration: Keyword.get(opts, :ttl, 0),
+      timeout: Keyword.get(opts, :timeout, 0),
+      fields: key_fields(key, opts),
+      operations: operations
+    }
+  end
+
+  @spec key_fields(Key.t(), keyword()) :: [Field.t()]
+  def key_fields(%Key{} = key, opts \\ []) do
+    send_key? = Keyword.get(opts, :send_key, false)
+
+    [
+      Field.namespace(key.namespace),
+      Field.set(key.set),
+      Field.digest(key.digest)
+      | maybe_key_field(key, send_key?)
+    ]
+  end
+
+  defp maybe_key_field(_key, false), do: []
+
+  defp maybe_key_field(%Key{} = key, true) do
+    case Field.key_from_user_key(%{user_key: key.user_key}) do
+      nil -> []
+      field -> [field]
+    end
+  end
+
+  defp info1_from_opts(opts) do
+    0
+    |> maybe_flag(Keyword.get(opts, :read, false), @info1_read)
+    |> maybe_flag(Keyword.get(opts, :read_all, false), @info1_get_all)
+    |> maybe_flag(Keyword.get(opts, :read_header, false), @info1_nobindata)
+  end
+
+  defp info2_from_opts(opts) do
+    0
+    |> maybe_flag(Keyword.get(opts, :write, false), @info2_write)
+    |> maybe_flag(Keyword.get(opts, :delete, false), @info2_delete)
+    |> maybe_flag(generation_flag?(Keyword.get(opts, :generation)), @info2_generation)
+    |> maybe_flag(Keyword.get(opts, :respond_all_ops, false), @info2_respond_all_ops)
+  end
+
+  defp generation_flag?(generation) when is_integer(generation) and generation > 0, do: true
+  defp generation_flag?(_generation), do: false
+
+  defp generation_from_opts(opts) do
+    case Keyword.get(opts, :generation) do
+      generation when is_integer(generation) and generation >= 0 -> generation
+      _ -> 0
+    end
+  end
+
+  defp maybe_flag(flags, false, _flag), do: flags
+  defp maybe_flag(flags, true, flag), do: flags ||| flag
 end

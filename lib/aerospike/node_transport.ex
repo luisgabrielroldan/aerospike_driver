@@ -8,10 +8,10 @@ defmodule Aerospike.NodeTransport do
   cluster-logic path is exercised deterministically without sockets.
 
   This behaviour is intentionally narrow: `info/2`, unary `command/4`,
-  optional `login/2`, and optional stream open/read/close callbacks are the
-  execution shapes supported today. Streaming replies and fan-out
-  orchestration are separate contracts, not hidden variants of
-  `command/4`.
+  multi-frame `command_stream/4`, optional `login/2`, and optional stream
+  open/read/close callbacks are the execution shapes supported today.
+  Streaming replies and fan-out orchestration are separate contracts, not
+  hidden variants of `command/4`.
 
   Implementations are free to choose their own `conn` representation
   (a socket, a pid, a reference, a struct). The opaque type prevents
@@ -91,6 +91,23 @@ defmodule Aerospike.NodeTransport do
   (scan, query) are out of scope for this behaviour.
   """
   @callback command(
+              conn(),
+              request :: iodata(),
+              deadline_ms :: non_neg_integer(),
+              opts :: command_opts()
+            ) ::
+              {:ok, binary()} | {:error, Aerospike.Error.t()}
+
+  @doc """
+  Sends a pre-encoded AS_MSG request and reads a multi-frame reply through
+  the terminal marker, returning the concatenated AS_MSG bodies.
+
+  This seam exists for batch-style requests that still complete as one
+  bounded command but arrive as multiple protocol frames. Unary callers
+  must continue using `c:command/4`; long-lived incremental consumers
+  should use the stream callbacks.
+  """
+  @callback command_stream(
               conn(),
               request :: iodata(),
               deadline_ms :: non_neg_integer(),

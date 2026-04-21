@@ -32,7 +32,8 @@ defmodule Aerospike.UnaryExecutor do
   @type on_rebalance_fun :: (-> :ok)
   @type attempt_fun :: (t(), non_neg_integer() -> attempt_result())
   @type pick_node_fun ::
-          (tables :: term(),
+          (dispatch :: UnaryCommand.dispatch_kind(),
+           tables :: term(),
            route_key :: term(),
            RetryPolicy.replica_policy(),
            non_neg_integer() ->
@@ -104,9 +105,10 @@ defmodule Aerospike.UnaryExecutor do
   def remaining_budget(%__MODULE__{deadline: deadline}), do: deadline - monotonic_now()
 
   defp dispatch_attempt(retry_ctx, attempt, command, ctx) do
-    pick_node = Map.get(ctx, :pick_node, &Router.pick_for_read/4)
+    pick_node = Map.get(ctx, :pick_node, &pick_node/5)
+    dispatch = UnaryCommand.dispatch_kind(command)
 
-    case pick_node.(ctx.tables, ctx.route_key, retry_ctx.policy.replica_policy, attempt) do
+    case pick_node.(dispatch, ctx.tables, ctx.route_key, retry_ctx.policy.replica_policy, attempt) do
       {:ok, node_name} ->
         {node_name, dispatch_node(retry_ctx, attempt, command, ctx, node_name)}
 
@@ -159,6 +161,14 @@ defmodule Aerospike.UnaryExecutor do
       end,
       remaining
     )
+  end
+
+  defp pick_node(:read, tables, route_key, replica_policy, attempt) do
+    Router.pick_for_read(tables, route_key, replica_policy, attempt)
+  end
+
+  defp pick_node(:write, tables, route_key, _replica_policy, _attempt) do
+    Router.pick_for_write(tables, route_key)
   end
 
   defp attempt_loop(executor, attempt_fun, attempt, last_error) do

@@ -34,6 +34,11 @@ defmodule Aerospike.Record do
   """
   @type bins_input :: %{required(String.t() | atom()) => term()}
 
+  @typedoc """
+  Record header metadata returned by successful writes or header-only reads.
+  """
+  @type metadata :: %{generation: non_neg_integer(), ttl: non_neg_integer()}
+
   @type t :: %__MODULE__{
           key: Key.t(),
           bins: bins(),

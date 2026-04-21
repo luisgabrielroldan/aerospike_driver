@@ -14,9 +14,9 @@ defmodule Aerospike.Transport.Tcp do
   between the plaintext and TLS transports — the only real difference is
   how the socket was opened. Streaming follows the same split: the transport
   owns raw frame delivery and the stream handle only carries socket lifecycle
-  state. `Aerospike.Transport.Tls` delegates its `command/4`, `info/2`,
-  `stream_open/4`, `stream_read/2`, `stream_close/1`, `close/1`, and
-  `login/2` callbacks here for that reason.
+  state. `Aerospike.Transport.Tls` delegates its `command/4`,
+  `command_stream/4`, `info/2`, `stream_open/4`, `stream_read/2`,
+  `stream_close/1`, `close/1`, and `login/2` callbacks here for that reason.
 
   Reads use `:gen_tcp.recv(socket, N, timeout)` with `N > 0`, which blocks
   inside the VM until exactly `N` bytes arrive, so server-side TCP
@@ -88,9 +88,9 @@ defmodule Aerospike.Transport.Tcp do
 
   ## Telemetry
 
-  Every `command/4` emits a `[:aerospike, :command, :send]` span around
-  the socket write and a `[:aerospike, :command, :recv]` span around
-  the header + body read. Every `info/2` emits a
+  Every `command/4` and `command_stream/4` emit a
+  `[:aerospike, :command, :send]` span around the socket write and a
+  `[:aerospike, :command, :recv]` span around the response read. Every `info/2` emits a
   `[:aerospike, :info, :rpc]` span around the full round trip. Metadata
   keys follow `Aerospike.Telemetry`'s taxonomy (`:node_name`,
   `:attempt`, `:deadline_ms` for commands; `:node_name`, `:commands`
@@ -122,12 +122,14 @@ defmodule Aerospike.Transport.Tcp do
   @login_header_size Login.reply_header_size()
 
   @typedoc "Concrete connection handle returned by `connect/3`."
-  @opaque conn :: %__MODULE__{
-            socket: :gen_tcp.socket() | :ssl.sslsocket(),
-            socket_mod: :gen_tcp | :ssl,
-            info_timeout: non_neg_integer(),
-            node_name: String.t() | nil
-          }
+  @type t :: %__MODULE__{
+          socket: :gen_tcp.socket() | :ssl.sslsocket(),
+          socket_mod: :gen_tcp | :ssl,
+          info_timeout: non_neg_integer(),
+          node_name: String.t() | nil
+        }
+
+  @opaque conn :: t()
 
   @typedoc "Opaque stream handle owned by a dedicated socket worker."
   @opaque stream :: pid()
@@ -554,6 +556,20 @@ defmodule Aerospike.Transport.Tcp do
     end
   end
 
+  @impl true
+  def command_stream(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
+      when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
+    framed = maybe_compress(request, opts)
+    attempt = Keyword.get(opts, :attempt, 0)
+
+    span_metadata = %{node_name: node_name, attempt: attempt, deadline_ms: deadline_ms}
+
+    case send_framed(conn, framed, span_metadata) do
+      :ok -> recv_stream_framed(conn, deadline_ms, span_metadata)
+      {:error, %Error{} = err} -> {:error, err}
+    end
+  end
+
   # Wraps the socket write in a `[:aerospike, :command, :send]` span so
   # the caller's handler sees every send attempt (including transport
   # failures via the span's `:exception` event).
@@ -580,7 +596,16 @@ defmodule Aerospike.Transport.Tcp do
     end)
   end
 
+  defp recv_stream_framed(conn, deadline_ms, metadata) do
+    :telemetry.span(Telemetry.command_recv_span(), metadata, fn ->
+      result = recv_stream_message(conn, deadline_ms, [])
+      stop_metadata = Map.put(metadata, :bytes, recv_bytes(result))
+      {result, stop_metadata}
+    end)
+  end
+
   defp recv_bytes({:ok, _version, _type, body}), do: byte_size(body)
+  defp recv_bytes({:ok, body}) when is_binary(body), do: byte_size(body)
   defp recv_bytes(_), do: 0
 
   # When `:use_compression` is set and the request is large enough for the
@@ -745,6 +770,27 @@ defmodule Aerospike.Transport.Tcp do
     end
   end
 
+  defp recv_stream_message(conn, deadline_ms, acc) do
+    with {:ok, _version, type, body} <- recv_message(conn, deadline_ms),
+         {:ok, frame_body} <- maybe_decompress(type, body) do
+      recv_stream_body(conn, deadline_ms, acc, frame_body)
+    end
+  end
+
+  defp recv_stream_body(conn, deadline_ms, acc, <<>>) do
+    recv_stream_message(conn, deadline_ms, acc)
+  end
+
+  defp recv_stream_body(conn, deadline_ms, acc, frame_body) do
+    acc = [frame_body | acc]
+
+    if stream_last_frame?(frame_body) do
+      {:ok, IO.iodata_to_binary(Enum.reverse(acc))}
+    else
+      recv_stream_message(conn, deadline_ms, acc)
+    end
+  end
+
   defp recv_body(_mod, _socket, 0, _timeout), do: {:ok, <<>>}
 
   defp recv_body(mod, socket, length, timeout) when length > 0 do
@@ -795,6 +841,14 @@ defmodule Aerospike.Transport.Tcp do
     %Error{code: :network_error, message: "#{op} failed: #{format_reason(reason)}"}
   end
 
+  @doc false
+  @spec stream_last_frame?(binary()) :: boolean()
+  def stream_last_frame?(<<_hdr::8, _info1::8, _info2::8, info3::8, _::binary>>) do
+    (info3 &&& 0x01) == 0x01
+  end
+
+  def stream_last_frame?(_frame), do: false
+
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_reason(reason), do: inspect(reason)
 
@@ -825,14 +879,11 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
 
   use GenServer
 
-  import Bitwise
-
   alias Aerospike.Error
   alias Aerospike.Protocol.Message
+  alias Aerospike.Transport.Tcp
 
   @header_size 8
-  @stream_last_offset 11
-  @stream_last_flag 0x01
   @proto_version Message.proto_version()
   @type_as_msg Message.type_as_msg()
   @type_compressed Message.type_compressed()
@@ -845,8 +896,8 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
           socket: :gen_tcp.socket() | :ssl.sslsocket()
         }
 
-  @spec start_link(Aerospike.Transport.Tcp.conn()) :: {:ok, pid()} | :ignore | {:error, term()}
-  def start_link(%Aerospike.Transport.Tcp{} = conn) do
+  @spec start_link(Tcp.t()) :: {:ok, pid()} | :ignore | {:error, any()}
+  def start_link(%Tcp{} = conn) do
     GenServer.start_link(__MODULE__, conn, [])
   end
 
@@ -866,7 +917,7 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
   end
 
   @impl true
-  def init(%Aerospike.Transport.Tcp{} = conn) do
+  def init(%Tcp{} = conn) do
     {:ok, %__MODULE__{socket_mod: conn.socket_mod, socket: conn.socket}}
   end
 
@@ -1027,8 +1078,11 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
   defp validate_inner_type(@type_as_msg), do: :ok
   defp validate_inner_type(type), do: {:error, unexpected_type_error(type)}
 
-  defp stream_last_frame?(<<_::binary-size(@stream_last_offset), info3::8, _::binary>>) do
-    (info3 &&& @stream_last_flag) == @stream_last_flag
+  defp stream_last_frame?(frame) do
+    case Message.decode(frame) do
+      {:ok, {_version, _type, body}} -> Tcp.stream_last_frame?(body)
+      {:error, _reason} -> false
+    end
   end
 
   defp transport_error(:recv, :timeout) do

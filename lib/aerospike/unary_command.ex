@@ -8,6 +8,7 @@ defmodule Aerospike.UnaryCommand do
   and retry classification stay shared concerns. The command-specific
   variation exposed by the current spike is limited to:
 
+    * choosing read or write dispatch
     * building the wire request from command input
     * parsing the reply body into the command result/error surface
 
@@ -21,16 +22,18 @@ defmodule Aerospike.UnaryCommand do
   alias Aerospike.Error
   alias Aerospike.RetryPolicy
 
-  @enforce_keys [:name, :build_request, :parse_response]
-  defstruct [:name, :build_request, :parse_response]
+  @enforce_keys [:name, :dispatch, :build_request, :parse_response]
+  defstruct [:name, :dispatch, :build_request, :parse_response]
 
   @type hook_input :: term()
+  @type dispatch_kind :: :read | :write
   @type command_result :: {:ok, term()} | {:error, Error.t()}
   @type build_request_fun :: (hook_input() -> iodata())
   @type parse_response_fun :: (body :: binary(), hook_input() -> command_result() | Error.t())
 
   @type t :: %__MODULE__{
           name: module(),
+          dispatch: dispatch_kind(),
           build_request: build_request_fun(),
           parse_response: parse_response_fun()
         }
@@ -40,12 +43,21 @@ defmodule Aerospike.UnaryCommand do
   """
   @spec new!(keyword()) :: t()
   def new!(opts) when is_list(opts) do
+    dispatch = Keyword.get(opts, :dispatch, :read)
+
     %__MODULE__{
       name: Keyword.fetch!(opts, :name),
+      dispatch: validate_dispatch!(dispatch),
       build_request: Keyword.fetch!(opts, :build_request),
       parse_response: Keyword.fetch!(opts, :parse_response)
     }
   end
+
+  @doc """
+  Returns whether the command routes as a read or a write.
+  """
+  @spec dispatch_kind(t()) :: dispatch_kind()
+  def dispatch_kind(%__MODULE__{dispatch: dispatch}), do: dispatch
 
   @doc """
   Runs the transport-facing edge for a unary command.
@@ -86,6 +98,13 @@ defmodule Aerospike.UnaryCommand do
   defp normalize_result({:ok, _} = ok), do: ok
   defp normalize_result({:error, %Error{}} = err), do: err
   defp normalize_result(%Error{} = err), do: {:error, err}
+
+  defp validate_dispatch!(dispatch) when dispatch in [:read, :write], do: dispatch
+
+  defp validate_dispatch!(dispatch) do
+    raise ArgumentError,
+          "expected unary command dispatch to be :read or :write, got: #{inspect(dispatch)}"
+  end
 
   defp checkin_value(result, conn) do
     case RetryPolicy.classify(result) do

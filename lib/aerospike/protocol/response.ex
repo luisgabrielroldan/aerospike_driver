@@ -6,8 +6,36 @@ defmodule Aerospike.Protocol.Response do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
+  alias Aerospike.Protocol.BatchRead
   alias Aerospike.Protocol.ResultCode
   alias Aerospike.Record
+
+  @spec decode_as_msg(binary()) :: {:ok, AsmMsg.t()} | {:error, Error.t()}
+  def decode_as_msg(body) when is_binary(body) do
+    case AsmMsg.decode(body) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, reason} ->
+        {:error,
+         Error.from_result_code(:parse_error, message: "failed to decode AS_MSG reply: #{reason}")}
+    end
+  end
+
+  @doc """
+  Parses a successful write or header-only reply into record metadata or an error.
+  """
+  @spec parse_record_metadata_response(AsmMsg.t()) ::
+          {:ok, Record.metadata()} | {:error, Error.t()}
+  def parse_record_metadata_response(%AsmMsg{} = msg) do
+    case result_atom(msg.result_code) do
+      {:ok, :ok} ->
+        {:ok, record_metadata(msg)}
+
+      other ->
+        error_from_result(other)
+    end
+  end
 
   @doc """
   Parses a successful read response into a `%Record{}` or an error.
@@ -16,19 +44,52 @@ defmodule Aerospike.Protocol.Response do
   def parse_record_response(%AsmMsg{} = msg, %Key{} = key) do
     case result_atom(msg.result_code) do
       {:ok, :ok} ->
-        {:ok, bins} = record_bins_from_operations(msg.operations)
-
-        {:ok,
-         %Record{
-           key: key,
-           bins: bins,
-           generation: msg.generation,
-           ttl: msg.expiration
-         }}
+        with {:ok, bins} <- record_bins_from_operations(msg.operations) do
+          {:ok,
+           %Record{
+             key: key,
+             bins: bins,
+             generation: msg.generation,
+             ttl: msg.expiration
+           }}
+        end
 
       other ->
         error_from_result(other)
     end
+  end
+
+  @doc """
+  Parses a successful simple operate reply into decoded values in wire order.
+  """
+  @spec parse_operate_response(AsmMsg.t(), non_neg_integer()) ::
+          {:ok, [term()]} | {:error, Error.t()}
+  def parse_operate_response(%AsmMsg{} = msg, expected_count) when is_integer(expected_count) do
+    case result_atom(msg.result_code) do
+      {:ok, :ok} ->
+        case ensure_operation_count(msg.operations, expected_count) do
+          :ok -> decode_operation_values(msg.operations)
+          {:error, %Error{} = err} -> {:error, err}
+        end
+
+      other ->
+        error_from_result(other)
+    end
+  end
+
+  @doc """
+  Parses a multi-record batch read/header reply into per-record indexed results.
+  """
+  @spec parse_batch_read_response(binary(), Aerospike.BatchCommand.NodeRequest.t(), keyword()) ::
+          {:ok, BatchRead.Reply.t()} | {:error, Error.t()}
+  def parse_batch_read_response(body, node_request, opts \\ [])
+      when is_binary(body) and is_list(opts) do
+    BatchRead.parse_response(body, node_request, opts)
+  end
+
+  @spec record_metadata(AsmMsg.t()) :: Record.metadata()
+  def record_metadata(%AsmMsg{} = msg) do
+    %{generation: msg.generation, ttl: msg.expiration}
   end
 
   defp record_bins_from_operations(operations) do
@@ -62,6 +123,29 @@ defmodule Aerospike.Protocol.Response do
       end
 
     %{acc | bins: bins, counts: Map.put(counts, name, count)}
+  end
+
+  defp ensure_operation_count(operations, expected_count)
+       when length(operations) == expected_count,
+       do: :ok
+
+  defp ensure_operation_count(operations, expected_count) do
+    {:error,
+     Error.from_result_code(:parse_error,
+       message:
+         "operate reply contained #{length(operations)} operations, expected #{expected_count}"
+     )}
+  end
+
+  defp decode_operation_values(operations) do
+    operations
+    |> Enum.reduce({:ok, []}, fn %Operation{} = operation, {:ok, acc} ->
+      {:ok, value} = Value.decode_value(operation.particle_type, operation.data)
+      {:ok, [value | acc]}
+    end)
+    |> case do
+      {:ok, values} -> {:ok, Enum.reverse(values)}
+    end
   end
 
   defp result_atom(code) when is_integer(code) do
