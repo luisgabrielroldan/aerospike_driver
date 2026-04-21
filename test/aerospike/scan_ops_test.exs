@@ -4,6 +4,8 @@ defmodule Aerospike.ScanOpsTest do
   alias Aerospike
   alias Aerospike.Cursor
   alias Aerospike.Filter
+  alias Aerospike.Key
+  alias Aerospike.NodePartitions
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionFilter
   alias Aerospike.Protocol.AsmMsg
@@ -11,6 +13,7 @@ defmodule Aerospike.ScanOpsTest do
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
   alias Aerospike.Query
+  alias Aerospike.Record
   alias Aerospike.Scan
   alias Aerospike.TableOwner
   alias Aerospike.Tender
@@ -173,6 +176,61 @@ defmodule Aerospike.ScanOpsTest do
               namespace: @namespace,
               set: "scan_ops"
             }} = Aerospike.query_execute(tender, query, [])
+  end
+
+  test "count and paging surface deterministic parse and cursor errors as Aerospike.Error values",
+       ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    scan = Scan.new(@namespace, "scan_ops")
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("ok"), {:frame, <<0, 1, 2>>}]})
+    Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
+
+    assert {:error, %Aerospike.Error{code: :parse_error}} = Aerospike.ScanOps.count(tender, scan)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    assert {:error, %Aerospike.Error{code: :parameter_error, message: message}} =
+             Aerospike.ScanOps.query_page(tender, query, cursor: 123)
+
+    assert message =~ "invalid cursor"
+
+    assert {:error, %Aerospike.Error{code: :parse_error}} =
+             Aerospike.ScanOps.query_page(tender, query, cursor: "not-base64")
+  end
+
+  test "allow_record_fold enforces the tracker record budget without reordering kept records" do
+    tracker = Aerospike.PartitionTracker.new(PartitionFilter.all(), nodes: ["A1"], max_records: 1)
+    tracker = %{tracker | record_count: 0}
+    node_partitions = NodePartitions.new("A1")
+
+    records = [
+      %Record{
+        key: Key.new(@namespace, "scan_ops", "keep"),
+        bins: %{"payload" => "keep"},
+        generation: 1,
+        ttl: 60
+      },
+      %Record{
+        key: Key.new(@namespace, "scan_ops", "drop"),
+        bins: %{"payload" => "drop"},
+        generation: 1,
+        ttl: 60
+      }
+    ]
+
+    {tracker2, node_partitions2, kept_records} =
+      Aerospike.ScanOps.allow_record_fold(tracker, node_partitions, records)
+
+    assert tracker2.record_count == 2
+    assert node_partitions2.disallowed_count == 1
+    assert Enum.map(kept_records, & &1.bins["payload"]) == ["keep"]
   end
 
   defp start_tender(ctx) do

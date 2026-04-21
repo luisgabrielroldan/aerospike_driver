@@ -8,9 +8,12 @@ defmodule Aerospike.TxnMonitorTest do
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Message
   alias Aerospike.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Tender
+  alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
   alias Aerospike.Txn
   alias Aerospike.TxnMonitor
+  alias Aerospike.TxnOps
 
   setup do
     name = :"txn_monitor_test_#{System.unique_integer([:positive])}"
@@ -31,7 +34,10 @@ defmodule Aerospike.TxnMonitorTest do
       stop_if_alive(fake)
     end)
 
-    {:ok, conn: name, txn: Txn.new(), key: Key.new("test", "spike", "txn")}
+    script_single_node_cluster(fake)
+    :ok = Tender.tend_now(name)
+
+    {:ok, conn: name, fake: fake, txn: Txn.new(), key: Key.new("test", "spike", "txn")}
   end
 
   test "monitor_key/2 is stable per txn/namespace", %{txn: txn} do
@@ -58,6 +64,78 @@ defmodule Aerospike.TxnMonitorTest do
     assert info2 == (AsmMsg.info2_write() ||| AsmMsg.info2_respond_all_ops())
     assert Enum.any?(fields, &(&1.type == Field.type_digest()))
     assert Enum.any?(fields, &(&1.type == Field.type_namespace()))
+  end
+
+  test "register_key/4 initializes namespace and stores the monitor deadline", %{
+    conn: conn,
+    txn: txn,
+    key: key,
+    fake: fake
+  } do
+    TxnOps.init_tracking(conn, txn)
+
+    Fake.script_command(fake, "A1", {:ok, monitor_reply(0, [Field.mrt_deadline(321)])})
+
+    assert :ok = TxnMonitor.register_key(conn, txn, key)
+    assert {:ok, %{namespace: "test"}} = TxnOps.get_tracking(conn, txn)
+    assert TxnOps.get_deadline(conn, txn) == 321
+  end
+
+  test "register_key/4 is a no-op for already tracked writes and roll helpers validate initialization",
+       %{
+         conn: conn,
+         txn: txn,
+         key: key
+       } do
+    TxnOps.init_tracking(conn, txn)
+    TxnOps.set_namespace(conn, txn, key.namespace)
+    TxnOps.track_write(conn, txn, key, nil, :ok)
+
+    assert :ok = TxnMonitor.register_key(conn, txn, key)
+
+    assert {:error,
+            %Aerospike.Error{code: :parameter_error, message: "transaction not initialized"}} =
+             TxnMonitor.mark_roll_forward(conn, Txn.new())
+
+    txn2 = Txn.new()
+    TxnOps.init_tracking(conn, txn2)
+
+    assert {:error,
+            %Aerospike.Error{code: :parameter_error, message: "transaction has no namespace set"}} =
+             TxnMonitor.close(conn, txn2)
+  end
+
+  test "check_result_code/1 maps known and unknown server codes" do
+    assert :ok = TxnMonitor.check_result_code(%AsmMsg{result_code: 0})
+
+    assert {:error, %Aerospike.Error{code: :key_not_found}} =
+             TxnMonitor.check_result_code(%AsmMsg{result_code: 2})
+
+    assert {:error, %Aerospike.Error{code: :server_error, message: message}} =
+             TxnMonitor.check_result_code(%AsmMsg{result_code: 255})
+
+    assert message =~ "255"
+  end
+
+  defp monitor_reply(result_code, fields) do
+    %AsmMsg{result_code: result_code, fields: fields}
+    |> AsmMsg.encode()
+    |> IO.iodata_to_binary()
+  end
+
+  defp script_single_node_cluster(fake) do
+    Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
+
+    Fake.script_info(fake, "A1", ["partition-generation", "cluster-stable"], %{
+      "partition-generation" => "1",
+      "cluster-stable" => "deadbeef"
+    })
+
+    Fake.script_info(fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
+
+    Fake.script_info(fake, "A1", ["replicas"], %{
+      "replicas" => ReplicasFixture.all_master("test", 1)
+    })
   end
 
   defp stop_if_alive(pid) do

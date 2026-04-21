@@ -33,7 +33,7 @@ defmodule Aerospike.Router do
   `:node_gens` is accepted for API symmetry with the Tender and is currently
   unused.
   """
-  @type tables :: %{owners: atom(), node_gens: atom(), meta: atom()}
+  @type tables :: %{owners: atom(), node_gens: atom(), meta: atom(), txn_tracking: atom()}
 
   @doc """
   Returns the master node name for writing `key`.

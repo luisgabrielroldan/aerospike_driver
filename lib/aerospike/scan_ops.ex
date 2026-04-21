@@ -3,6 +3,7 @@ defmodule Aerospike.ScanOps do
 
   alias Aerospike.Cursor
   alias Aerospike.Error
+  alias Aerospike.ExecuteTask
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
   alias Aerospike.Query
@@ -60,6 +61,49 @@ defmodule Aerospike.ScanOps do
   def query_stream_node(tender, node_name, %Query{} = query, opts \\ [])
       when is_binary(node_name) and is_list(opts) do
     stream_node(tender, node_name, query, opts)
+  end
+
+  @spec query_aggregate(GenServer.server(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t()}
+  def query_aggregate(tender, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    StreamRunner.query_aggregate(tender, query, opts, package, function, args)
+  end
+
+  @spec query_execute(GenServer.server(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_execute(tender, %Query{} = query, ops, opts \\ [])
+      when is_list(ops) and is_list(opts) do
+    StreamRunner.query_execute(tender, query, ops, opts)
+  end
+
+  @spec query_execute_node(GenServer.server(), String.t(), Query.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_execute_node(tender, node_name, %Query{} = query, ops, opts \\ [])
+      when is_binary(node_name) and is_list(ops) and is_list(opts) do
+    StreamRunner.query_execute_node(tender, node_name, query, ops, opts)
+  end
+
+  @spec query_udf(GenServer.server(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_udf(tender, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    StreamRunner.query_udf(tender, query, package, function, args, opts)
+  end
+
+  @spec query_udf_node(
+          GenServer.server(),
+          String.t(),
+          Query.t(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: {:ok, ExecuteTask.t()} | {:error, Error.t()}
+  def query_udf_node(tender, node_name, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(node_name) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    StreamRunner.query_udf_node(tender, node_name, query, package, function, args, opts)
   end
 
   @spec query_all(GenServer.server(), Query.t(), keyword()) ::
@@ -144,7 +188,6 @@ defmodule Aerospike.ScanOps do
   end
 
   defp require_max_records(%Query{max_records: n}) when is_integer(n) and n > 0, do: :ok
-  defp require_max_records(%Scan{}), do: :ok
   defp require_max_records(_), do: {:error, Error.from_result_code(:max_records_required)}
 
   defp apply_optional_cursor(scannable, nil), do: {:ok, scannable}
@@ -162,10 +205,6 @@ defmodule Aerospike.ScanOps do
   defp apply_optional_cursor(_scannable, other) do
     {:error,
      Error.from_result_code(:parameter_error, message: "invalid cursor: #{inspect(other)}")}
-  end
-
-  defp attach_cursor_partition_filter(%Scan{} = scan, %Cursor{partitions: partitions}) do
-    %{scan | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
   end
 
   defp attach_cursor_partition_filter(%Query{} = query, %Cursor{partitions: partitions}) do

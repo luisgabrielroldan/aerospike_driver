@@ -54,12 +54,22 @@ defmodule Aerospike.Protocol.OperationTest do
       assert {:ok, %Operation{op_type: 1, bin_name: "count"}} =
                Operation.from_simple({:read, "count"})
 
+      assert {:ok, %Operation{op_type: 5, bin_name: "count"}} =
+               Operation.from_simple({:add, "count", 1})
+
+      assert {:ok, %Operation{op_type: 9, bin_name: "name"}} =
+               Operation.from_simple({:append, "name", "x"})
+
+      assert {:ok, %Operation{op_type: 10, bin_name: "name"}} =
+               Operation.from_simple({:prepend, "name", "x"})
+
       assert {:ok, %Operation{op_type: 11}} = Operation.from_simple(:touch)
+      assert {:ok, %Operation{op_type: 14}} = Operation.from_simple(:delete)
     end
 
     test "rejects unsupported operate shapes deterministically" do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
-               Operation.from_simple({:append, "count", "x"})
+               Operation.from_simple({:explode, "count", "x"})
 
       assert message =~ "unsupported simple operation"
     end

@@ -4,8 +4,13 @@ defmodule Aerospike.Query do
 
   The query itself is pure data. It does not own transport state or
   partition iteration.
+
+  Query execution lives in explicit facade calls such as
+  `Aerospike.query_stream/3`, `Aerospike.query_aggregate/6`,
+  `Aerospike.query_execute/4`, and `Aerospike.query_udf/6`.
   """
 
+  alias Aerospike.Filter
   alias Aerospike.PartitionFilter
 
   @enforce_keys [:namespace, :set]
@@ -24,7 +29,7 @@ defmodule Aerospike.Query do
   @type t :: %__MODULE__{
           namespace: String.t(),
           set: String.t(),
-          index_filter: term() | nil,
+          index_filter: Filter.t() | nil,
           bin_names: [String.t()],
           filters: [term()],
           max_records: pos_integer() | nil,
@@ -46,8 +51,8 @@ defmodule Aerospike.Query do
   @doc """
   Sets the secondary-index predicate.
   """
-  @spec where(t(), term()) :: t()
-  def where(%__MODULE__{} = query, index_filter) do
+  @spec where(t(), Filter.t()) :: t()
+  def where(%__MODULE__{} = query, %Filter{} = index_filter) do
     %{query | index_filter: index_filter}
   end
 

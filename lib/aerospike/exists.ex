@@ -11,6 +11,7 @@ defmodule Aerospike.Exists do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
+  alias Aerospike.TxnSupport
   alias Aerospike.UnaryCommand
   alias Aerospike.UnarySupport
 
@@ -27,7 +28,16 @@ defmodule Aerospike.Exists do
 
   @spec execute(GenServer.server(), Key.t(), [option()]) :: result()
   def execute(tender, %Key{} = key, opts \\ []) when is_list(opts) do
-    UnarySupport.run_command(tender, key, opts, command(), key)
+    with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
+         :ok <- TxnSupport.prepare_txn_read(tender, txn, key) do
+      UnarySupport.run_command(
+        tender,
+        key,
+        opts,
+        command(),
+        %{key: key, conn: tender, txn: txn, opts: opts}
+      )
+    end
   end
 
   defp command do
@@ -39,15 +49,25 @@ defmodule Aerospike.Exists do
     )
   end
 
-  defp encode_exists(%Key{} = key) do
+  defp encode_exists(%{key: %Key{} = key, conn: conn, opts: opts}) do
     key
     |> AsmMsg.key_command([], read: true, read_header: true)
+    |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, false)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
   end
 
-  defp parse_exists_response(body, _input) do
-    UnarySupport.parse_as_msg(body, &exists_result/1)
+  defp parse_exists_response(body, %{key: key, conn: conn, txn: txn}) do
+    UnarySupport.parse_as_msg(body, fn msg ->
+      case exists_result(msg) do
+        {:ok, _} = ok ->
+          TxnSupport.track_txn_response(conn, txn, key, :read, msg, ok)
+          ok
+
+        {:error, _} = err ->
+          err
+      end
+    end)
   end
 
   defp exists_result(msg) do

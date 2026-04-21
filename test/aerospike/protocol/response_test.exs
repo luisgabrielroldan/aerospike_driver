@@ -114,16 +114,37 @@ defmodule Aerospike.Protocol.ResponseTest do
     end
   end
 
-  describe "parse_operate_response/2" do
-    test "preserves simple operate values in reply order" do
+  describe "extract_record_version/1" do
+    test "returns the record version when present" do
+      msg = %AsmMsg{
+        fields: [
+          %AsmMsg.Field{
+            type: Aerospike.Protocol.AsmMsg.Field.type_record_version(),
+            data: <<42::56-little-unsigned>>
+          }
+        ]
+      }
+
+      assert {:ok, 42} = Response.extract_record_version(msg)
+    end
+
+    test "returns :none when the field is absent" do
+      assert :none = Response.extract_record_version(%AsmMsg{})
+    end
+  end
+
+  describe "record-shaped operate replies" do
+    test "decode into a Record without exposing request-order slots" do
       msg =
         %AsmMsg{
           result_code: 0,
+          generation: 4,
+          expiration: 20,
           operations: [
             %AsmMsg.Operation{
               op_type: 2,
               particle_type: 0,
-              bin_name: "count",
+              bin_name: "",
               data: <<>>
             },
             %AsmMsg.Operation{
@@ -135,27 +156,10 @@ defmodule Aerospike.Protocol.ResponseTest do
           ]
         }
 
-      assert {:ok, [nil, 7]} = Response.parse_operate_response(msg, 2)
-    end
+      key = Key.new(@namespace, @set, @user_key)
 
-    test "fails when the reply operation count does not match the request" do
-      msg =
-        %AsmMsg{
-          result_code: 0,
-          operations: [
-            %AsmMsg.Operation{
-              op_type: 2,
-              particle_type: 1,
-              bin_name: "count",
-              data: <<7::64-signed-big>>
-            }
-          ]
-        }
-
-      assert {:error, %Error{code: :parse_error, message: message}} =
-               Response.parse_operate_response(msg, 2)
-
-      assert message =~ "expected 2"
+      assert {:ok, %Record{key: ^key, generation: 4, ttl: 20, bins: %{"count" => 7}}} =
+               Response.parse_record_response(msg, key)
     end
   end
 end

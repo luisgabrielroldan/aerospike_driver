@@ -6,8 +6,14 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
 
   @op_read 1
   @op_write 2
+  @op_cdt_read 3
+  @op_cdt_modify 4
+  @op_add 5
+  @op_append 9
+  @op_prepend 10
   @op_touch 11
   @op_delete 14
+  @particle_null 0
 
   # `read_header`: when true, this is a header-only read (generation/TTL, no bins).
   # Wire `op_type` matches `READ` (1); flagging is used only for operate header flags.
@@ -34,9 +40,29 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @spec op_read() :: 1
   def op_read, do: @op_read
 
+  @doc "Returns the CDT READ operation type."
+  @spec op_cdt_read() :: 3
+  def op_cdt_read, do: @op_cdt_read
+
+  @doc "Returns the CDT MODIFY operation type."
+  @spec op_cdt_modify() :: 4
+  def op_cdt_modify, do: @op_cdt_modify
+
   @doc "Returns the WRITE operation type."
   @spec op_write() :: 2
   def op_write, do: @op_write
+
+  @doc "Returns the ADD operation type."
+  @spec op_add() :: 5
+  def op_add, do: @op_add
+
+  @doc "Returns the APPEND operation type."
+  @spec op_append() :: 9
+  def op_append, do: @op_append
+
+  @doc "Returns the PREPEND operation type."
+  @spec op_prepend() :: 10
+  def op_prepend, do: @op_prepend
 
   @doc "Returns the TOUCH operation type."
   @spec op_touch() :: 11
@@ -45,6 +71,10 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @doc "Returns the DELETE operation type."
   @spec op_delete() :: 14
   def op_delete, do: @op_delete
+
+  @doc "Returns the null particle type."
+  @spec particle_null() :: 0
+  def particle_null, do: @particle_null
 
   @doc """
   Builds a named-bin read operation.
@@ -66,6 +96,18 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
     write(bin_name, value)
   end
 
+  def from_simple({:add, bin_name, value}) do
+    add(bin_name, value)
+  end
+
+  def from_simple({:append, bin_name, value}) do
+    append(bin_name, value)
+  end
+
+  def from_simple({:prepend, bin_name, value}) do
+    prepend(bin_name, value)
+  end
+
   def from_simple(:touch), do: {:ok, touch()}
   def from_simple(:delete), do: {:ok, delete()}
 
@@ -73,7 +115,7 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
     {:error,
      Error.from_result_code(:invalid_argument,
        message:
-         "unsupported simple operation #{inspect(other)}; supported shapes: {:read, bin}, {:write, bin, value}, :touch, :delete"
+         "unsupported simple operation #{inspect(other)}; supported shapes: {:read, bin}, {:write, bin, value}, {:add, bin, delta}, {:append, bin, suffix}, {:prepend, bin, prefix}, :touch, :delete"
      )}
   end
 
@@ -101,6 +143,51 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   end
 
   @doc """
+  Builds an add operation.
+  """
+  @spec add(String.t(), integer() | float()) :: {:ok, t()} | {:error, Error.t()}
+  def add(bin_name, value) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    build_numeric_mutation(bin_name, value, @op_add)
+  end
+
+  def add(bin_name, _value) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "add bin name must be a non-empty binary, got: #{inspect(bin_name)}"
+     )}
+  end
+
+  @doc """
+  Builds an append operation.
+  """
+  @spec append(String.t(), String.t()) :: {:ok, t()} | {:error, Error.t()}
+  def append(bin_name, value) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    build_binary_mutation(bin_name, value, @op_append, "append")
+  end
+
+  def append(bin_name, _value) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "append bin name must be a non-empty binary, got: #{inspect(bin_name)}"
+     )}
+  end
+
+  @doc """
+  Builds a prepend operation.
+  """
+  @spec prepend(String.t(), String.t()) :: {:ok, t()} | {:error, Error.t()}
+  def prepend(bin_name, value) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    build_binary_mutation(bin_name, value, @op_prepend, "prepend")
+  end
+
+  def prepend(bin_name, _value) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "prepend bin name must be a non-empty binary, got: #{inspect(bin_name)}"
+     )}
+  end
+
+  @doc """
   Builds a touch operation.
   """
   @spec touch() :: t()
@@ -114,6 +201,50 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @spec delete() :: t()
   def delete do
     %__MODULE__{op_type: @op_delete}
+  end
+
+  defp build_numeric_mutation(bin_name, value, op_type) do
+    case Value.encode_value(value) do
+      {:ok, {particle_type, data}} when particle_type in [1, 2] ->
+        {:ok,
+         %__MODULE__{
+           op_type: op_type,
+           particle_type: particle_type,
+           bin_name: bin_name,
+           data: data
+         }}
+
+      {:ok, _} ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: "add requires an integer or float value, got: #{inspect(value)}"
+         )}
+
+      {:error, %Error{}} = err ->
+        err
+    end
+  end
+
+  defp build_binary_mutation(bin_name, value, op_type, name) do
+    case Value.encode_value(value) do
+      {:ok, {particle_type, data}} when particle_type == 3 ->
+        {:ok,
+         %__MODULE__{
+           op_type: op_type,
+           particle_type: particle_type,
+           bin_name: bin_name,
+           data: data
+         }}
+
+      {:ok, _} ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: "#{name} requires a binary value, got: #{inspect(value)}"
+         )}
+
+      {:error, %Error{}} = err ->
+        err
+    end
   end
 
   @doc """

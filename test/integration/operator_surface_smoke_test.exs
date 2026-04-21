@@ -1,4 +1,4 @@
-defmodule Aerospike.Integration.Tier3SmokeTest do
+defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
   @moduledoc """
   End-to-end smoke test that proves TLS, session-login, and the
   telemetry taxonomy all co-operate through the real transport path
@@ -22,7 +22,7 @@ defmodule Aerospike.Integration.Tier3SmokeTest do
     3. perform 100 serial GETs against missing keys and assert that
        the pool-checkout / command / info / tend spans all fired, and
        that a `:bootstrap` node transition landed during bring-up;
-    4. exercise the Tier 2 kill/recovery proof through the secured TLS
+    4. exercise the kill/recovery proof through the secured TLS
        transport: stop the container, observe the node flipping to
        `:inactive` and getting dropped (`:failure_threshold` +
        `:dropped` transitions), restart it, assert recovery and that
@@ -84,22 +84,7 @@ defmodule Aerospike.Integration.Tier3SmokeTest do
 
     handler_id = {__MODULE__, ref, :events}
 
-    events = [
-      Telemetry.pool_checkout_span() ++ [:start],
-      Telemetry.pool_checkout_span() ++ [:stop],
-      Telemetry.command_send_span() ++ [:start],
-      Telemetry.command_send_span() ++ [:stop],
-      Telemetry.command_recv_span() ++ [:start],
-      Telemetry.command_recv_span() ++ [:stop],
-      Telemetry.info_rpc_span() ++ [:start],
-      Telemetry.info_rpc_span() ++ [:stop],
-      Telemetry.tend_cycle_span() ++ [:start],
-      Telemetry.tend_cycle_span() ++ [:stop],
-      Telemetry.partition_map_refresh_span() ++ [:start],
-      Telemetry.partition_map_refresh_span() ++ [:stop],
-      Telemetry.node_transition(),
-      Telemetry.retry_attempt()
-    ]
+    events = Telemetry.handler_events()
 
     :ok =
       :telemetry.attach_many(
@@ -137,7 +122,7 @@ defmodule Aerospike.Integration.Tier3SmokeTest do
       key =
         Key.new(
           @namespace,
-          "tier3_smoke",
+          "operator_surface_smoke",
           "missing_#{i}_#{System.unique_integer([:positive])}"
         )
 
@@ -223,7 +208,7 @@ defmodule Aerospike.Integration.Tier3SmokeTest do
     key =
       Key.new(
         @namespace,
-        "tier3_smoke",
+        "operator_surface_smoke",
         "recovered_#{System.unique_integer([:positive])}"
       )
 
@@ -235,7 +220,7 @@ defmodule Aerospike.Integration.Tier3SmokeTest do
 
   @doc false
   def forward(event, measurements, metadata, %{pid: pid, ref: ref}) do
-    send(pid, {:tier3_event, ref, event, measurements, metadata})
+    send(pid, {:operator_surface_event, ref, event, measurements, metadata})
   end
 
   # Drain every event currently sitting in the mailbox and return the
@@ -248,7 +233,7 @@ defmodule Aerospike.Integration.Tier3SmokeTest do
 
   defp do_drain(ref, acc) do
     receive do
-      {:tier3_event, ^ref, event, _measurements, metadata} ->
+      {:operator_surface_event, ^ref, event, _measurements, metadata} ->
         acc =
           acc
           |> Map.update(event, 1, &(&1 + 1))
@@ -269,7 +254,7 @@ defmodule Aerospike.Integration.Tier3SmokeTest do
   end
 
   defp start_cluster! do
-    name = :"spike_tier3_smoke_#{System.unique_integer([:positive])}"
+    name = :"spike_operator_surface_smoke_#{System.unique_integer([:positive])}"
 
     {:ok, sup} =
       Aerospike.start_link(

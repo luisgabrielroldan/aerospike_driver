@@ -19,10 +19,17 @@ defmodule Aerospike.Protocol.AsmMsg do
   @info2_write 0x01
   @info2_delete 0x02
   @info2_generation 0x04
+  @info2_durable_delete 0x10
   @info2_respond_all_ops 0x80
 
   # Info3 flags
   @info3_last 0x01
+  @info3_sc_read_type 0x40
+
+  # Info4 flags
+  @info4_mrt_verify_read 0x01
+  @info4_mrt_roll_forward 0x02
+  @info4_mrt_roll_back 0x04
 
   defstruct info1: 0,
             info2: 0,
@@ -76,6 +83,10 @@ defmodule Aerospike.Protocol.AsmMsg do
   @spec info2_generation() :: 0x04
   def info2_generation, do: @info2_generation
 
+  @doc "Returns the INFO2_DURABLE_DELETE flag value."
+  @spec info2_durable_delete() :: 0x10
+  def info2_durable_delete, do: @info2_durable_delete
+
   @doc "Returns the INFO2_RESPOND_ALL_OPS flag value."
   @spec info2_respond_all_ops() :: 0x80
   def info2_respond_all_ops, do: @info2_respond_all_ops
@@ -83,6 +94,22 @@ defmodule Aerospike.Protocol.AsmMsg do
   @doc "Returns the INFO3_LAST flag value."
   @spec info3_last() :: 0x01
   def info3_last, do: @info3_last
+
+  @doc "Returns the INFO3_SC_READ_TYPE flag value."
+  @spec info3_sc_read_type() :: 0x40
+  def info3_sc_read_type, do: @info3_sc_read_type
+
+  @doc "Returns the INFO4_MRT_VERIFY_READ flag value."
+  @spec info4_mrt_verify_read() :: 0x01
+  def info4_mrt_verify_read, do: @info4_mrt_verify_read
+
+  @doc "Returns the INFO4_MRT_ROLL_FORWARD flag value."
+  @spec info4_mrt_roll_forward() :: 0x02
+  def info4_mrt_roll_forward, do: @info4_mrt_roll_forward
+
+  @doc "Returns the INFO4_MRT_ROLL_BACK flag value."
+  @spec info4_mrt_roll_back() :: 0x04
+  def info4_mrt_roll_back, do: @info4_mrt_roll_back
 
   @doc """
   Encodes an AsmMsg struct into binary format.

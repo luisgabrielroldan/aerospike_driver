@@ -31,14 +31,21 @@ defmodule Aerospike.Telemetry do
         metadata
       )
 
+  Operators that want one handler for the whole driver can attach to
+  `handler_events/0`, which expands the current taxonomy into concrete
+  event names suitable for `:telemetry.attach_many/4`.
+
   ## Taxonomy
 
   Span events (prefix + `:start | :stop | :exception`):
 
     * `[:aerospike, :pool, :checkout]` — wraps every
-      `Aerospike.NodePool.checkout!/3`. Metadata: `:node_name`,
-      `:pool_pid`. Measurements: `:system_time` on start;
-      `:duration` on stop (native units per `:telemetry.span/3`).
+      `Aerospike.NodePool.checkout!/3`. This path currently emits the
+      concrete `:start` and `:stop` names directly rather than via
+      `:telemetry.span/3`, so operators should rely on those two events,
+      not on `:exception`. Metadata: `:node_name`, `:pool_pid`,
+      `:telemetry_span_context`. Measurements: `:system_time` and
+      `:monotonic_time` on start; `:duration` on stop.
 
     * `[:aerospike, :command, :send]` — wraps the send side of a
       per-attempt command on the transport. Metadata: `:node_name`,
@@ -50,8 +57,9 @@ defmodule Aerospike.Telemetry do
       `:deadline_ms`. Measurements: `:duration` and `:bytes` on stop.
 
     * `[:aerospike, :info, :rpc]` — wraps every info RPC (Tender cycles
-      and pool-worker login). Metadata: `:node_name`, `:commands` (the
-      list of info keys requested). Measurements: `:duration` on stop.
+      and transport login/authenticate handshakes). Metadata:
+      `:node_name`, `:commands` (the list of info keys requested, or
+      `[:login]` for auth). Measurements: `:duration` on stop.
 
     * `[:aerospike, :tender, :tend_cycle]` — wraps one full
       `Aerospike.Tender` cycle. Cluster-wide (one pair per cycle).
@@ -85,12 +93,14 @@ defmodule Aerospike.Telemetry do
 
   @node_transition [:aerospike, :node, :transition]
   @retry_attempt [:aerospike, :retry, :attempt]
+  @span_suffixes [:start, :stop, :exception]
 
   @doc """
   Event prefix for the pool-checkout span.
 
-  Pass to `:telemetry.span/3`. Emits `[..., :start]`, `[..., :stop]`,
-  and `[..., :exception]` under `[:aerospike, :pool, :checkout]`.
+  This prefix names the checkout telemetry family. The current emitter
+  dispatches the concrete `[..., :start]` and `[..., :stop]` names
+  directly rather than routing through `:telemetry.span/3`.
   """
   @spec pool_checkout_span() :: [:aerospike | :pool | :checkout, ...]
   def pool_checkout_span, do: @pool_checkout_span
@@ -117,8 +127,9 @@ defmodule Aerospike.Telemetry do
   @doc """
   Event prefix for the info-RPC span.
 
-  Covers Tender info calls and per-worker login RPCs. Metadata
-  `:commands` carries the list of info keys.
+  Covers Tender info calls and transport login/authenticate RPCs.
+  Metadata `:commands` carries the list of info keys, or `[:login]`
+  for auth handshakes.
   """
   @spec info_rpc_span() :: [:aerospike | :info | :rpc, ...]
   def info_rpc_span, do: @info_rpc_span
@@ -160,4 +171,54 @@ defmodule Aerospike.Telemetry do
   """
   @spec retry_attempt() :: [:aerospike | :retry | :attempt, ...]
   def retry_attempt, do: @retry_attempt
+
+  @doc """
+  Returns every span prefix in the supported telemetry taxonomy.
+
+  This is the stable list for code that needs to derive concrete
+  `:start`/`:stop`/`:exception` event names without hard-coding them in
+  multiple places.
+  """
+  @spec span_prefixes() :: [[atom()]]
+  def span_prefixes do
+    [
+      pool_checkout_span(),
+      command_send_span(),
+      command_recv_span(),
+      info_rpc_span(),
+      tend_cycle_span(),
+      partition_map_refresh_span()
+    ]
+  end
+
+  @doc """
+  Returns every instant-event name in the supported telemetry taxonomy.
+  """
+  @spec instant_event_names() :: [[atom()]]
+  def instant_event_names do
+    [
+      node_transition(),
+      retry_attempt()
+    ]
+  end
+
+  @doc """
+  Returns the concrete event names operators can attach to directly.
+
+  Span prefixes are expanded to the event names the current runtime
+  actually emits, then instant events are appended. That means the
+  pool-checkout family contributes only `:start` and `:stop`.
+  """
+  @spec handler_events() :: [[atom()]]
+  def handler_events do
+    Enum.flat_map(span_prefixes(), &span_event_names/1) ++ instant_event_names()
+  end
+
+  defp span_event_names(prefix) when prefix == @pool_checkout_span do
+    Enum.map([:start, :stop], &(prefix ++ [&1]))
+  end
+
+  defp span_event_names(prefix) do
+    Enum.map(@span_suffixes, &(prefix ++ [&1]))
+  end
 end

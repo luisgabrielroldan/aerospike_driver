@@ -186,6 +186,16 @@ defmodule Aerospike.UnaryExecutor do
   end
 
   defp handle_classification(executor, attempt_fun, node_name, attempt, result, last_error) do
+    case result do
+      {:no_retry, inner_result} ->
+        inner_result
+
+      _ ->
+        handle_retryable_result(executor, attempt_fun, node_name, attempt, result, last_error)
+    end
+  end
+
+  defp handle_retryable_result(executor, attempt_fun, node_name, attempt, result, last_error) do
     case RetryPolicy.classify(result) do
       %{bucket: :ok} ->
         result

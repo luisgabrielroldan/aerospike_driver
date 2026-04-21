@@ -57,10 +57,33 @@ defmodule Aerospike.Integration.WriteFamilyTest do
 
     assert {:ok, %Record{bins: %{"count" => 1}}} = Aerospike.get(cluster, key)
 
-    assert {:ok, [nil, 2]} =
+    assert {:ok, %Record{bins: %{"count" => 2}}} =
              Aerospike.operate(cluster, key, [{:write, "count", 2}, {:read, "count"}])
 
     assert {:ok, %Record{bins: %{"count" => 2}}} = Aerospike.get(cluster, key)
+
+    mutation_key = Key.new(@namespace, @set, "#{user_key}-mutation")
+
+    assert {:ok, %{generation: mutation_generation}} =
+             Aerospike.put(cluster, mutation_key, %{"count" => 1})
+
+    assert {:ok, %Record{bins: %{"count" => 4}, generation: operate_generation, ttl: ttl}} =
+             Aerospike.operate(
+               cluster,
+               mutation_key,
+               [
+                 {:add, "count", 1},
+                 {:add, "count", 2},
+                 {:read, "count"}
+               ],
+               ttl: 120
+             )
+
+    assert operate_generation > mutation_generation
+    assert ttl > 0
+
+    assert {:ok, %Record{bins: %{"count" => 4}}} = Aerospike.get(cluster, mutation_key)
+
     assert {:ok, true} = Aerospike.delete(cluster, key)
     assert {:ok, false} = Aerospike.exists(cluster, key)
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)

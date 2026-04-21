@@ -3,10 +3,13 @@ defmodule Aerospike.Protocol.ScanQuery do
 
   import Bitwise
 
+  alias Aerospike.Filter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.MessagePack
   alias Aerospike.Query
   alias Aerospike.Scan
 
@@ -54,6 +57,10 @@ defmodule Aerospike.Protocol.ScanQuery do
     timeout = Keyword.get(opts, :timeout, 30_000)
     query_id = task_id_u64(opts)
 
+    filter =
+      query.index_filter ||
+        raise ArgumentError, "build_query/3 requires query.index_filter set via Query.where/2"
+
     %AsmMsg{
       info1: query_info1(query),
       info3: @info3_partition_done,
@@ -64,7 +71,10 @@ defmodule Aerospike.Protocol.ScanQuery do
           Field.set(query.set),
           query_id_field(query_id)
         ]
-        |> Kernel.++(index_range_fields(query.index_filter))
+        |> Kernel.++(index_type_fields(filter))
+        |> Kernel.++([index_range_field(filter)])
+        |> Kernel.++(index_context_fields(filter))
+        |> Kernel.++(index_name_fields(filter))
         |> Kernel.++(pid_array_fields(node_partitions.parts_full))
         |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
         |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
@@ -75,6 +85,48 @@ defmodule Aerospike.Protocol.ScanQuery do
     }
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
+  end
+
+  @spec build_query_execute(Query.t(), node_partitions(), [Operation.t()], keyword()) :: iodata()
+  def build_query_execute(%Query{} = query, node_partitions, operations, opts \\ [])
+      when is_list(operations) and is_list(opts) do
+    build_background_query(query, node_partitions, opts, operations: operations)
+  end
+
+  @spec build_query_udf(Query.t(), node_partitions(), String.t(), String.t(), list(), keyword()) ::
+          iodata()
+  def build_query_udf(%Query{} = query, node_partitions, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    build_background_query(query, node_partitions, opts, udf: {2, package, function, args})
+  end
+
+  @spec build_query_aggregate(
+          Query.t(),
+          node_partitions(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: iodata()
+  def build_query_aggregate(
+        %Query{} = query,
+        node_partitions,
+        package,
+        function,
+        args,
+        opts \\ []
+      )
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    case query.index_filter do
+      nil ->
+        raise ArgumentError,
+              "build_query_aggregate/6 requires query.index_filter set via Query.where/2"
+
+      %Filter{} = index_filter ->
+        build_query_with_filter(query, node_partitions, opts, index_filter,
+          udf: {1, package, function, args}
+        )
+    end
   end
 
   defp task_id_u64(opts) do
@@ -122,6 +174,123 @@ defmodule Aerospike.Protocol.ScanQuery do
     Enum.map(bins, &Operation.read/1)
   end
 
+  defp build_background_query(query, node_partitions, opts, background) when is_list(opts) do
+    case query.index_filter do
+      nil ->
+        raise ArgumentError, "background query requires query.index_filter set via Query.where/2"
+
+      %Filter{} = index_filter ->
+        build_background_query_with_filter(query, node_partitions, opts, index_filter, background)
+    end
+  end
+
+  defp build_query_with_filter(query, node_partitions, opts, %Filter{} = index_filter, background) do
+    timeout = Keyword.get(opts, :timeout, 30_000)
+    query_id = task_id_u64(opts)
+
+    fields =
+      [
+        Field.namespace(query.namespace),
+        Field.set(query.set),
+        query_id_field(query_id)
+      ]
+      |> Kernel.++(index_type_fields(index_filter))
+      |> Kernel.++([index_range_field(index_filter)])
+      |> Kernel.++(index_context_fields(index_filter))
+      |> Kernel.++(index_name_fields(index_filter))
+      |> Kernel.++(pid_array_fields(node_partitions.parts_full))
+      |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
+      |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
+      |> Kernel.++(max_records_fields(node_partitions.record_max))
+      |> Kernel.++(records_per_second_fields(query.records_per_second))
+      |> Kernel.++([socket_timeout_field(timeout)])
+      |> Kernel.++(background_query_fields(background))
+
+    %AsmMsg{
+      info1: query_info1(query),
+      info2: 0,
+      info3: @info3_partition_done,
+      timeout: timeout,
+      fields: fields,
+      operations: background_query_operations(background)
+    }
+    |> AsmMsg.encode()
+    |> Message.encode_as_msg_iodata()
+  end
+
+  defp build_background_query_with_filter(
+         query,
+         node_partitions,
+         opts,
+         %Filter{} = index_filter,
+         background
+       ) do
+    timeout = Keyword.get(opts, :timeout, 30_000)
+    query_id = task_id_u64(opts)
+
+    fields =
+      [
+        Field.namespace(query.namespace),
+        Field.set(query.set),
+        query_id_field(query_id)
+      ]
+      |> Kernel.++(index_type_fields(index_filter))
+      |> Kernel.++([index_range_field(index_filter)])
+      |> Kernel.++(index_context_fields(index_filter))
+      |> Kernel.++(index_name_fields(index_filter))
+      |> Kernel.++(pid_array_fields(node_partitions.parts_full))
+      |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
+      |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
+      |> Kernel.++(max_records_fields(node_partitions.record_max))
+      |> Kernel.++(records_per_second_fields(query.records_per_second))
+      |> Kernel.++([socket_timeout_field(timeout)])
+      |> Kernel.++(background_query_fields(background))
+
+    %AsmMsg{
+      info1: 0,
+      info2: AsmMsg.info2_write(),
+      info3: @info3_partition_done,
+      timeout: timeout,
+      fields: fields,
+      operations: background_query_operations(background)
+    }
+    |> AsmMsg.encode()
+    |> Message.encode_as_msg_iodata()
+  end
+
+  defp background_query_fields(operations: _operations), do: []
+
+  defp background_query_fields(udf: {mode, package, function, args}) do
+    query_udf_fields(udf: {mode, package, function, args})
+  end
+
+  defp background_query_operations(operations: operations), do: operations
+  defp background_query_operations(udf: _udf), do: []
+
+  defp query_udf_fields(udf: {mode, package, function, args}) do
+    arglist = MessagePack.pack!(Enum.map(args, &pack_udf_arg/1))
+
+    [
+      Field.udf_op(mode),
+      Field.udf_package_name(package),
+      Field.udf_function(function),
+      Field.udf_arglist(arglist)
+    ]
+  end
+
+  defp pack_udf_arg(s) when is_binary(s), do: {:particle_string, s}
+  defp pack_udf_arg({:bytes, b}) when is_binary(b), do: {:bytes, b}
+  defp pack_udf_arg(nil), do: nil
+  defp pack_udf_arg(true), do: true
+  defp pack_udf_arg(false), do: false
+  defp pack_udf_arg(n) when is_integer(n), do: n
+  defp pack_udf_arg(f) when is_float(f), do: f
+  defp pack_udf_arg(list) when is_list(list), do: Enum.map(list, &pack_udf_arg/1)
+
+  defp pack_udf_arg(%{} = map) do
+    Map.new(map, fn {k, v} -> {pack_udf_arg(k), pack_udf_arg(v)} end)
+  end
+
   defp maybe_append_table(fields, nil), do: fields
   defp maybe_append_table(fields, set) when is_binary(set), do: fields ++ [Field.set(set)]
 
@@ -165,24 +334,32 @@ defmodule Aerospike.Protocol.ScanQuery do
     [%Field{type: Field.type_bval_array(), data: data}]
   end
 
-  defp index_range_fields(nil) do
-    raise ArgumentError, "build_query/3 requires query.index_filter set to encoded wire bytes"
+  defp index_type_fields(%Filter{index_type: index_type})
+       when index_type in [:list, :mapkeys, :mapvalues] do
+    [%Field{type: Field.type_index_type(), data: index_type_string(index_type)}]
   end
 
-  defp index_range_fields(%Field{data: data}), do: [index_range_field(data)]
-  defp index_range_fields(data) when is_binary(data), do: [index_range_field(data)]
+  defp index_type_fields(_), do: []
 
-  defp index_range_fields(data) when is_list(data),
-    do: [index_range_field(IO.iodata_to_binary(data))]
-
-  defp index_range_fields(other) do
-    raise ArgumentError,
-          "build_query/3 requires query.index_filter to be encoded wire bytes, got: #{inspect(other)}"
+  defp index_range_field(%Filter{} = filter) do
+    %Field{type: Field.type_index_range(), data: FilterCodec.encode(filter)}
   end
 
-  defp index_range_field(data) do
-    %Field{type: Field.type_index_range(), data: IO.iodata_to_binary(data)}
+  defp index_context_fields(%Filter{ctx: nil}), do: []
+
+  defp index_context_fields(%Filter{ctx: ctx}) when is_list(ctx) do
+    [%Field{type: Field.type_index_context(), data: FilterCodec.encode_ctx(ctx)}]
   end
+
+  defp index_name_fields(%Filter{index_name: nil}), do: []
+
+  defp index_name_fields(%Filter{index_name: index_name}) do
+    [%Field{type: Field.type_index_name(), data: index_name}]
+  end
+
+  defp index_type_string(:list), do: "LIST"
+  defp index_type_string(:mapkeys), do: "MAPKEYS"
+  defp index_type_string(:mapvalues), do: "MAPVALUES"
 
   defp socket_timeout_field(ms) when is_integer(ms) do
     %Field{type: Field.type_socket_timeout(), data: <<ms::32-signed-big>>}

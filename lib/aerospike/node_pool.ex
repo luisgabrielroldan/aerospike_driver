@@ -10,7 +10,8 @@ defmodule Aerospike.NodePool do
   the caller returns `:close` at check-in to have the worker torn down
   and replaced.
 
-  The pool deliberately omits login/auth, TLS, and telemetry. It adds
+  The pool deliberately omits login/auth and TLS. It does emit checkout
+  telemetry around the pool-owned connection handoff, then adds
   idle-deadline eviction via `handle_ping/2` (see "Idle eviction" below).
 
   ## Warm-up

@@ -406,6 +406,43 @@ defmodule Aerospike.Transport.TcpTest do
       stop_server(server)
     end
 
+    test "emits the info_rpc span for login with [:login] commands metadata", %{
+      listener: listener,
+      port: port
+    } do
+      token = "session-token"
+      ttl = 3_600
+      reply = login_reply(0, [{5, token}, {6, <<ttl::32-big>>}])
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, reply)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000, node_name: "A1")
+      handler = attach_span_handlers(:login_rpc, [Telemetry.info_rpc_span()])
+
+      try do
+        assert {:ok, {:session, ^token, ^ttl}} =
+                 Tcp.login(conn, user: "admin", password: "secret")
+
+        assert_receive {:event, [:aerospike, :info, :rpc, :start], _meas,
+                        %{node_name: "A1", commands: [:login]}},
+                       500
+
+        assert_receive {:event, [:aerospike, :info, :rpc, :stop], %{duration: _},
+                        %{node_name: "A1", commands: [:login]}},
+                       500
+      after
+        :telemetry.detach(handler)
+      end
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
     test "falls back from an expired session token to password login and keeps unary commands usable",
          %{listener: listener, port: port} do
       body = <<9, 8, 7>>

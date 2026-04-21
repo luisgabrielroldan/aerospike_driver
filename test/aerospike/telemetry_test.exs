@@ -39,6 +39,23 @@ defmodule Aerospike.TelemetryTest do
         assert [:aerospike | _] = apply(Telemetry, fun, [])
       end
     end
+
+    test "helper lists expand the same taxonomy without drift" do
+      expected_span_prefixes = Enum.map(@span_events, &elem(&1, 1))
+      expected_instant_events = Enum.map(@instant_events, &elem(&1, 1))
+
+      [pool_prefix | other_prefixes] = expected_span_prefixes
+
+      expected_handler_events =
+        Enum.map([:start, :stop], &(pool_prefix ++ [&1])) ++
+          Enum.flat_map(other_prefixes, fn prefix ->
+            Enum.map([:start, :stop, :exception], &(prefix ++ [&1]))
+          end) ++ expected_instant_events
+
+      assert Telemetry.span_prefixes() == expected_span_prefixes
+      assert Telemetry.instant_event_names() == expected_instant_events
+      assert Telemetry.handler_events() == expected_handler_events
+    end
   end
 
   describe "dispatchability" do

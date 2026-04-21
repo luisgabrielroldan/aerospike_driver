@@ -9,11 +9,12 @@ defmodule Aerospike.TableOwner do
   the restarted Tender reads table names from the TableOwner and resumes
   writing to the same tables.
 
-  The TableOwner creates three named tables with a `name`-derived prefix:
+  The TableOwner creates four named tables with a `name`-derived prefix:
 
     * `owners` — partition ownership, keyed by `{namespace, partition_id}`.
     * `node_gens` — per-node `partition-generation` values.
     * `meta` — lock-free cluster flags (currently only `:ready`).
+    * `txn_tracking` - transaction state for explicit multi-record transactions.
 
   After `init/1`, the TableOwner has no state beyond the `:name` and the
   three table names, and handles no messages. Its sole purpose is to own
@@ -24,7 +25,7 @@ defmodule Aerospike.TableOwner do
 
   alias Aerospike.PartitionMap
 
-  @type tables :: %{owners: atom(), node_gens: atom(), meta: atom()}
+  @type tables :: %{owners: atom(), node_gens: atom(), meta: atom(), txn_tracking: atom()}
 
   @type option :: {:name, atom()}
 
@@ -76,11 +77,17 @@ defmodule Aerospike.TableOwner do
     is_atom(name) or raise ArgumentError, "Aerospike.TableOwner: :name must be an atom"
 
     {owners, node_gens} = PartitionMap.create_tables(name)
+    txn_tracking = :"#{name}_txn_tracking"
     meta = :"#{name}_meta"
+    :ets.new(txn_tracking, [:set, :public, :named_table, read_concurrency: true])
     :ets.new(meta, [:set, :public, :named_table, read_concurrency: true])
     :ets.insert(meta, {:ready, false})
 
-    {:ok, %{name: name, tables: %{owners: owners, node_gens: node_gens, meta: meta}}}
+    {:ok,
+     %{
+       name: name,
+       tables: %{owners: owners, node_gens: node_gens, meta: meta, txn_tracking: txn_tracking}
+     }}
   end
 
   @impl GenServer

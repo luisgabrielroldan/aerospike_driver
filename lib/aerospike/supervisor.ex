@@ -171,19 +171,31 @@ defmodule Aerospike.Supervisor do
       raise ArgumentError,
             "Aerospike.Supervisor: :seeds must be a non-empty list of {host, port} tuples"
 
+    validate_seeds!(seeds)
+
     namespaces = Keyword.fetch!(opts, :namespaces)
 
     (is_list(namespaces) and namespaces != []) or
       raise ArgumentError,
             "Aerospike.Supervisor: :namespaces must be a non-empty list of strings"
 
+    validate_namespaces!(namespaces)
+
     validate_pos_integer!(opts, :pool_size)
     validate_pos_integer!(opts, :idle_timeout_ms)
     validate_pos_integer!(opts, :max_idle_pings)
     validate_pos_integer!(opts, :tend_interval_ms)
     validate_non_neg_integer!(opts, :failure_threshold)
+    validate_non_neg_integer!(opts, :circuit_open_threshold)
+    validate_pos_integer!(opts, :max_concurrent_ops_per_node)
+    validate_non_neg_integer!(opts, :max_retries)
+    validate_non_neg_integer!(opts, :sleep_between_retries_ms)
 
     validate_auth_opts!(opts)
+    validate_top_level_bool!(opts, :use_compression)
+    validate_top_level_bool!(opts, :use_services_alternate)
+    validate_tend_trigger!(opts)
+    validate_replica_policy!(opts)
     validate_connect_opts!(opts)
 
     opts
@@ -236,6 +248,78 @@ defmodule Aerospike.Supervisor do
     raise ArgumentError,
           "Aerospike.Supervisor: #{inspect(key)} must be a positive integer, " <>
             "got #{inspect(value)}"
+  end
+
+  defp validate_seeds!(seeds) do
+    Enum.each(seeds, &validate_seed!/1)
+  end
+
+  defp validate_seed!({host, port}) when is_binary(host) and host != "" and is_integer(port) do
+    (port >= 1 and port <= 65_535) or
+      raise ArgumentError,
+            "Aerospike.Supervisor: seed port must be in 1..65535, got #{inspect(port)}"
+  end
+
+  defp validate_seed!(seed) do
+    raise ArgumentError,
+          "Aerospike.Supervisor: each seed must be a {host, port} tuple with a non-empty " <>
+            "string host and integer port, got #{inspect(seed)}"
+  end
+
+  defp validate_namespaces!(namespaces) do
+    Enum.each(namespaces, fn
+      namespace when is_binary(namespace) and namespace != "" ->
+        :ok
+
+      namespace ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: each namespace must be a non-empty string, " <>
+                "got #{inspect(namespace)}"
+    end)
+  end
+
+  defp validate_top_level_bool!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_boolean(value) ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: #{inspect(key)} must be a boolean, got #{inspect(value)}"
+    end
+  end
+
+  defp validate_tend_trigger!(opts) do
+    case Keyword.fetch(opts, :tend_trigger) do
+      :error ->
+        :ok
+
+      {:ok, value} when value in [:timer, :manual] ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: :tend_trigger must be :timer or :manual, " <>
+                "got #{inspect(value)}"
+    end
+  end
+
+  defp validate_replica_policy!(opts) do
+    case Keyword.fetch(opts, :replica_policy) do
+      :error ->
+        :ok
+
+      {:ok, value} when value in [:master, :sequence] ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: :replica_policy must be :master or :sequence, " <>
+                "got #{inspect(value)}"
+    end
   end
 
   # Rejects the two fat-fingers an operator is most likely to hit inside

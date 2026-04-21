@@ -1,9 +1,13 @@
 defmodule Aerospike.Protocol.ScanQueryTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Filter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
+  alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.MessagePack
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Query
   alias Aerospike.Scan
@@ -61,10 +65,10 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert field_data(msg, Field.type_query_id()) == <<9_001_234_567_890::64-unsigned-big>>
   end
 
-  test "build_query/3 requires encoded index_filter bytes and keeps query bins" do
+  test "build_query/3 encodes a filter struct and keeps query bins" do
     query =
       Query.new("testns", "users")
-      |> Query.where(<<0xCA, 0xFE>>)
+      |> Query.where(Filter.range("age", 10, 20))
       |> Query.select(["score"])
       |> Query.records_per_second(7)
 
@@ -85,9 +89,101 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert msg.info1 == AsmMsg.info1_read()
     assert msg.info3 == @info3_partition_done
     assert Enum.map(msg.operations, & &1.bin_name) == ["score"]
-    assert field_data(msg, Field.type_index_range()) == <<0xCA, 0xFE>>
+
+    assert field_data(msg, Field.type_index_range()) ==
+             FilterCodec.encode(Filter.range("age", 10, 20))
+
     assert field_data(msg, Field.type_bval_array()) == <<99::64-signed-little>>
     assert field_data(msg, Field.type_max_records()) == <<4::64-signed-big>>
     assert field_data(msg, Field.type_records_per_second()) == <<7::32-signed-big>>
+  end
+
+  test "build_query_execute/4 encodes write ops on the background query path" do
+    query =
+      Query.new("testns", "users")
+      |> Query.where(Filter.range("age", 10, 20))
+      |> Query.max_records(4)
+
+    {:ok, write_op} = Operation.write("state", "executed")
+
+    wire =
+      ScanQuery.build_query_execute(
+        query,
+        %{parts_full: [4], parts_partial: [], record_max: 9},
+        [write_op],
+        timeout: 5_000,
+        task_id: 42
+      )
+
+    msg = decode_as_msg(wire)
+
+    assert msg.info1 == 0
+    assert msg.info2 == AsmMsg.info2_write()
+    assert msg.info3 == @info3_partition_done
+    assert Enum.map(msg.operations, & &1.bin_name) == ["state"]
+
+    assert field_data(msg, Field.type_index_range()) ==
+             FilterCodec.encode(Filter.range("age", 10, 20))
+
+    assert field_data(msg, Field.type_query_id()) == <<42::64-unsigned-big>>
+  end
+
+  test "build_query_udf/6 encodes the UDF field block with write flags" do
+    query =
+      Query.new("testns", "users")
+      |> Query.where(Filter.range("age", 10, 20))
+
+    wire =
+      ScanQuery.build_query_udf(
+        query,
+        %{parts_full: [4], parts_partial: [], record_max: 9},
+        "demo",
+        "echo",
+        [1, true, nil],
+        timeout: 5_000,
+        task_id: 7
+      )
+
+    msg = decode_as_msg(wire)
+
+    assert msg.info1 == 0
+    assert msg.info2 == AsmMsg.info2_write()
+    assert msg.info3 == @info3_partition_done
+    assert msg.operations == []
+    assert field_data(msg, Field.type_udf_op()) == <<2>>
+    assert field_data(msg, Field.type_udf_package_name()) == "demo"
+    assert field_data(msg, Field.type_udf_function()) == "echo"
+    assert field_data(msg, Field.type_udf_arglist()) == MessagePack.pack!([1, true, nil])
+  end
+
+  test "build_query_aggregate/6 encodes the aggregate UDF field block without write ops" do
+    query =
+      Query.new("testns", "users")
+      |> Query.where(Filter.range("age", 10, 20))
+      |> Query.select(["score"])
+
+    wire =
+      ScanQuery.build_query_aggregate(
+        query,
+        %{parts_full: [4], parts_partial: [], record_max: 9},
+        "demo",
+        "sum",
+        ["score"],
+        timeout: 5_000,
+        task_id: 11
+      )
+
+    msg = decode_as_msg(wire)
+
+    assert msg.info1 == AsmMsg.info1_read()
+    assert msg.info2 == 0
+    assert msg.info3 == @info3_partition_done
+    assert msg.operations == []
+    assert field_data(msg, Field.type_udf_op()) == <<1>>
+    assert field_data(msg, Field.type_udf_package_name()) == "demo"
+    assert field_data(msg, Field.type_udf_function()) == "sum"
+
+    assert field_data(msg, Field.type_udf_arglist()) ==
+             MessagePack.pack!([{:particle_string, "score"}])
   end
 end

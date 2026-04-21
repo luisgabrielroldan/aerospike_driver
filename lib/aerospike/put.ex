@@ -14,6 +14,7 @@ defmodule Aerospike.Put do
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
+  alias Aerospike.TxnSupport
   alias Aerospike.UnaryCommand
   alias Aerospike.UnarySupport
 
@@ -31,9 +32,20 @@ defmodule Aerospike.Put do
 
   @spec execute(GenServer.server(), Key.t(), Record.bins_input(), [option()]) :: result()
   def execute(tender, %Key{} = key, bins, opts \\ []) when is_list(opts) do
-    with {:ok, operations} <- write_operations(bins),
-         {:ok, input} <- command_input(key, operations, opts) do
-      UnarySupport.run_command(tender, key, opts, command(), input)
+    with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
+         {:ok, operations} <- write_operations(bins),
+         {:ok, input} <- command_input(tender, key, operations, opts, txn),
+         :ok <- TxnSupport.prepare_txn_write(tender, txn, key, opts) do
+      result = UnarySupport.run_command(tender, key, opts, command(), input)
+
+      case result do
+        {:error, %Error{} = err} ->
+          TxnSupport.track_txn_in_doubt(tender, txn, key, err)
+          result
+
+        _ ->
+          result
+      end
     end
   end
 
@@ -46,10 +58,19 @@ defmodule Aerospike.Put do
     )
   end
 
-  defp command_input(key, operations, opts) do
+  defp command_input(conn, key, operations, opts, txn) do
     with {:ok, ttl} <- non_negative_opt(opts, :ttl),
          {:ok, generation} <- non_negative_opt(opts, :generation) do
-      {:ok, %{key: key, operations: operations, ttl: ttl, generation: generation}}
+      {:ok,
+       %{
+         key: key,
+         conn: conn,
+         txn: txn,
+         opts: opts,
+         operations: operations,
+         ttl: ttl,
+         generation: generation
+       }}
     end
   end
 
@@ -98,6 +119,8 @@ defmodule Aerospike.Put do
 
   defp encode_write(%{
          key: %Key{} = key,
+         conn: conn,
+         opts: opts,
          operations: operations,
          ttl: ttl,
          generation: generation
@@ -109,11 +132,21 @@ defmodule Aerospike.Put do
       ttl: ttl,
       generation: generation
     )
+    |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
   end
 
-  defp parse_metadata_response(body, _input) do
-    UnarySupport.parse_as_msg(body, &Response.parse_record_metadata_response/1)
+  defp parse_metadata_response(body, %{key: key, conn: conn, txn: txn}) do
+    UnarySupport.parse_as_msg(body, fn msg ->
+      case Response.parse_record_metadata_response(msg) do
+        {:ok, _} = ok ->
+          TxnSupport.track_txn_response(conn, txn, key, :write, msg, ok)
+          ok
+
+        {:error, _} = err ->
+          err
+      end
+    end)
   end
 end

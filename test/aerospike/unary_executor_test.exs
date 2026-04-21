@@ -191,6 +191,31 @@ defmodule Aerospike.UnaryExecutorTest do
       assert is_integer(timeout_b)
     end
 
+    test "commands that opt out do not retry after the transport edge returns an error" do
+      executor = executor_for(max_retries: 1)
+      command = test_command(retry_transport: false)
+
+      __MODULE__.TransportStub.put_results([
+        {:error, network_error("boom")},
+        {:ok, {:ok, :done}}
+      ])
+
+      assert {:error, %Error{code: :network_error, message: "boom"}} =
+               UnaryExecutor.run_command(executor, command, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :read, :fake_tables, :route_key, :sequence, 0 -> {:ok, "A1"} end,
+                 resolve_handle: fn :fake_tender, "A1" -> {:ok, fake_handle()} end,
+                 allow_dispatch: fn _counters, _breaker -> :ok end,
+                 checkout: fn _node_name, _pool, fun, _timeout ->
+                   elem(fun.(:conn), 0)
+                 end
+               })
+    end
+
     test "transport-class failure closes the worker with node-failure accounting before retry" do
       executor = executor_for(max_retries: 1)
       command = test_command()
@@ -346,6 +371,7 @@ defmodule Aerospike.UnaryExecutorTest do
     UnaryCommand.new!(
       name: __MODULE__,
       dispatch: Keyword.get(opts, :dispatch, :read),
+      retry_transport: Keyword.get(opts, :retry_transport, true),
       build_request: fn _ -> :request end,
       parse_response: fn
         {:ok, value}, _input -> {:ok, value}

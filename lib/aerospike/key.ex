@@ -43,6 +43,23 @@ defmodule Aerospike.Key do
           digest: <<_::160>>
         }
 
+  @doc false
+  @spec validate_int64!(integer(), String.t()) :: integer()
+  def validate_int64!(value, _label)
+      when is_integer(value) and value >= @min_int64 and value <= @max_int64 do
+    value
+  end
+
+  def validate_int64!(value, label) when is_integer(value) do
+    raise ArgumentError,
+          "#{label} must fit in signed int64, got: #{value}"
+  end
+
+  def validate_int64!(value, label) do
+    raise ArgumentError,
+          "#{label} must be an integer that fits in signed int64, got: #{inspect(value)}"
+  end
+
   @doc """
   Returns the partition id (0..4095) derived from the digest.
 

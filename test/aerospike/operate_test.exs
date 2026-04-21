@@ -4,8 +4,10 @@ defmodule Aerospike.OperateTest do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.NodeSupervisor
+  alias Aerospike.Op
   alias Aerospike.Operate
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Record
   alias Aerospike.TableOwner
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
@@ -44,16 +46,16 @@ defmodule Aerospike.OperateTest do
   end
 
   describe "operate" do
-    test "returns mixed write/read results in request order", ctx do
+    test "returns the read result for mixed write/read operations", ctx do
       script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
       {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
       :ok = Tender.tend_now(tender)
 
-      Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([nil, 7], ["count", "count"])})
+      Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([7], ["count"])})
 
       key = Key.new(@namespace, @set, "operate-success")
 
-      assert {:ok, [nil, 7]} =
+      assert {:ok, %Record{bins: %{"count" => 7}}} =
                Aerospike.operate(
                  tender,
                  key,
@@ -62,36 +64,70 @@ defmodule Aerospike.OperateTest do
                )
     end
 
-    test "retries a transport error on the write master through the shared unary path", ctx do
+    test "admits touch, delete, add, append, and prepend operations", ctx do
       script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
       {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}], max_retries: 1)
       :ok = Tender.tend_now(tender)
 
-      Fake.script_command(ctx.fake, "A1", {:error, Error.from_result_code(:network_error)})
-      Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([nil, 11], ["count", "count"])})
+      for _ <- 1..5 do
+        Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([], [])})
+      end
 
-      key = Key.new(@namespace, @set, "operate-retry")
+      assert {:ok, %Record{}} =
+               Operate.execute(tender, Key.new(@namespace, @set, "touch"), [:touch])
 
-      assert {:ok, [nil, 11]} =
-               Operate.execute(tender, key, [{:write, "count", 11}, {:read, "count"}])
+      assert {:ok, %Record{}} =
+               Operate.execute(tender, Key.new(@namespace, @set, "delete"), [:delete])
 
-      assert Keyword.get(Fake.last_command_opts(ctx.fake, "A1"), :attempt) == 1
+      assert {:ok, %Record{}} =
+               Operate.execute(tender, Key.new(@namespace, @set, "add"), [{:add, "count", 11}])
+
+      assert {:ok, %Record{}} =
+               Operate.execute(
+                 tender,
+                 Key.new(@namespace, @set, "append"),
+                 [{:append, "name", "x"}]
+               )
+
+      assert {:ok, %Record{}} =
+               Operate.execute(
+                 tender,
+                 Key.new(@namespace, @set, "prepend"),
+                 [{:prepend, "name", "y"}]
+               )
     end
 
-    test "rejects read-only operate until per-input dispatch exists" do
+    test "accepts read-only helper operations through the shared unary path", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([7], ["count"])})
+
       key = Key.new(@namespace, @set, "operate-read-only")
 
-      assert {:error, %Error{code: :invalid_argument, message: message}} =
-               Aerospike.operate(:unused_cluster, key, [{:read, "count"}])
+      assert {:ok, %Record{bins: %{"count" => 7}}} =
+               Aerospike.operate(tender, key, [Op.get("count")])
+    end
 
-      assert message =~ "at least one write"
+    test "accepts CDT helper operations through the shared unary path", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([1], ["tags"])})
+
+      key = Key.new(@namespace, @set, "operate-cdt")
+
+      assert {:ok, %Record{bins: %{"tags" => 1}}} =
+               Aerospike.operate(tender, key, [Op.List.size("tags")])
     end
 
     test "rejects unsupported operation shapes deterministically" do
       key = Key.new(@namespace, @set, "operate-bad-op")
 
       assert {:error, %Error{code: :invalid_argument, message: message}} =
-               Operate.execute(:unused_cluster, key, [{:append, "count", "x"}])
+               Operate.execute(:unused_cluster, key, [{:explode, "count", "x"}])
 
       assert message =~ "unsupported simple operation"
     end

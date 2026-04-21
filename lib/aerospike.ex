@@ -2,10 +2,15 @@ defmodule Aerospike do
   @moduledoc """
   Public entry point for the spike client.
 
-  The spike now proves a small unary command family on one shared
-  execution path plus one narrow batch read helper. It now also proves
-  scan and secondary-index query helpers over one shared scan/query
-  setup path:
+  This repo is the architecture-review surface for the future Aerospike
+  Elixir client, not the shipped package. The useful contract here is
+  narrower than "full client parity": start-up should be explicit,
+  supported command families should be discoverable, and the named
+  proof suites should match the public surface.
+
+  The spike proves a small unary command family on one shared execution
+  path plus batch, scan, query, and transaction helpers over the same
+  supervised cluster runtime:
 
     * `get/3` reads all bins for a key
     * `put/4` writes a bin map
@@ -28,6 +33,26 @@ defmodule Aerospike do
     * `scan_stream_node!/4`, `scan_all_node/4`, and `scan_count_node/4`
       target one named node for the same scan surface
 
+  Quick-start shape:
+
+      {:ok, _sup} =
+        Aerospike.start_link(
+          name: :spike,
+          transport: Aerospike.Transport.Tcp,
+          seeds: [{"127.0.0.1", 3000}],
+          namespaces: ["test"],
+          tend_trigger: :manual,
+          pool_size: 2
+        )
+
+      :ok = Aerospike.Tender.tend_now(:spike)
+
+  The repo README names the supported validation profiles:
+
+    * Community Edition single-node on `localhost:3000`
+    * Community Edition three-node cluster from `../aerospike_driver/`
+    * Enterprise Edition variants from this repo's `docker-compose.yml`
+
   The public `Stream` helpers are honest only about lazy enumeration at
   the API boundary. The current runtime still drains each node stream
   into memory before yielding that node's records downstream, so it does
@@ -35,8 +60,7 @@ defmodule Aerospike do
   coordination.
 
   Broader batch semantics, the remaining expression surface, and the
-  wider policy surface remain out of scope until later spike work
-  proves them.
+  wider policy surface remain out of scope until later work proves them.
   """
 
   alias Aerospike.Admin
@@ -76,6 +100,19 @@ defmodule Aerospike do
 
   Required options: `:name`, `:transport`, `:seeds`, `:namespaces`.
 
+  Startup validation happens synchronously at this boundary. Shape
+  errors for required opts, retry/breaker knobs, TLS/connect opts, and
+  auth pairs fail `start_link/1` immediately instead of surfacing later
+  from the first tend cycle or pool worker.
+
+  Cluster lifecycle knobs:
+
+    * `:tend_trigger` — `:timer` (default) or `:manual`.
+    * `:tend_interval_ms` — automatic tend period in milliseconds.
+      Positive integer.
+    * `:failure_threshold` — consecutive tend failures before the
+      Tender demotes a node. Non-negative integer.
+
   Pool-level knobs (forwarded to `Aerospike.NodeSupervisor.start_pool/2`
   on each pool start):
 
@@ -85,6 +122,30 @@ defmodule Aerospike do
       stay under Aerospike's `proto-fd-idle-ms`.
     * `:max_idle_pings` — bound on how many idle workers NimblePool
       may drop per verification cycle. Positive integer.
+
+  Breaker and retry knobs:
+
+    * `:circuit_open_threshold` — consecutive node failures tolerated
+      before new commands are refused. Non-negative integer.
+    * `:max_concurrent_ops_per_node` — in-flight plus queued command
+      cap enforced per node. Positive integer.
+    * `:max_retries` — retries after the initial attempt. Non-negative
+      integer.
+    * `:sleep_between_retries_ms` — fixed delay between retries.
+      Non-negative integer.
+    * `:replica_policy` — `:master` or `:sequence`.
+
+  Cluster feature toggles:
+
+    * `:use_compression` — boolean cluster-wide request-compression
+      opt-in, gated per node by advertised capabilities.
+    * `:use_services_alternate` — boolean toggle for
+      `peers-clear-alt` discovery.
+
+  Auth opts:
+
+    * `:user` / `:password` — cluster-wide credentials. Must be passed
+      together or omitted together.
 
   TCP-level tuning knobs (passed verbatim to
   `Aerospike.Transport.Tcp.connect/3` via the `:connect_opts` keyword):

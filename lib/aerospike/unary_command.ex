@@ -23,11 +23,12 @@ defmodule Aerospike.UnaryCommand do
   alias Aerospike.RetryPolicy
 
   @enforce_keys [:name, :dispatch, :build_request, :parse_response]
-  defstruct [:name, :dispatch, :build_request, :parse_response]
+  defstruct [:name, :dispatch, :build_request, :parse_response, retry_transport?: true]
 
   @type hook_input :: term()
   @type dispatch_kind :: :read | :write
   @type command_result :: {:ok, term()} | {:error, Error.t()}
+  @type transport_result :: command_result() | {:no_retry, command_result()}
   @type build_request_fun :: (hook_input() -> iodata())
   @type parse_response_fun :: (body :: binary(), hook_input() -> command_result() | Error.t())
 
@@ -35,7 +36,8 @@ defmodule Aerospike.UnaryCommand do
           name: module(),
           dispatch: dispatch_kind(),
           build_request: build_request_fun(),
-          parse_response: parse_response_fun()
+          parse_response: parse_response_fun(),
+          retry_transport?: boolean()
         }
 
   @doc """
@@ -49,7 +51,8 @@ defmodule Aerospike.UnaryCommand do
       name: Keyword.fetch!(opts, :name),
       dispatch: validate_dispatch!(dispatch),
       build_request: Keyword.fetch!(opts, :build_request),
-      parse_response: Keyword.fetch!(opts, :parse_response)
+      parse_response: Keyword.fetch!(opts, :parse_response),
+      retry_transport?: Keyword.get(opts, :retry_transport, true)
     }
   end
 
@@ -73,16 +76,17 @@ defmodule Aerospike.UnaryCommand do
           hook_input(),
           deadline_ms :: non_neg_integer(),
           command_opts :: keyword()
-        ) :: {command_result(), Aerospike.NodePool.checkin_value()}
+        ) :: {transport_result(), Aerospike.NodePool.checkin_value()}
   def run_transport(
-        %__MODULE__{build_request: build_request, parse_response: parse_response},
+        %__MODULE__{} = command,
         transport,
         conn,
         input,
         deadline_ms,
         command_opts
       )
-      when is_atom(transport) and is_function(build_request, 1) and is_function(parse_response, 2) do
+      when is_atom(transport) do
+    %__MODULE__{build_request: build_request, parse_response: parse_response} = command
     request = build_request.(input)
 
     case transport.command(conn, request, deadline_ms, command_opts) do
@@ -90,10 +94,13 @@ defmodule Aerospike.UnaryCommand do
         result = normalize_result(parse_response.(body, input))
         {result, checkin_value(result, conn)}
 
-      {:error, %Error{}} = err ->
-        {err, checkin_value(err, conn)}
+      {:error, %Error{} = error} ->
+        result = transport_error_result(error, retry_transport?: retry_transport?(command))
+        {result, checkin_value(error, conn)}
     end
   end
+
+  defp retry_transport?(%__MODULE__{retry_transport?: retry_transport?}), do: retry_transport?
 
   defp normalize_result({:ok, _} = ok), do: ok
   defp normalize_result({:error, %Error{}} = err), do: err
@@ -105,6 +112,11 @@ defmodule Aerospike.UnaryCommand do
     raise ArgumentError,
           "expected unary command dispatch to be :read or :write, got: #{inspect(dispatch)}"
   end
+
+  defp transport_error_result(%Error{} = err, retry_transport?: true), do: {:error, err}
+
+  defp transport_error_result(%Error{} = err, retry_transport?: false),
+    do: {:no_retry, {:error, err}}
 
   defp checkin_value(result, conn) do
     case RetryPolicy.classify(result) do

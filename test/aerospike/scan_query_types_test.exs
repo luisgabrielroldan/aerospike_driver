@@ -2,6 +2,7 @@ defmodule Aerospike.ScanQueryTypesTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Cursor
+  alias Aerospike.Filter
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
   alias Aerospike.Query
@@ -38,7 +39,7 @@ defmodule Aerospike.ScanQueryTypesTest do
     test "builds a query description and stores opaque predicate state" do
       query =
         Query.new("test", "users")
-        |> Query.where({:index, "age"})
+        |> Query.where(Filter.range("age", 10, 20))
         |> Query.select(["name"])
         |> Query.filter({:opaque_filter, 2})
         |> Query.max_records(10)
@@ -48,7 +49,9 @@ defmodule Aerospike.ScanQueryTypesTest do
 
       assert query.namespace == "test"
       assert query.set == "users"
-      assert query.index_filter == {:index, "age"}
+      assert %Filter{} = query.index_filter
+      assert query.index_filter.begin == 10
+      assert query.index_filter.end == 20
       assert query.bin_names == ["name"]
       assert query.filters == [{:opaque_filter, 2}]
       assert query.max_records == 10

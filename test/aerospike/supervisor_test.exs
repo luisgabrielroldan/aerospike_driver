@@ -68,6 +68,26 @@ defmodule Aerospike.SupervisorTest do
       end
     end
 
+    test "rejects malformed seed tuples" do
+      assert_raise ArgumentError, ~r/each seed must be a \{host, port\} tuple/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [:bad_seed],
+          namespaces: ["test"]
+        )
+      end
+
+      assert_raise ArgumentError, ~r/seed port must be in 1..65535/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 0}],
+          namespaces: ["test"]
+        )
+      end
+    end
+
     test "rejects empty :namespaces" do
       assert_raise ArgumentError, ~r/:namespaces must be a non-empty list/, fn ->
         ClusterSupervisor.start_link(
@@ -75,6 +95,17 @@ defmodule Aerospike.SupervisorTest do
           transport: Fake,
           seeds: [{"10.0.0.1", 3000}],
           namespaces: []
+        )
+      end
+    end
+
+    test "rejects non-string namespaces" do
+      assert_raise ArgumentError, ~r/each namespace must be a non-empty string/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: [:test]
         )
       end
     end
@@ -151,6 +182,100 @@ defmodule Aerospike.SupervisorTest do
           seeds: [{"10.0.0.1", 3000}],
           namespaces: ["test"],
           connect_opts: :not_a_list
+        )
+      end
+    end
+
+    test "rejects a partial auth pair" do
+      assert_raise ArgumentError,
+                   ~r/:user and :password must both be strings or both be absent/,
+                   fn ->
+                     ClusterSupervisor.start_link(
+                       name: :x,
+                       transport: Fake,
+                       seeds: [{"10.0.0.1", 3000}],
+                       namespaces: ["test"],
+                       user: "admin"
+                     )
+                   end
+    end
+
+    test "rejects invalid retry opts" do
+      assert_raise ArgumentError, ~r/:max_retries must be a non-negative integer/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          max_retries: -1
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:replica_policy must be :master or :sequence/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          replica_policy: :any
+        )
+      end
+    end
+
+    test "rejects invalid breaker and lifecycle opts" do
+      assert_raise ArgumentError,
+                   ~r/:circuit_open_threshold must be a non-negative integer/,
+                   fn ->
+                     ClusterSupervisor.start_link(
+                       name: :x,
+                       transport: Fake,
+                       seeds: [{"10.0.0.1", 3000}],
+                       namespaces: ["test"],
+                       circuit_open_threshold: -1
+                     )
+                   end
+
+      assert_raise ArgumentError,
+                   ~r/:max_concurrent_ops_per_node must be a positive integer/,
+                   fn ->
+                     ClusterSupervisor.start_link(
+                       name: :x,
+                       transport: Fake,
+                       seeds: [{"10.0.0.1", 3000}],
+                       namespaces: ["test"],
+                       max_concurrent_ops_per_node: 0
+                     )
+                   end
+
+      assert_raise ArgumentError, ~r/:tend_trigger must be :timer or :manual/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          tend_trigger: :now
+        )
+      end
+    end
+
+    test "rejects non-boolean feature toggles" do
+      assert_raise ArgumentError, ~r/:use_compression must be a boolean/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          use_compression: :yes
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:use_services_alternate must be a boolean/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          seeds: [{"10.0.0.1", 3000}],
+          namespaces: ["test"],
+          use_services_alternate: :alt
         )
       end
     end

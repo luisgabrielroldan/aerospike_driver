@@ -4,6 +4,7 @@ defmodule Aerospike.Protocol.Response do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.BatchRead
@@ -60,24 +61,6 @@ defmodule Aerospike.Protocol.Response do
   end
 
   @doc """
-  Parses a successful simple operate reply into decoded values in wire order.
-  """
-  @spec parse_operate_response(AsmMsg.t(), non_neg_integer()) ::
-          {:ok, [term()]} | {:error, Error.t()}
-  def parse_operate_response(%AsmMsg{} = msg, expected_count) when is_integer(expected_count) do
-    case result_atom(msg.result_code) do
-      {:ok, :ok} ->
-        case ensure_operation_count(msg.operations, expected_count) do
-          :ok -> decode_operation_values(msg.operations)
-          {:error, %Error{} = err} -> {:error, err}
-        end
-
-      other ->
-        error_from_result(other)
-    end
-  end
-
-  @doc """
   Parses a multi-record batch read/header reply into per-record indexed results.
   """
   @spec parse_batch_read_response(binary(), Aerospike.BatchCommand.NodeRequest.t(), keyword()) ::
@@ -90,6 +73,32 @@ defmodule Aerospike.Protocol.Response do
   @spec record_metadata(AsmMsg.t()) :: Record.metadata()
   def record_metadata(%AsmMsg{} = msg) do
     %{generation: msg.generation, ttl: msg.expiration}
+  end
+
+  @doc """
+  Extracts the record version from the fields of an AS_MSG response.
+  """
+  @spec extract_record_version(AsmMsg.t()) :: {:ok, non_neg_integer()} | :none
+  def extract_record_version(%AsmMsg{fields: fields}) do
+    rv_type = Field.type_record_version()
+
+    case Enum.find(fields, fn field -> field.type == rv_type end) do
+      %Field{data: <<version::56-little-unsigned>>} -> {:ok, version}
+      nil -> :none
+    end
+  end
+
+  @doc """
+  Extracts the MRT deadline from the fields of an AS_MSG response.
+  """
+  @spec extract_mrt_deadline(AsmMsg.t()) :: {:ok, integer()} | :none
+  def extract_mrt_deadline(%AsmMsg{fields: fields}) do
+    dl_type = Field.type_mrt_deadline()
+
+    case Enum.find(fields, fn field -> field.type == dl_type end) do
+      %Field{data: <<deadline::32-signed-little>>} -> {:ok, deadline}
+      nil -> :none
+    end
   end
 
   defp record_bins_from_operations(operations) do
@@ -123,29 +132,6 @@ defmodule Aerospike.Protocol.Response do
       end
 
     %{acc | bins: bins, counts: Map.put(counts, name, count)}
-  end
-
-  defp ensure_operation_count(operations, expected_count)
-       when length(operations) == expected_count,
-       do: :ok
-
-  defp ensure_operation_count(operations, expected_count) do
-    {:error,
-     Error.from_result_code(:parse_error,
-       message:
-         "operate reply contained #{length(operations)} operations, expected #{expected_count}"
-     )}
-  end
-
-  defp decode_operation_values(operations) do
-    operations
-    |> Enum.reduce({:ok, []}, fn %Operation{} = operation, {:ok, acc} ->
-      {:ok, value} = Value.decode_value(operation.particle_type, operation.data)
-      {:ok, [value | acc]}
-    end)
-    |> case do
-      {:ok, values} -> {:ok, Enum.reverse(values)}
-    end
   end
 
   defp result_atom(code) when is_integer(code) do

@@ -21,6 +21,7 @@ defmodule Aerospike.Get do
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
+  alias Aerospike.TxnSupport
   alias Aerospike.UnaryCommand
   alias Aerospike.UnarySupport
 
@@ -57,7 +58,16 @@ defmodule Aerospike.Get do
   def execute(tender, key, bins, opts \\ [])
 
   def execute(tender, %Key{} = key, :all, opts) do
-    UnarySupport.run_command(tender, key, opts, command(), key)
+    with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
+         :ok <- TxnSupport.prepare_txn_read(tender, txn, key) do
+      UnarySupport.run_command(
+        tender,
+        key,
+        opts,
+        command(),
+        %{key: key, conn: tender, txn: txn, opts: opts}
+      )
+    end
   end
 
   def execute(_tender, %Key{}, _bins, _opts) do
@@ -77,14 +87,24 @@ defmodule Aerospike.Get do
     )
   end
 
-  defp encode_read(%Key{} = key) do
+  defp encode_read(%{key: %Key{} = key, conn: conn, opts: opts}) do
     key.namespace
     |> AsmMsg.read_command(key.set, key.digest)
+    |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, false)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
   end
 
-  defp parse_record_response(body, key) do
-    UnarySupport.parse_as_msg(body, &Response.parse_record_response(&1, key))
+  defp parse_record_response(body, %{key: key, conn: conn, txn: txn}) do
+    UnarySupport.parse_as_msg(body, fn msg ->
+      case Response.parse_record_response(msg, key) do
+        {:ok, _} = ok ->
+          TxnSupport.track_txn_response(conn, txn, key, :read, msg, ok)
+          ok
+
+        {:error, _} = err ->
+          err
+      end
+    end)
   end
 end

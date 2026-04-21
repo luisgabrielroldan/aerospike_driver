@@ -13,6 +13,7 @@ defmodule Aerospike.Touch do
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
+  alias Aerospike.TxnSupport
   alias Aerospike.UnaryCommand
   alias Aerospike.UnarySupport
 
@@ -30,15 +31,27 @@ defmodule Aerospike.Touch do
 
   @spec execute(GenServer.server(), Key.t(), [option()]) :: result()
   def execute(tender, %Key{} = key, opts \\ []) when is_list(opts) do
-    with {:ok, ttl} <- non_negative_opt(opts, :ttl),
-         {:ok, generation} <- non_negative_opt(opts, :generation) do
-      UnarySupport.run_command(
-        tender,
-        key,
-        opts,
-        command(),
-        %{key: key, ttl: ttl, generation: generation}
-      )
+    with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
+         {:ok, ttl} <- non_negative_opt(opts, :ttl),
+         {:ok, generation} <- non_negative_opt(opts, :generation),
+         :ok <- TxnSupport.prepare_txn_write(tender, txn, key, opts) do
+      result =
+        UnarySupport.run_command(
+          tender,
+          key,
+          opts,
+          command(),
+          %{key: key, conn: tender, txn: txn, opts: opts, ttl: ttl, generation: generation}
+        )
+
+      case result do
+        {:error, %Error{} = err} ->
+          TxnSupport.track_txn_in_doubt(tender, txn, key, err)
+          result
+
+        _ ->
+          result
+      end
     end
   end
 
@@ -65,7 +78,13 @@ defmodule Aerospike.Touch do
      )}
   end
 
-  defp encode_touch(%{key: %Key{} = key, ttl: ttl, generation: generation}) do
+  defp encode_touch(%{
+         key: %Key{} = key,
+         conn: conn,
+         opts: opts,
+         ttl: ttl,
+         generation: generation
+       }) do
     key
     |> AsmMsg.key_command([Operation.touch()],
       write: true,
@@ -73,11 +92,21 @@ defmodule Aerospike.Touch do
       ttl: ttl,
       generation: generation
     )
+    |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
   end
 
-  defp parse_metadata_response(body, _input) do
-    UnarySupport.parse_as_msg(body, &Response.parse_record_metadata_response/1)
+  defp parse_metadata_response(body, %{key: key, conn: conn, txn: txn}) do
+    UnarySupport.parse_as_msg(body, fn msg ->
+      case Response.parse_record_metadata_response(msg) do
+        {:ok, _} = ok ->
+          TxnSupport.track_txn_response(conn, txn, key, :write, msg, ok)
+          ok
+
+        {:error, _} = err ->
+          err
+      end
+    end)
   end
 end
