@@ -3,6 +3,7 @@ defmodule Aerospike.UnaryExecutorTest do
 
   alias Aerospike.Error
   alias Aerospike.Telemetry
+  alias Aerospike.UnaryCommand
   alias Aerospike.UnaryExecutor
 
   describe "new!/1" do
@@ -130,6 +131,143 @@ defmodule Aerospike.UnaryExecutorTest do
     end
   end
 
+  describe "run_command/3" do
+    test "returns breaker refusal without checking out a worker" do
+      executor = executor_for(max_retries: 0)
+      command = test_command()
+
+      assert {:error, %Error{code: :circuit_open}} =
+               UnaryExecutor.run_command(executor, command, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :fake_tables, :route_key, :sequence, 0 -> {:ok, "A1"} end,
+                 resolve_handle: fn :fake_tender, "A1" -> {:ok, fake_handle()} end,
+                 allow_dispatch: fn _counters, _breaker ->
+                   {:error, Error.from_result_code(:circuit_open)}
+                 end,
+                 checkout: fn _node_name, _pool, _fun, _timeout ->
+                   flunk("breaker refusal must not check out a worker")
+                 end
+               })
+    end
+
+    test "pool checkout failure retries through the extracted dispatch path" do
+      executor = executor_for(max_retries: 1)
+      command = test_command()
+      parent = self()
+      __MODULE__.TransportStub.put_results([{:ok, {:ok, :done}}])
+
+      assert {:ok, :done} =
+               UnaryExecutor.run_command(executor, command, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :fake_tables, :route_key, :sequence, attempt ->
+                   {:ok, Enum.fetch!(["A1", "B1"], attempt)}
+                 end,
+                 resolve_handle: fn :fake_tender, node_name ->
+                   {:ok,
+                    fake_handle(pool: {:pool, node_name}, use_compression: node_name == "B1")}
+                 end,
+                 allow_dispatch: fn _counters, _breaker -> :ok end,
+                 checkout: fn node_name, pool, fun, timeout ->
+                   send(parent, {:checkout, node_name, pool, timeout})
+
+                   case node_name do
+                     "A1" -> {:error, Error.from_result_code(:pool_timeout)}
+                     "B1" -> elem(fun.(:conn_b1), 0)
+                   end
+                 end
+               })
+
+      assert_receive {:checkout, "A1", {:pool, "A1"}, timeout_a}
+      assert is_integer(timeout_a)
+      assert_receive {:checkout, "B1", {:pool, "B1"}, timeout_b}
+      assert is_integer(timeout_b)
+    end
+
+    test "transport-class failure closes the worker with node-failure accounting before retry" do
+      executor = executor_for(max_retries: 1)
+      command = test_command()
+      parent = self()
+
+      __MODULE__.TransportStub.put_results([
+        {:error, network_error("boom")},
+        {:ok, {:ok, :done}}
+      ])
+
+      assert {:ok, :done} =
+               UnaryExecutor.run_command(executor, command, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :fake_tables, :route_key, :sequence, attempt ->
+                   {:ok, Enum.fetch!(["A1", "B1"], attempt)}
+                 end,
+                 resolve_handle: fn :fake_tender, node_name ->
+                   {:ok, fake_handle(pool: {:pool, node_name})}
+                 end,
+                 allow_dispatch: fn _counters, _breaker -> :ok end,
+                 checkout: fn node_name, _pool, fun, _timeout ->
+                   result = fun.({:conn, node_name})
+                   send(parent, {:checkin, node_name, elem(result, 1)})
+                   elem(result, 0)
+                 end
+               })
+
+      assert_receive {:checkin, "A1", {:close, :failure}}
+      assert_receive {:checkin, "B1", {:conn, "B1"}}
+    end
+
+    test "rebalance retry triggers tend hook through the extracted dispatch path" do
+      parent = self()
+
+      executor =
+        executor_for(
+          max_retries: 1,
+          on_rebalance: fn ->
+            send(parent, :rebalance_triggered)
+            :ok
+          end
+        )
+
+      command = test_command()
+
+      __MODULE__.TransportStub.put_results([
+        {:error, Error.from_result_code(:partition_unavailable)},
+        {:ok, {:ok, :done}}
+      ])
+
+      assert {:ok, :done} =
+               UnaryExecutor.run_command(executor, command, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :fake_tables, :route_key, :sequence, attempt ->
+                   {:ok, Enum.fetch!(["A1", "B1"], attempt)}
+                 end,
+                 resolve_handle: fn :fake_tender, node_name ->
+                   {:ok, fake_handle(pool: {:pool, node_name})}
+                 end,
+                 allow_dispatch: fn _counters, _breaker -> :ok end,
+                 checkout: fn _node_name, _pool, fun, _timeout ->
+                   elem(fun.(:conn), 0)
+                 end
+               })
+
+      assert_receive :rebalance_triggered, 500
+    end
+  end
+
   @doc false
   def forward(event, measurements, metadata, test_pid) do
     send(test_pid, {:event, event, measurements, metadata})
@@ -164,6 +302,45 @@ defmodule Aerospike.UnaryExecutorTest do
     handler_id
   end
 
+  defp test_command do
+    UnaryCommand.new!(
+      name: __MODULE__,
+      build_request: fn _ -> :request end,
+      parse_response: fn
+        {:ok, value}, _input -> {:ok, value}
+        {:error, %Error{} = err}, _input -> {:error, err}
+      end
+    )
+  end
+
+  defp fake_handle(opts \\ []) do
+    %{
+      pool: Keyword.get(opts, :pool, :pool),
+      counters: :counters,
+      breaker: %{circuit_open_threshold: 2, max_concurrent_ops_per_node: 10},
+      use_compression: Keyword.get(opts, :use_compression, false)
+    }
+  end
+
   defp network_error(message), do: Error.from_result_code(:network_error, message: message)
   defp timeout_error(message), do: Error.from_result_code(:timeout, message: message)
+
+  defmodule TransportStub do
+    def put_results(results), do: Process.put({__MODULE__, :results}, results)
+
+    def command(_conn, _request, _deadline_ms, _command_opts) do
+      case Process.get({__MODULE__, :results}, []) do
+        [result | rest] ->
+          Process.put({__MODULE__, :results}, rest)
+
+          case result do
+            {:ok, value} -> {:ok, value}
+            {:error, %Error{}} = err -> err
+          end
+
+        [] ->
+          raise "TransportStub has no scripted results"
+      end
+    end
+  end
 end

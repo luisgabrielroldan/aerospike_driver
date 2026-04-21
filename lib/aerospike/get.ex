@@ -4,12 +4,14 @@ defmodule Aerospike.Get do
 
   ## Control flow per command
 
-  One `execute/4` call drives a retry loop that wraps `Aerospike.Router`
-  (partition routing) + `Aerospike.Tender.node_handle/2` (pool + counters
-  + breaker thresholds) + `Aerospike.CircuitBreaker.allow?/2` + pool
-  checkout + `NodeTransport.command/3`. The loop respects a monotonic
-  total-op budget derived from the caller's `:timeout` and a
-  configurable attempt cap from the cluster's
+  One `execute/4` call delegates the shared unary execution flow to
+  `Aerospike.UnaryExecutor`. That executor owns the retry loop around
+  `Aerospike.Router` (partition routing) + `Aerospike.Tender.node_handle/2`
+  (pool + counters + breaker thresholds) + `Aerospike.CircuitBreaker.allow?/2`
+  + pool checkout + `NodeTransport.command/3`. GET stays responsible for
+  building the read request and parsing the reply. The shared loop
+  respects a monotonic total-op budget derived from the caller's
+  `:timeout` and a configurable attempt cap from the cluster's
   `Aerospike.RetryPolicy`.
 
   Per attempt:
@@ -51,16 +53,13 @@ defmodule Aerospike.Get do
   signal.
   """
 
-  alias Aerospike.CircuitBreaker
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.NodePool
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
   alias Aerospike.RetryPolicy
-  alias Aerospike.Router
   alias Aerospike.Tender
   alias Aerospike.UnaryCommand
   alias Aerospike.UnaryExecutor
@@ -108,16 +107,20 @@ defmodule Aerospike.Get do
         on_rebalance: fn -> trigger_tend_async(tender) end
       )
 
-    ctx = %{
+    command =
+      UnaryCommand.new!(
+        name: __MODULE__,
+        build_request: &encode_read/1,
+        parse_response: &parse_record_response/2
+      )
+
+    UnaryExecutor.run_command(executor, command, %{
       tender: tender,
       tables: tables,
       transport: transport,
-      key: key
-    }
-
-    UnaryExecutor.run(executor, fn retry_ctx, attempt ->
-      run_attempt(ctx, retry_ctx, attempt)
-    end)
+      route_key: key,
+      command_input: key
+    })
   end
 
   def execute(_tender, %Key{}, _bins, _opts) do
@@ -126,44 +129,6 @@ defmodule Aerospike.Get do
        code: :invalid_argument,
        message: "Aerospike.Get supports only :all bins in the spike"
      }}
-  end
-
-  defp run_attempt(ctx, retry_ctx, attempt) do
-    case Router.pick_for_read(ctx.tables, ctx.key, retry_ctx.policy.replica_policy, attempt) do
-      {:ok, node_name} ->
-        {node_name, dispatch(ctx, retry_ctx, node_name, attempt)}
-
-      {:error, _reason} = routing_error ->
-        {nil, routing_error}
-    end
-  end
-
-  defp dispatch(ctx, retry_ctx, node_name, attempt) do
-    case Tender.node_handle(ctx.tender, node_name) do
-      {:ok, handle} ->
-        check_breaker(ctx, retry_ctx, node_name, handle, attempt)
-
-      {:error, :unknown_node} = err ->
-        err
-    end
-  end
-
-  defp check_breaker(ctx, retry_ctx, node_name, handle, attempt) do
-    case CircuitBreaker.allow?(handle.counters, handle.breaker) do
-      :ok ->
-        remaining = UnaryExecutor.remaining_budget(retry_ctx)
-        command_opts = [use_compression: handle.use_compression, attempt: attempt]
-
-        NodePool.checkout!(
-          node_name,
-          handle.pool,
-          fn conn -> do_get(ctx.transport, conn, ctx.key, remaining, command_opts) end,
-          remaining
-        )
-
-      {:error, %Error{code: :circuit_open}} = err ->
-        err
-    end
   end
 
   # Fire a tend cycle without blocking the command path. Retaining the
@@ -183,27 +148,6 @@ defmodule Aerospike.Get do
       end)
 
     :ok
-  end
-
-  # Returned tuple shape matches `NodePool.checkout!/3`'s `fun` contract:
-  # `{result_for_caller, checkin_value}`.
-  #
-  #   * `conn` — keep the worker (normal return).
-  #   * `:close` — drop the worker without counting a failure.
-  #   * `{:close, :failure}` — drop the worker *and* bump the node's
-  #     `:failed` counter. Only transport-class node-health failures
-  #     (`:network_error`, `:timeout`, `:connection_error`) use this
-  #     path. Parse errors still close the worker, but do not count
-  #     against node health.
-  defp do_get(transport, conn, key, deadline_ms, command_opts) do
-    command =
-      UnaryCommand.new!(
-        name: __MODULE__,
-        build_request: &encode_read/1,
-        parse_response: &parse_record_response/2
-      )
-
-    UnaryCommand.run_transport(command, transport, conn, key, deadline_ms, command_opts)
   end
 
   defp encode_read(%Key{} = key) do

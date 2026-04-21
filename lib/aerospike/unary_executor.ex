@@ -4,16 +4,24 @@ defmodule Aerospike.UnaryExecutor do
 
   This module owns the shared per-call setup and retry loop that unary
   commands should not copy: policy merge, monotonic deadline budgeting,
-  retry telemetry, and classification-driven redispatch.
+  retry telemetry, classification-driven redispatch, and the unary
+  node-dispatch path (`Router` -> `Tender.node_handle/2` ->
+  `CircuitBreaker` -> `NodePool.checkout!/4`).
 
-  Command modules supply only the per-attempt dispatch callback. That
-  callback can keep command-local routing or transport details for now
-  while the retry driver remains shared.
+  Command modules supply only their request builder and response parser
+  via `Aerospike.UnaryCommand`. The executor owns the operational flow
+  around those hooks so future unary commands do not need to copy the
+  same routing, breaker, checkout, and retry logic.
   """
 
+  alias Aerospike.CircuitBreaker
   alias Aerospike.Error
+  alias Aerospike.NodePool
   alias Aerospike.RetryPolicy
+  alias Aerospike.Router
   alias Aerospike.Telemetry
+  alias Aerospike.Tender
+  alias Aerospike.UnaryCommand
 
   @default_timeout 5_000
 
@@ -23,6 +31,29 @@ defmodule Aerospike.UnaryExecutor do
   @type attempt_result :: {node_name :: String.t() | nil, result :: term()}
   @type on_rebalance_fun :: (-> :ok)
   @type attempt_fun :: (t(), non_neg_integer() -> attempt_result())
+  @type pick_node_fun ::
+          (tables :: term(),
+           route_key :: term(),
+           RetryPolicy.replica_policy(),
+           non_neg_integer() ->
+             {:ok, String.t()} | {:error, term()})
+  @type resolve_handle_fun ::
+          (GenServer.server(), String.t() ->
+             {:ok, Tender.node_handle()} | {:error, :unknown_node})
+  @type allow_dispatch_fun :: (term(), term() -> :ok | {:error, Error.t()})
+  @type checkout_fun ::
+          (String.t(), pid(), (term() -> {term(), NodePool.checkin_value()}), integer() -> term())
+  @type dispatch_ctx :: %{
+          required(:tables) => term(),
+          required(:tender) => GenServer.server(),
+          required(:transport) => module(),
+          required(:route_key) => term(),
+          required(:command_input) => term(),
+          optional(:pick_node) => pick_node_fun(),
+          optional(:resolve_handle) => resolve_handle_fun(),
+          optional(:allow_dispatch) => allow_dispatch_fun(),
+          optional(:checkout) => checkout_fun()
+        }
 
   @type t :: %__MODULE__{
           policy: RetryPolicy.t(),
@@ -56,10 +87,79 @@ defmodule Aerospike.UnaryExecutor do
   end
 
   @doc """
+  Runs one unary command through the shared routing, breaker, checkout,
+  transport, and retry pipeline.
+  """
+  @spec run_command(t(), UnaryCommand.t(), dispatch_ctx()) :: term()
+  def run_command(%__MODULE__{} = executor, %UnaryCommand{} = command, ctx) when is_map(ctx) do
+    run(executor, fn retry_ctx, attempt ->
+      dispatch_attempt(retry_ctx, attempt, command, ctx)
+    end)
+  end
+
+  @doc """
   Returns the remaining monotonic budget in milliseconds.
   """
   @spec remaining_budget(t()) :: integer()
   def remaining_budget(%__MODULE__{deadline: deadline}), do: deadline - monotonic_now()
+
+  defp dispatch_attempt(retry_ctx, attempt, command, ctx) do
+    pick_node = Map.get(ctx, :pick_node, &Router.pick_for_read/4)
+
+    case pick_node.(ctx.tables, ctx.route_key, retry_ctx.policy.replica_policy, attempt) do
+      {:ok, node_name} ->
+        {node_name, dispatch_node(retry_ctx, attempt, command, ctx, node_name)}
+
+      {:error, _reason} = routing_error ->
+        {nil, routing_error}
+    end
+  end
+
+  defp dispatch_node(retry_ctx, attempt, command, ctx, node_name) do
+    resolve_handle = Map.get(ctx, :resolve_handle, &Tender.node_handle/2)
+
+    case resolve_handle.(ctx.tender, node_name) do
+      {:ok, handle} ->
+        check_breaker(retry_ctx, attempt, command, ctx, node_name, handle)
+
+      {:error, :unknown_node} = err ->
+        err
+    end
+  end
+
+  defp check_breaker(retry_ctx, attempt, command, ctx, node_name, handle) do
+    allow_dispatch = Map.get(ctx, :allow_dispatch, &CircuitBreaker.allow?/2)
+
+    case allow_dispatch.(handle.counters, handle.breaker) do
+      :ok ->
+        checkout(retry_ctx, attempt, command, ctx, node_name, handle)
+
+      {:error, %Error{}} = err ->
+        err
+    end
+  end
+
+  defp checkout(retry_ctx, attempt, command, ctx, node_name, handle) do
+    checkout = Map.get(ctx, :checkout, &NodePool.checkout!/4)
+    remaining = remaining_budget(retry_ctx)
+    command_opts = [use_compression: handle.use_compression, attempt: attempt]
+
+    checkout.(
+      node_name,
+      handle.pool,
+      fn conn ->
+        UnaryCommand.run_transport(
+          command,
+          ctx.transport,
+          conn,
+          ctx.command_input,
+          remaining,
+          command_opts
+        )
+      end,
+      remaining
+    )
+  end
 
   defp attempt_loop(executor, attempt_fun, attempt, last_error) do
     cond do
