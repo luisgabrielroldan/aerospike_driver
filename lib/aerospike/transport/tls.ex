@@ -9,8 +9,9 @@ defmodule Aerospike.Transport.Tls do
   opts. Once the TLS handshake completes the connection handle is an
   `Aerospike.Transport.Tcp{}` struct whose `socket_mod` is `:ssl` rather
   than `:gen_tcp`, so every post-connect operation — framing, auth,
-  compression, telemetry — is shared with the plaintext path. The other
-  callbacks (`command/4`, `info/2`, `close/1`, `login/2`) therefore
+  compression, telemetry, stream framing — is shared with the plaintext
+  path. The other callbacks (`command/4`, `info/2`, `stream_open/4`,
+  `stream_read/2`, `stream_close/1`, `close/1`, `login/2`) therefore
   delegate straight to `Aerospike.Transport.Tcp`.
 
   Callers select TLS by setting `transport: Aerospike.Transport.Tls` on
@@ -103,6 +104,15 @@ defmodule Aerospike.Transport.Tls do
 
   @impl true
   defdelegate command(conn, request, deadline_ms, opts), to: Tcp
+
+  @impl true
+  defdelegate stream_open(conn, request, deadline_ms, opts), to: Tcp
+
+  @impl true
+  defdelegate stream_read(stream, deadline_ms), to: Tcp
+
+  @impl true
+  defdelegate stream_close(stream), to: Tcp
 
   @impl true
   defdelegate login(conn, opts), to: Tcp

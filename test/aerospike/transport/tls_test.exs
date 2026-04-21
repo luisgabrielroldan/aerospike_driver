@@ -13,6 +13,9 @@ defmodule Aerospike.Transport.TlsTest do
   # transports run the same code path.
 
   alias Aerospike.Error
+  alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.Login
+  alias Aerospike.Protocol.Message
   alias Aerospike.Transport.Tcp
   alias Aerospike.Transport.Tls
 
@@ -95,6 +98,39 @@ defmodule Aerospike.Transport.TlsTest do
       wait_for(server)
     end
 
+    test "runs the login handshake over TLS before unary commands when credentials are supplied",
+         %{listener: listener, port: port} do
+      body = <<4, 5, 6>>
+      command_reply = header(body) <> body
+      token = "tls-session-token"
+      ttl = 1_800
+
+      server =
+        spawn_ssl_server(listener, fn sock ->
+          {:ok, login_request} = :ssl.recv(sock, 0, 1_000)
+          assert_login_request(login_request, 20)
+          :ok = :ssl.send(sock, login_reply(0, [{5, token}, {6, <<ttl::32-big>>}]))
+
+          {:ok, command_request} = :ssl.recv(sock, 0, 1_000)
+          assert byte_size(command_request) > 0
+          :ok = :ssl.send(sock, command_reply)
+        end)
+
+      assert {:ok, %Tcp{socket_mod: :ssl} = conn} =
+               Tls.connect("127.0.0.1", port,
+                 connect_timeout_ms: 1_000,
+                 tls_name: "localhost",
+                 tls_cacertfile: @ca_cert,
+                 user: "admin",
+                 password: "secret"
+               )
+
+      assert {:ok, ^body} = Tls.command(conn, <<"req">>, 500, [])
+
+      :ok = Tls.close(conn)
+      wait_for(server)
+    end
+
     test ":verify_none succeeds against an untrusted CA and logs a warning", %{
       listener: listener,
       port: port
@@ -161,6 +197,40 @@ defmodule Aerospike.Transport.TlsTest do
 
       wait_for(server)
       _ = :ssl.close(listener)
+    end
+  end
+
+  describe "stream_open/4" do
+    test "delivers framed responses over TLS and ends on the terminal marker", %{
+      listener: listener,
+      port: port
+    } do
+      first_frame = as_msg_frame(0, <<1>>)
+      second_frame = as_msg_frame(0, <<2, 3>>)
+      terminal_frame = as_msg_frame(0x01)
+
+      server =
+        spawn_ssl_server(listener, fn sock ->
+          {:ok, _} = :ssl.recv(sock, 0, 1_000)
+          :ok = :ssl.send(sock, first_frame)
+          :ok = :ssl.send(sock, second_frame)
+          :ok = :ssl.send(sock, terminal_frame)
+        end)
+
+      assert {:ok, conn} =
+               Tls.connect("127.0.0.1", port,
+                 connect_timeout_ms: 1_000,
+                 tls_name: "localhost",
+                 tls_cacertfile: @ca_cert
+               )
+
+      assert {:ok, stream} = Tls.stream_open(conn, <<"req">>, 1_000, [])
+      assert {:ok, ^first_frame} = Tls.stream_read(stream, 500)
+      assert {:ok, ^second_frame} = Tls.stream_read(stream, 500)
+      assert :done = Tls.stream_read(stream, 500)
+      assert :ok = Tls.stream_close(stream)
+
+      wait_for(server)
     end
   end
 
@@ -278,5 +348,33 @@ defmodule Aerospike.Transport.TlsTest do
     after
       1_000 -> :ok
     end
+  end
+
+  defp as_msg_frame(info3, payload \\ <<>>) do
+    body = IO.iodata_to_binary(AsmMsg.encode(%AsmMsg{info3: info3})) <> payload
+    Message.encode_as_msg(body)
+  end
+
+  defp assert_login_request(frame, command_id) do
+    <<2, 2, _length::48-big, 0, 0, ^command_id, field_count, _::96, _rest::binary>> = frame
+    assert field_count == 2
+  end
+
+  defp header(body), do: <<2, 3, byte_size(body)::48-big>>
+
+  defp login_reply(result_code, fields) do
+    fields_iodata =
+      Enum.map(fields, fn {field_id, value} when is_binary(value) ->
+        size = byte_size(value) + 1
+        [<<size::32-big, field_id::8>>, value]
+      end)
+
+    body_size = Login.reply_header_size() - 8 + IO.iodata_length(fields_iodata)
+    field_count = length(fields_iodata)
+
+    [
+      <<2, 2, body_size::48-big, 0, result_code::8, 0, field_count::8, 0::96>>,
+      fields_iodata
+    ]
   end
 end

@@ -7,10 +7,11 @@ defmodule Aerospike.NodeTransport do
   TCP implementation in production and a scripted fake in tests, so every
   cluster-logic path is exercised deterministically without sockets.
 
-  This behaviour is intentionally narrow: `info/2`, unary `command/4`, and
-  optional `login/2` are the execution shapes supported today. Streaming
-  replies and fan-out orchestration are separate future contracts, not
-  hidden variants of `command/4`.
+  This behaviour is intentionally narrow: `info/2`, unary `command/4`,
+  optional `login/2`, and optional stream open/read/close callbacks are the
+  execution shapes supported today. Streaming replies and fan-out
+  orchestration are separate contracts, not hidden variants of
+  `command/4`.
 
   Implementations are free to choose their own `conn` representation
   (a socket, a pid, a reference, a struct). The opaque type prevents
@@ -98,6 +99,45 @@ defmodule Aerospike.NodeTransport do
               {:ok, binary()} | {:error, Aerospike.Error.t()}
 
   @typedoc """
+  Options accepted by `c:stream_open/4`. The stream seam currently does not
+  interpret any public keys, but callers pass a keyword list so later
+  implementations can share capability flags without changing the callback
+  shape.
+  """
+  @type stream_opts :: keyword()
+
+  @typedoc "Opaque stream handle returned by `c:stream_open/4`."
+  @type stream :: term()
+
+  @doc """
+  Opens a streaming request and returns an opaque handle for reading frames.
+
+  The transport owns the long-lived socket state and delivery mechanics; the
+  caller owns any parsing of returned frames. The request bytes are already
+  encoded when they reach the transport.
+  """
+  @callback stream_open(
+              conn(),
+              request :: iodata(),
+              deadline_ms :: non_neg_integer(),
+              opts :: stream_opts()
+            ) :: {:ok, stream()} | {:error, Aerospike.Error.t()}
+
+  @doc """
+  Reads the next frame from an open stream.
+
+  Returns `{:ok, frame}` for a delivered frame, `:done` when the stream has
+  reached end-of-stream, or `{:error, error}` for a transport-class failure.
+  """
+  @callback stream_read(stream(), deadline_ms :: non_neg_integer()) ::
+              {:ok, binary()} | :done | {:error, Aerospike.Error.t()}
+
+  @doc """
+  Closes an open stream handle. Must be idempotent.
+  """
+  @callback stream_close(stream()) :: :ok
+
+  @typedoc """
   Parsed admin-protocol login reply returned by `c:login/2`.
 
     * `:ok_no_token` — server accepted the login but issued no session
@@ -134,5 +174,5 @@ defmodule Aerospike.NodeTransport do
   @callback login(conn(), opts :: keyword()) ::
               {:ok, login_reply()} | {:error, Aerospike.Error.t()}
 
-  @optional_callbacks login: 2
+  @optional_callbacks login: 2, stream_open: 4, stream_read: 2, stream_close: 1
 end

@@ -2,6 +2,7 @@ defmodule Aerospike.Transport.TcpTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
   alias Aerospike.Telemetry
   alias Aerospike.Transport.Tcp
@@ -373,6 +374,68 @@ defmodule Aerospike.Transport.TcpTest do
       assert_receive {^received_ref, sent}, 500
       <<outer_header::binary-8, _rest::binary>> = sent
       assert {:ok, {2, 4, _}} = Message.decode_header(outer_header)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+  end
+
+  describe "login/2 and authenticated connect/3" do
+    test "returns the parsed session token and ttl from a successful login reply", %{
+      listener: listener,
+      port: port
+    } do
+      token = "session-token"
+      ttl = 3_600
+      reply = login_reply(0, [{5, token}, {6, <<ttl::32-big>>}])
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          assert_login_request(request, 20)
+          :ok = :gen_tcp.send(client_sock, reply)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+
+      assert {:ok, {:session, ^token, ^ttl}} =
+               Tcp.login(conn, user: "admin", password: "secret")
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "falls back from an expired session token to password login and keeps unary commands usable",
+         %{listener: listener, port: port} do
+      body = <<9, 8, 7>>
+      command_reply = header(body) <> body
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, auth_request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          assert_login_request(auth_request, 0)
+          :ok = :gen_tcp.send(client_sock, login_reply(66))
+
+          {:ok, login_request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          assert_login_request(login_request, 20)
+          :ok = :gen_tcp.send(client_sock, login_reply(0))
+
+          {:ok, command_request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          assert byte_size(command_request) > 0
+          :ok = :gen_tcp.send(client_sock, command_reply)
+          hold_client(client_sock)
+        end)
+
+      assert {:ok, conn} =
+               Tcp.connect("127.0.0.1", port,
+                 connect_timeout_ms: 1_000,
+                 user: "admin",
+                 password: "secret",
+                 session_token: "cached-token"
+               )
+
+      assert {:ok, ^body} = Tcp.command(conn, <<"req">>, 500)
 
       :ok = Tcp.close(conn)
       stop_server(server)
@@ -751,6 +814,27 @@ defmodule Aerospike.Transport.TcpTest do
       :ok = :gen_tcp.send(client_sock, reply)
       hold_client(client_sock)
     end)
+  end
+
+  defp assert_login_request(frame, command_id) do
+    <<2, 2, _length::48-big, 0, 0, ^command_id, field_count, _::96, _rest::binary>> = frame
+    assert field_count == 2
+  end
+
+  defp login_reply(result_code, fields \\ []) do
+    fields_iodata =
+      Enum.map(fields, fn {field_id, value} when is_binary(value) ->
+        size = byte_size(value) + 1
+        [<<size::32-big, field_id::8>>, value]
+      end)
+
+    body_size = Login.reply_header_size() - 8 + IO.iodata_length(fields_iodata)
+    field_count = length(fields_iodata)
+
+    [
+      <<2, 2, body_size::48-big, 0, result_code::8, 0, field_count::8, 0::96>>,
+      fields_iodata
+    ]
   end
 
   # Accept one connection, buffer every byte the client sends until it

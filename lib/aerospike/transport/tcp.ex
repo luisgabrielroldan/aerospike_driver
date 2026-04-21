@@ -12,9 +12,11 @@ defmodule Aerospike.Transport.Tcp do
   `Aerospike.Transport.Tls`). Every post-connect operation dispatches through
   that module, so framing, compression, auth, and telemetry are shared
   between the plaintext and TLS transports — the only real difference is
-  how the socket was opened. `Aerospike.Transport.Tls` delegates its
-  `command/4`, `info/2`, `close/1`, and `login/2` callbacks here for that
-  reason.
+  how the socket was opened. Streaming follows the same split: the transport
+  owns raw frame delivery and the stream handle only carries socket lifecycle
+  state. `Aerospike.Transport.Tls` delegates its `command/4`, `info/2`,
+  `stream_open/4`, `stream_read/2`, `stream_close/1`, `close/1`, and
+  `login/2` callbacks here for that reason.
 
   Reads use `:gen_tcp.recv(socket, N, timeout)` with `N > 0`, which blocks
   inside the VM until exactly `N` bytes arrive, so server-side TCP
@@ -98,11 +100,14 @@ defmodule Aerospike.Transport.Tcp do
 
   @behaviour Aerospike.NodeTransport
 
+  import Bitwise
+
   alias Aerospike.Error
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
   alias Aerospike.Telemetry
+  alias Aerospike.Transport.Tcp.StreamWorker
 
   @default_connect_timeout_ms 5_000
   @header_size 8
@@ -123,6 +128,9 @@ defmodule Aerospike.Transport.Tcp do
             info_timeout: non_neg_integer(),
             node_name: String.t() | nil
           }
+
+  @typedoc "Opaque stream handle owned by a dedicated socket worker."
+  @opaque stream :: pid()
 
   @enforce_keys [:socket, :info_timeout]
   defstruct [:socket, :info_timeout, socket_mod: :gen_tcp, node_name: nil]
@@ -327,6 +335,53 @@ defmodule Aerospike.Transport.Tcp do
     recv_exact(mod, socket, length, timeout)
   end
 
+  defp stream_call(pid, message, fallback) do
+    if Process.alive?(pid) do
+      try do
+        GenServer.call(pid, message)
+      catch
+        :exit, _ -> fallback
+      end
+    else
+      fallback
+    end
+  end
+
+  defp handoff_stream_socket(%__MODULE__{socket_mod: mod, socket: socket}, pid) do
+    case mod.controlling_process(socket, pid) do
+      :ok -> :ok
+      {:error, reason} -> {:error, stream_handoff_error(reason)}
+    end
+  end
+
+  defp open_stream_worker(conn) do
+    case StreamWorker.start_link(conn) do
+      {:ok, pid} ->
+        finalize_stream_worker(conn, pid)
+
+      {:error, reason} ->
+        _ = close_socket(conn)
+        {:error, stream_worker_error(reason)}
+    end
+  end
+
+  defp finalize_stream_worker(conn, pid) do
+    case handoff_stream_socket(conn, pid) do
+      :ok ->
+        {:ok, pid}
+
+      {:error, %Error{} = err} ->
+        _ = StreamWorker.stop(pid)
+        _ = close_socket(conn)
+        {:error, err}
+    end
+  end
+
+  defp close_socket(%__MODULE__{socket_mod: mod, socket: socket}) do
+    _ = mod.close(socket)
+    :ok
+  end
+
   defp decode_login_header(header) do
     case Login.decode_reply_header(header) do
       {:ok, result_code, field_count, body_length} ->
@@ -431,6 +486,35 @@ defmodule Aerospike.Transport.Tcp do
   def close(%__MODULE__{socket_mod: mod, socket: socket}) do
     _ = mod.close(socket)
     :ok
+  end
+
+  @impl true
+  def stream_open(%__MODULE__{} = conn, request, deadline_ms, opts \\ [])
+      when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
+             deadline_ms >= 0 and is_list(opts) do
+    framed = maybe_compress(request, opts)
+
+    metadata = %{
+      node_name: conn.node_name,
+      attempt: Keyword.get(opts, :attempt, 0),
+      deadline_ms: deadline_ms
+    }
+
+    case send_framed(conn, framed, metadata) do
+      :ok -> open_stream_worker(conn)
+      {:error, %Error{} = err} -> {:error, err}
+    end
+  end
+
+  @impl true
+  def stream_read(stream, deadline_ms)
+      when is_pid(stream) and is_integer(deadline_ms) and deadline_ms >= 0 do
+    stream_call(stream, {:read, deadline_ms}, {:error, closed_stream_error()})
+  end
+
+  @impl true
+  def stream_close(stream) when is_pid(stream) do
+    stream_call(stream, :close, :ok)
   end
 
   @impl true
@@ -709,6 +793,262 @@ defmodule Aerospike.Transport.Tcp do
 
   defp transport_error(op, reason) do
     %Error{code: :network_error, message: "#{op} failed: #{format_reason(reason)}"}
+  end
+
+  defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_reason(reason), do: inspect(reason)
+
+  defp stream_worker_error(reason) do
+    %Error{
+      code: :connection_error,
+      message: "failed to open stream worker: #{format_reason(reason)}"
+    }
+  end
+
+  defp stream_handoff_error(reason) do
+    %Error{
+      code: :network_error,
+      message: "failed to hand off stream socket: #{format_reason(reason)}"
+    }
+  end
+
+  defp closed_stream_error do
+    %Error{
+      code: :network_error,
+      message: "stream handle closed or unavailable"
+    }
+  end
+end
+
+defmodule Aerospike.Transport.Tcp.StreamWorker do
+  @moduledoc false
+
+  use GenServer
+
+  import Bitwise
+
+  alias Aerospike.Error
+  alias Aerospike.Protocol.Message
+
+  @header_size 8
+  @stream_last_offset 11
+  @stream_last_flag 0x01
+  @proto_version Message.proto_version()
+  @type_as_msg Message.type_as_msg()
+  @type_compressed Message.type_compressed()
+
+  @enforce_keys [:socket_mod, :socket]
+  defstruct [:socket_mod, :socket]
+
+  @type t :: %__MODULE__{
+          socket_mod: :gen_tcp | :ssl,
+          socket: :gen_tcp.socket() | :ssl.sslsocket()
+        }
+
+  @spec start_link(Aerospike.Transport.Tcp.conn()) :: {:ok, pid()} | :ignore | {:error, term()}
+  def start_link(%Aerospike.Transport.Tcp{} = conn) do
+    GenServer.start_link(__MODULE__, conn, [])
+  end
+
+  @spec read(pid(), non_neg_integer()) :: {:ok, binary()} | :done | {:error, Error.t()}
+  def read(pid, deadline_ms) when is_pid(pid) and is_integer(deadline_ms) and deadline_ms >= 0 do
+    GenServer.call(pid, {:read, deadline_ms})
+  end
+
+  @spec close(pid()) :: :ok
+  def close(pid) when is_pid(pid) do
+    GenServer.call(pid, :close)
+  end
+
+  @spec stop(pid()) :: :ok
+  def stop(pid) when is_pid(pid) do
+    GenServer.stop(pid, :normal)
+  end
+
+  @impl true
+  def init(%Aerospike.Transport.Tcp{} = conn) do
+    {:ok, %__MODULE__{socket_mod: conn.socket_mod, socket: conn.socket}}
+  end
+
+  @impl true
+  def handle_call({:read, deadline_ms}, _from, %__MODULE__{} = state) do
+    case recv_stream_frame(state, deadline_ms) do
+      {:ok, frame} ->
+        if stream_last_frame?(frame) do
+          {:stop, :normal, :done, state}
+        else
+          {:reply, {:ok, frame}, state}
+        end
+
+      {:error, %Error{} = err} ->
+        {:stop, :normal, {:error, err}, state}
+    end
+  end
+
+  def handle_call(:close, _from, %__MODULE__{} = state) do
+    {:stop, :normal, :ok, state}
+  end
+
+  @impl true
+  def terminate(_reason, %__MODULE__{socket_mod: mod, socket: socket}) do
+    _ = mod.close(socket)
+    :ok
+  end
+
+  defp recv_stream_frame(%__MODULE__{socket_mod: mod, socket: socket}, deadline_ms) do
+    with {:ok, header} <- recv_exact(mod, socket, @header_size, deadline_ms),
+         {:ok, {version, type, length}} <- decode_header(header),
+         {:ok, body} <- recv_body(mod, socket, length, deadline_ms) do
+      decode_frame(version, type, body)
+    end
+  end
+
+  defp recv_body(_mod, _socket, 0, _timeout), do: {:ok, <<>>}
+
+  defp recv_body(mod, socket, length, timeout) when length > 0 do
+    recv_exact(mod, socket, length, timeout)
+  end
+
+  defp recv_exact(mod, socket, length, timeout) do
+    case mod.recv(socket, length, timeout) do
+      {:ok, data} -> {:ok, data}
+      {:error, reason} -> {:error, transport_error(:recv, reason)}
+    end
+  end
+
+  defp decode_header(header) do
+    case Message.decode_header(header) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :incomplete_header} ->
+        {:error, %Error{code: :parse_error, message: "incomplete protocol header from server"}}
+    end
+  end
+
+  defp decode_frame(version, @type_as_msg, body) do
+    with :ok <- validate_version(version) do
+      {:ok, Message.encode(version, @type_as_msg, body)}
+    end
+  end
+
+  defp decode_frame(version, @type_compressed, body) do
+    with :ok <- validate_version(version),
+         {:ok, {uncompressed_size, compressed}} <- decode_compressed_payload(body),
+         {:ok, inflated} <- safe_uncompress(compressed),
+         :ok <- validate_uncompressed_size(inflated, uncompressed_size),
+         {:ok, {inner_version, inner_type, inner_body}} <- decode_inner_frame(inflated),
+         :ok <- validate_version(inner_version),
+         :ok <- validate_inner_type(inner_type) do
+      {:ok, Message.encode(inner_version, inner_type, inner_body)}
+    end
+  end
+
+  defp decode_frame(_version, type, _body) do
+    {:error,
+     %Error{
+       code: :parse_error,
+       message:
+         "unexpected proto type from server: expected #{inspect([@type_as_msg, @type_compressed])}, got #{type}"
+     }}
+  end
+
+  defp decode_compressed_payload(body) do
+    case Message.decode_compressed_payload(body) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :incomplete_compressed_payload} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "compressed reply is missing its 8-byte uncompressed-size prefix"
+         }}
+    end
+  end
+
+  defp safe_uncompress(compressed) do
+    {:ok, :zlib.uncompress(compressed)}
+  rescue
+    e in ErlangError ->
+      {:error,
+       %Error{
+         code: :parse_error,
+         message: "failed to inflate compressed reply: #{inspect(e.original)}"
+       }}
+  end
+
+  defp validate_uncompressed_size(inflated, expected_size) do
+    actual = byte_size(inflated)
+
+    if actual == expected_size do
+      :ok
+    else
+      {:error,
+       %Error{
+         code: :parse_error,
+         message:
+           "compressed reply size mismatch: header advertised #{expected_size}, inflated #{actual}"
+       }}
+    end
+  end
+
+  defp decode_inner_frame(inflated) do
+    case Message.decode(inflated) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :incomplete_header} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "inflated compressed reply has an incomplete proto header"
+         }}
+
+      {:error, :incomplete_body} ->
+        {:error,
+         %Error{
+           code: :parse_error,
+           message: "inflated compressed reply has a truncated body"
+         }}
+    end
+  end
+
+  defp validate_version(@proto_version), do: :ok
+
+  defp validate_version(version) do
+    {:error,
+     %Error{
+       code: :parse_error,
+       message: "unexpected proto version from server: expected #{@proto_version}, got #{version}"
+     }}
+  end
+
+  defp validate_inner_type(@type_as_msg), do: :ok
+  defp validate_inner_type(type), do: {:error, unexpected_type_error(type)}
+
+  defp stream_last_frame?(<<_::binary-size(@stream_last_offset), info3::8, _::binary>>) do
+    (info3 &&& @stream_last_flag) == @stream_last_flag
+  end
+
+  defp transport_error(:recv, :timeout) do
+    %Error{code: :timeout, message: "transport timed out"}
+  end
+
+  defp transport_error(:recv, :closed) do
+    %Error{code: :network_error, message: "recv failed: socket closed"}
+  end
+
+  defp transport_error(op, reason) do
+    %Error{code: :network_error, message: "#{op} failed: #{format_reason(reason)}"}
+  end
+
+  defp unexpected_type_error(type) do
+    %Error{
+      code: :parse_error,
+      message:
+        "unexpected proto type from server: expected #{inspect([@type_as_msg])}, got #{type}"
+    }
   end
 
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)

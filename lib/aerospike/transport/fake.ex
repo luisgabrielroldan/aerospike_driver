@@ -11,9 +11,14 @@ defmodule Aerospike.Transport.Fake do
   surface missing scripting).
 
   The fake does not parse wire bytes. `info/2` matches on the exact list of
-  info commands passed by the caller; `command/2` does not inspect request
-  bytes at all. Tests drive the fake at the protocol seam the Tender and
-  Router actually use, not a deeper wire-level simulation.
+  info commands passed by the caller; `command/4` and the streaming callbacks
+  do not inspect request bytes at all. Tests drive the fake at the protocol
+  seam the Tender and Router actually use, not a deeper wire-level
+  simulation.
+
+  Streaming is scripted as an ordered queue of events per node. Each opened
+  stream gets its own opaque handle and yields `{:frame, bytes}` items until
+  it hits `:done` or a scripted `{:error, error}`.
 
   ### Usage
 
@@ -45,8 +50,24 @@ defmodule Aerospike.Transport.Fake do
           | {:ok, binary()}
           | {:error, Error.t()}
 
+  @typedoc "Scripted event yielded by an open stream."
+  @type stream_event :: {:frame, binary()} | :done | {:error, Error.t()}
+
+  @typedoc "Scripted reply returned when a stream is opened."
+  @type stream_reply :: {:ok, [stream_event()]} | {:error, Error.t()}
+
   @typedoc "Concrete connection handle returned by `connect/3`."
   @opaque conn :: %__MODULE__{fake: pid(), node_id: node_id(), ref: reference()}
+
+  defmodule Stream do
+    @moduledoc false
+
+    @enforce_keys [:fake, :node_id, :ref]
+    defstruct [:fake, :node_id, :ref]
+  end
+
+  @typedoc "Concrete stream handle returned by `stream_open/4`."
+  @opaque stream :: %Stream{fake: pid(), node_id: node_id(), ref: reference()}
 
   @enforce_keys [:fake, :node_id, :ref]
   defstruct [:fake, :node_id, :ref]
@@ -114,6 +135,22 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @doc """
+  Appends a scripted stream-open reply for `node_id`.
+
+  Successful stream scripts must include `:done` to terminate cleanly. The
+  fake returns each queued event in order, and closes the handle when it sees
+  `:done` or a scripted transport error.
+  """
+  @spec script_stream(pid(), node_id(), stream_reply()) :: :ok
+  def script_stream(fake, node_id, {:ok, events}) when is_list(events) do
+    GenServer.call(fake, {:script, {:stream, node_id}, {:ok, events}})
+  end
+
+  def script_stream(fake, node_id, {:error, %Error{}} = reply) do
+    GenServer.call(fake, {:script, {:stream, node_id}, reply})
+  end
+
+  @doc """
   Marks `node_id` as disconnected. Subsequent `info/2` and `command/2`
   calls on connections addressing that node return a `:network_error`
   without consuming any script entry.
@@ -159,6 +196,15 @@ defmodule Aerospike.Transport.Fake do
   @spec close_count(pid(), node_id()) :: non_neg_integer()
   def close_count(fake, node_id) do
     GenServer.call(fake, {:close_count, node_id})
+  end
+
+  @doc """
+  Returns the number of times `stream_close/1` was invoked for a stream
+  addressing `node_id`.
+  """
+  @spec stream_close_count(pid(), node_id()) :: non_neg_integer()
+  def stream_close_count(fake, node_id) do
+    GenServer.call(fake, {:stream_close_count, node_id})
   end
 
   @doc """
@@ -228,6 +274,24 @@ defmodule Aerospike.Transport.Fake do
     GenServer.call(fake, {:consume, ref, {:command, deadline_ms, opts}})
   end
 
+  @impl Aerospike.NodeTransport
+  def stream_open(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
+      when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
+             deadline_ms >= 0 and is_list(opts) do
+    GenServer.call(fake, {:consume, ref, {:stream_open, request, deadline_ms, opts}})
+  end
+
+  @impl Aerospike.NodeTransport
+  def stream_read(%Stream{fake: fake, ref: ref}, deadline_ms)
+      when is_integer(deadline_ms) and deadline_ms >= 0 do
+    GenServer.call(fake, {:stream_read, ref, deadline_ms})
+  end
+
+  @impl Aerospike.NodeTransport
+  def stream_close(%Stream{fake: fake, ref: ref}) do
+    GenServer.call(fake, {:stream_close, ref})
+  end
+
   ## GenServer callbacks
 
   @impl GenServer
@@ -238,9 +302,11 @@ defmodule Aerospike.Transport.Fake do
       connect_scripts: %{},
       connect_counts: %{},
       close_counts: %{},
+      stream_close_counts: %{},
       last_command_deadlines: %{},
       last_command_opts: %{},
       conns: %{},
+      streams: %{},
       disconnected: MapSet.new(),
       default_reply: Keyword.get(opts, :default_reply, default_no_script_reply())
     }
@@ -286,6 +352,10 @@ defmodule Aerospike.Transport.Fake do
     {:reply, Map.get(state.close_counts, node_id, 0), state}
   end
 
+  def handle_call({:stream_close_count, node_id}, _from, state) do
+    {:reply, Map.get(state.stream_close_counts, node_id, 0), state}
+  end
+
   def handle_call({:last_command_deadline, node_id}, _from, state) do
     {:reply, Map.get(state.last_command_deadlines, node_id), state}
   end
@@ -314,6 +384,51 @@ defmodule Aerospike.Transport.Fake do
       end
 
     {:reply, :ok, %{state | conns: Map.delete(state.conns, ref)}}
+  end
+
+  def handle_call({:stream_read, ref, deadline_ms}, _from, state) do
+    with {:ok, %{node_id: node_id}} <- fetch_stream(state, ref),
+         :ok <- check_connected(state, node_id) do
+      state = record_stream_read_deadline(state, node_id, deadline_ms)
+      {reply, state} = consume_stream_event(state, ref, node_id)
+      {:reply, reply, state}
+    else
+      {:error, %Error{}} = err -> {:reply, err, state}
+    end
+  end
+
+  def handle_call({:stream_close, ref}, _from, state) do
+    state =
+      case Map.fetch(state.streams, ref) do
+        {:ok, {node_id, _events}} -> bump_stream_close_count(state, node_id)
+        :error -> state
+      end
+
+    {:reply, :ok, %{state | streams: Map.delete(state.streams, ref)}}
+  end
+
+  def handle_call({:consume, ref, {:stream_open, request, deadline_ms, opts}}, _from, state) do
+    with {:ok, node_id} <- fetch_conn(state, ref),
+         :ok <- check_connected(state, node_id) do
+      state = record_stream_open_deadline(state, node_id, deadline_ms, opts)
+      {reply, state} = consume_script(state, node_id, {:stream_open, request, deadline_ms, opts})
+
+      case reply do
+        {:ok, events} ->
+          stream_ref = make_ref()
+          stream = %Stream{fake: self(), node_id: node_id, ref: stream_ref}
+          streams = Map.put(state.streams, stream_ref, {node_id, :queue.from_list(events)})
+          {:reply, {:ok, stream}, %{state | streams: streams}}
+
+        {:error, %Error{}} = err ->
+          {:reply, err, state}
+
+        other ->
+          {:reply, other, state}
+      end
+    else
+      {:error, %Error{}} = err -> {:reply, err, state}
+    end
   end
 
   def handle_call({:consume, ref, kind}, _from, state) do
@@ -420,6 +535,7 @@ defmodule Aerospike.Transport.Fake do
 
   defp script_key(node_id, {:info, commands}), do: {:info, node_id, commands}
   defp script_key(node_id, {:command, _deadline_ms, _opts}), do: {:command, node_id}
+  defp script_key(node_id, {:stream_open, _request, _deadline_ms, _opts}), do: {:stream, node_id}
 
   defp record_command_deadline(state, node_id, {:command, deadline_ms, opts}) do
     %{
@@ -430,6 +546,47 @@ defmodule Aerospike.Transport.Fake do
   end
 
   defp record_command_deadline(state, _node_id, {:info, _commands}), do: state
+
+  defp record_stream_open_deadline(state, _node_id, _deadline_ms, _opts), do: state
+  defp record_stream_read_deadline(state, _node_id, _deadline_ms), do: state
+
+  defp bump_stream_close_count(state, node_id) do
+    counts = Map.update(state.stream_close_counts, node_id, 1, &(&1 + 1))
+    %{state | stream_close_counts: counts}
+  end
+
+  defp fetch_stream(state, ref) do
+    case Map.fetch(state.streams, ref) do
+      {:ok, {node_id, events}} -> {:ok, %{node_id: node_id, events: events}}
+      :error -> {:error, closed_stream_error()}
+    end
+  end
+
+  defp consume_stream_event(state, ref, node_id) do
+    case Map.fetch(state.streams, ref) do
+      {:ok, {^node_id, events}} ->
+        case :queue.out(events) do
+          {{:value, {:frame, bytes}}, rest} ->
+            streams = Map.put(state.streams, ref, {node_id, rest})
+            {{:ok, bytes}, %{state | streams: streams}}
+
+          {{:value, :done}, _rest} ->
+            {:done, %{state | streams: Map.delete(state.streams, ref)}}
+
+          {{:value, {:error, %Error{}} = err}, _rest} ->
+            {err, %{state | streams: Map.delete(state.streams, ref)}}
+
+          {:empty, _} ->
+            {state.default_reply, state}
+        end
+
+      :error ->
+        {{:error, closed_stream_error()}, state}
+
+      {:ok, {_other_node_id, _events}} ->
+        {{:error, closed_stream_error()}, state}
+    end
+  end
 
   defp default_no_script_reply do
     {:error,
@@ -464,6 +621,13 @@ defmodule Aerospike.Transport.Fake do
     %Error{
       code: :network_error,
       message: "Aerospike.Transport.Fake: connection handle closed or unknown"
+    }
+  end
+
+  defp closed_stream_error do
+    %Error{
+      code: :network_error,
+      message: "Aerospike.Transport.Fake: stream handle closed or unknown"
     }
   end
 
