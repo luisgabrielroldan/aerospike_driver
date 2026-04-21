@@ -61,10 +61,9 @@ defmodule Aerospike.Get do
   alias Aerospike.Record
   alias Aerospike.RetryPolicy
   alias Aerospike.Router
-  alias Aerospike.Telemetry
   alias Aerospike.Tender
-
-  @default_timeout 5_000
+  alias Aerospike.UnaryCommand
+  alias Aerospike.UnaryExecutor
 
   @type option ::
           {:timeout, non_neg_integer()}
@@ -99,21 +98,26 @@ defmodule Aerospike.Get do
   def execute(tender, key, bins, opts \\ [])
 
   def execute(tender, %Key{} = key, :all, opts) do
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
     tables = Tender.tables(tender)
     transport = Tender.transport(tender)
-    retry_policy = RetryPolicy.merge(RetryPolicy.load(tables.meta), opts)
+
+    executor =
+      UnaryExecutor.new!(
+        base_policy: RetryPolicy.load(tables.meta),
+        command_opts: opts,
+        on_rebalance: fn -> trigger_tend_async(tender) end
+      )
 
     ctx = %{
       tender: tender,
       tables: tables,
       transport: transport,
-      policy: retry_policy,
-      key: key,
-      deadline: monotonic_now() + timeout
+      key: key
     }
 
-    attempt_loop(ctx, _attempt = 0, _last_error = nil)
+    UnaryExecutor.run(executor, fn retry_ctx, attempt ->
+      run_attempt(ctx, retry_ctx, attempt)
+    end)
   end
 
   def execute(_tender, %Key{}, _bins, _opts) do
@@ -124,111 +128,42 @@ defmodule Aerospike.Get do
      }}
   end
 
-  defp attempt_loop(ctx, attempt, last_error) do
-    cond do
-      attempt > ctx.policy.max_retries ->
-        exhausted(last_error, :max_retries)
-
-      budget_exhausted?(ctx.deadline) ->
-        exhausted(last_error, :deadline)
-
-      true ->
-        run_attempt(ctx, attempt, last_error)
-    end
-  end
-
-  defp run_attempt(ctx, attempt, last_error) do
-    case Router.pick_for_read(ctx.tables, ctx.key, ctx.policy.replica_policy, attempt) do
+  defp run_attempt(ctx, retry_ctx, attempt) do
+    case Router.pick_for_read(ctx.tables, ctx.key, retry_ctx.policy.replica_policy, attempt) do
       {:ok, node_name} ->
-        dispatch(ctx, node_name, attempt)
+        {node_name, dispatch(ctx, retry_ctx, node_name, attempt)}
 
       {:error, _reason} = routing_error ->
-        handle_classification(ctx, nil, attempt, routing_error, last_error)
+        {nil, routing_error}
     end
   end
 
-  defp dispatch(ctx, node_name, attempt) do
+  defp dispatch(ctx, retry_ctx, node_name, attempt) do
     case Tender.node_handle(ctx.tender, node_name) do
       {:ok, handle} ->
-        check_breaker(ctx, node_name, handle, attempt)
+        check_breaker(ctx, retry_ctx, node_name, handle, attempt)
 
       {:error, :unknown_node} = err ->
-        handle_classification(ctx, node_name, attempt, err)
+        err
     end
   end
 
-  defp check_breaker(ctx, node_name, handle, attempt) do
+  defp check_breaker(ctx, retry_ctx, node_name, handle, attempt) do
     case CircuitBreaker.allow?(handle.counters, handle.breaker) do
       :ok ->
-        remaining = remaining_budget(ctx.deadline)
+        remaining = UnaryExecutor.remaining_budget(retry_ctx)
         command_opts = [use_compression: handle.use_compression, attempt: attempt]
 
-        result =
-          NodePool.checkout!(
-            node_name,
-            handle.pool,
-            fn conn -> do_get(ctx.transport, conn, ctx.key, remaining, command_opts) end,
-            remaining
-          )
-
-        handle_classification(ctx, node_name, attempt, result)
+        NodePool.checkout!(
+          node_name,
+          handle.pool,
+          fn conn -> do_get(ctx.transport, conn, ctx.key, remaining, command_opts) end,
+          remaining
+        )
 
       {:error, %Error{code: :circuit_open}} = err ->
-        handle_classification(ctx, node_name, attempt, err)
+        err
     end
-  end
-
-  defp handle_classification(ctx, node_name, attempt, result, last_error \\ nil) do
-    case RetryPolicy.classify(result) do
-      %{bucket: :ok} ->
-        result
-
-      %{bucket: :rebalance, retry_classification: classification} ->
-        trigger_tend_async(ctx.tender)
-        retry_after_error(ctx, node_name, attempt, result, classification)
-
-      %{bucket: :transport, retry_classification: classification} ->
-        retry_after_error(ctx, node_name, attempt, result, classification)
-
-      %{bucket: :routing_refusal} ->
-        fatal(last_error, result)
-
-      %{bucket: :server_fatal} ->
-        result
-    end
-  end
-
-  defp retry_after_error(ctx, node_name, attempt, err, classification) do
-    maybe_sleep(ctx.policy)
-    next_attempt = attempt + 1
-
-    emit_retry_event(ctx, node_name, next_attempt, classification)
-
-    attempt_loop(ctx, next_attempt, err)
-  end
-
-  # Fires `[:aerospike, :retry, :attempt]` for every retry beyond the
-  # first. The `next_attempt` index reflects the attempt the loop is
-  # about to run, matching the zero-indexed `:attempt` in the retry
-  # driver's bookkeeping. `:remaining_budget_ms` is the monotonic
-  # budget left after the sleep above, not the wall-clock budget the
-  # caller passed in.
-  defp emit_retry_event(ctx, node_name, next_attempt, classification) do
-    :telemetry.execute(
-      Telemetry.retry_attempt(),
-      %{remaining_budget_ms: max(remaining_budget(ctx.deadline), 0)},
-      %{
-        classification: classification,
-        attempt: next_attempt,
-        node_name: node_name
-      }
-    )
-  end
-
-  defp maybe_sleep(%{sleep_between_retries_ms: 0}), do: :ok
-
-  defp maybe_sleep(%{sleep_between_retries_ms: ms}) when is_integer(ms) and ms > 0 do
-    Process.sleep(ms)
   end
 
   # Fire a tend cycle without blocking the command path. Retaining the
@@ -250,30 +185,6 @@ defmodule Aerospike.Get do
     :ok
   end
 
-  defp exhausted(nil, reason) do
-    {:error,
-     %Error{
-       code: :timeout,
-       message: "Aerospike.Get: retry budget exhausted (#{reason}) with no attempts succeeding"
-     }}
-  end
-
-  defp exhausted(last_error, _reason), do: last_error
-
-  defp fatal(_last_error, routing_error) do
-    # Routing atoms (`:cluster_not_ready`, `:no_master`) surface directly.
-    # A prior transport error is not substituted because the router's
-    # verdict supersedes it: if we no longer have any replica to target,
-    # the last transport error is irrelevant.
-    routing_error
-  end
-
-  defp budget_exhausted?(deadline), do: remaining_budget(deadline) <= 0
-
-  defp remaining_budget(deadline), do: deadline - monotonic_now()
-
-  defp monotonic_now, do: System.monotonic_time(:millisecond)
-
   # Returned tuple shape matches `NodePool.checkout!/3`'s `fun` contract:
   # `{result_for_caller, checkin_value}`.
   #
@@ -285,29 +196,14 @@ defmodule Aerospike.Get do
   #     path. Parse errors still close the worker, but do not count
   #     against node health.
   defp do_get(transport, conn, key, deadline_ms, command_opts) do
-    request = encode_read(key)
+    command =
+      UnaryCommand.new!(
+        name: __MODULE__,
+        build_request: &encode_read/1,
+        parse_response: &parse_record_response/2
+      )
 
-    case transport.command(conn, request, deadline_ms, command_opts) do
-      {:ok, body} ->
-        case decode_as_msg(body) do
-          {:ok, msg} ->
-            {Response.parse_record_response(msg, key), conn}
-
-          {:error, %Error{}} = err ->
-            {err, checkin_value(err, conn)}
-        end
-
-      {:error, %Error{}} = err ->
-        {err, checkin_value(err, conn)}
-    end
-  end
-
-  defp checkin_value(result, conn) do
-    case RetryPolicy.classify(result) do
-      %{close_connection?: true, node_failure?: true} -> {:close, :failure}
-      %{close_connection?: true} -> :close
-      _ -> conn
-    end
+    UnaryCommand.run_transport(command, transport, conn, key, deadline_ms, command_opts)
   end
 
   defp encode_read(%Key{} = key) do
@@ -324,6 +220,16 @@ defmodule Aerospike.Get do
 
       {:error, reason} ->
         {:error, %Error{code: :parse_error, message: "failed to decode AS_MSG reply: #{reason}"}}
+    end
+  end
+
+  defp parse_record_response(body, key) do
+    case decode_as_msg(body) do
+      {:ok, msg} ->
+        Response.parse_record_response(msg, key)
+
+      {:error, %Error{}} = err ->
+        err
     end
   end
 end
