@@ -1,8 +1,8 @@
 services:
   aerospike:
     image: aerospike/aerospike-server:latest
-    container_name: aerospike_spike
-    hostname: aerospike_spike
+    container_name: aerospike-driver
+    hostname: aerospike-driver
     ports:
       - "3000:3000"
       - "3001:3001"

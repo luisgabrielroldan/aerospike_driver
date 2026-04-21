@@ -1,14 +1,16 @@
 defmodule Aerospike do
   @moduledoc """
-  Public entry point for the spike client.
+  Public entry point for the Aerospike Elixir driver.
 
-  This repo is the architecture-review surface for the future Aerospike
-  Elixir client, not the shipped package. The useful contract here is
-  narrower than "full client parity": start-up should be explicit,
-  supported command families should be discoverable, and the named
-  proof suites should match the public surface.
+  Internally this codebase may still be called "the spike", but the
+  public package identity is the new `aerospike_driver` intended to
+  replace the older driver that remains in the workspace as a migration
+  reference. The useful contract here is still narrower than "full
+  client parity": start-up should be explicit, supported command
+  families should be discoverable, and the named proof suites should
+  match the public surface.
 
-  The spike proves a small unary command family on one shared execution
+  The driver currently proves a small unary command family on one shared execution
   path plus batch, scan, query, and transaction helpers over the same
   supervised cluster runtime:
 
@@ -169,7 +171,7 @@ defmodule Aerospike do
   @doc """
   Reads `key` from `cluster`.
 
-  The spike currently supports only `bins: :all`. Named-bin reads remain
+  The driver currently supports only `bins: :all`. Named-bin reads remain
   out of scope until the unary command surface proves they fall out of
   the same request/parse contract without extra public API work.
 
@@ -206,7 +208,7 @@ defmodule Aerospike do
   that key (`{:error, %Aerospike.Error{}}`, `{:error, :no_master}`, or
   `{:error, :unknown_node}`).
 
-  The spike currently supports only `bins: :all` and only `:timeout` in
+  The driver currently supports only `bins: :all` and only `:timeout` in
   `opts`. Retry-driven regrouping stays disabled until the batch reroute
   path can honestly split a failed grouped request back across nodes.
   """

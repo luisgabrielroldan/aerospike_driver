@@ -2,7 +2,7 @@ defmodule Aerospike.Integration.NodeKillTest do
   @moduledoc """
   Integration test — node killed mid-traffic and brought back.
 
-  Kills the local `aerospike_spike` docker container while a cluster
+  Kills the local `aerospike-driver` docker container while a cluster
   runs against it, then asserts that the cluster substrate behaves
   correctly:
 
@@ -33,7 +33,7 @@ defmodule Aerospike.Integration.NodeKillTest do
   alias Aerospike.Tender
   alias Aerospike.Transport.Tcp
 
-  @container "aerospike_spike"
+  @container "aerospike-driver"
   @host "localhost"
   @port 3000
   @namespace "test"

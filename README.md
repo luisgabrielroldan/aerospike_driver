@@ -1,22 +1,22 @@
-# Aerospike Spike
+# Aerospike Driver
 
-`aerospike_driver_spike/` is the review repo for the Aerospike Elixir client
-architecture. It is where startup contracts, runtime instrumentation, and
-command-shape decisions are exercised before they are carried into the shipped
-library.
+`aerospike_driver_spike/` is the active Aerospike Elixir client library.
+Internally this codebase may still be called "the spike", but the public
+package identity is `aerospike_driver`: the intended replacement for the older
+driver that remains in this workspace as a migration/reference repo.
 
-This repo is not the publishable client and it does not promise a stable public
-API. The narrower review question is whether the codebase presents a coherent,
-honest operator and developer surface for the command families it already
-proves.
+The goal is a production-grade, OTP-native Aerospike client with a sharper
+runtime foundation than the legacy driver: supervised cluster ownership,
+deterministic routing, reusable unary execution, explicit streaming paths, and
+an honest test matrix tied to real Aerospike environments.
 
-## What This Repo Proves
+## Current Surface
 
-The current public entry point proves one supervised cluster runtime plus these
-command families:
+The library currently proves these command families through the public
+`Aerospike` entry point:
 
 - Unary CRUD: `get/3`, `put/4`, `exists/2`, `touch/2`, `delete/2`
-- Unary operate: `operate/4` with a narrow write/read subset plus
+- Unary operate: `operate/4` with the currently admitted write/read subset plus
   `Aerospike.Op`, `Aerospike.Op.List`, and `Aerospike.Op.Map`
 - Batch reads: `batch_get/4`
 - Scans: `stream!/3`, `all/3`, `count/3`, and the `*_node` variants
@@ -28,24 +28,11 @@ command families:
 - Transactions: `transaction/2`, `transaction/3`, `commit/2`, `abort/2`,
   `txn_status/2`
 
-The runtime also proves startup validation at `Aerospike.start_link/1`,
-supervised node pools and Tender-driven discovery, and telemetry across
-checkout, transport, info/login, retry, and tend paths.
+The runtime also proves:
 
-## Supported Validation Profiles
-
-Support in this repo is profile-based, not a semver promise over Aerospike
-server versions. Both compose files still resolve `:latest`, so the honest
-claim is limited to the exact images exercised during validation.
-
-| Profile | Purpose | Where it runs |
-| --- | --- | --- |
-| CE single-node | default local proof for unary, write-family, and index-query flows | `docker compose up -d` in this repo |
-| CE three-node cluster | cluster routing, batch, and scan proofs | `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `../aerospike_driver/` |
-| EE single-node variants | transactions, TLS, auth, and combined operator-surface smoke | `docker compose --profile enterprise up -d ...` in this repo |
-
-Reviewers should record the resolved image ids when they run the final gate.
-This repo does not yet pin an Aerospike version matrix.
+- Startup validation at `Aerospike.start_link/1`
+- Supervised node pools and Tender-driven discovery
+- Telemetry across checkout, transport, info/login, retry, and tend paths
 
 ## Quick Start
 
@@ -60,7 +47,7 @@ Then open `iex -S mix` in this repo and start one cluster manually:
 ```elixir
 {:ok, _sup} =
   Aerospike.start_link(
-    name: :spike,
+    name: :aerospike,
     transport: Aerospike.Transport.Tcp,
     seeds: [{"127.0.0.1", 3000}],
     namespaces: ["test"],
@@ -68,25 +55,55 @@ Then open `iex -S mix` in this repo and start one cluster manually:
     pool_size: 2
   )
 
-:ok = Aerospike.Tender.tend_now(:spike)
+:ok = Aerospike.Tender.tend_now(:aerospike)
 
 key = Aerospike.Key.new("test", "demo", "hello")
 
-{:ok, _meta} = Aerospike.put(:spike, key, %{"count" => 1})
-{:ok, record} = Aerospike.get(:spike, key)
+{:ok, _meta} = Aerospike.put(:aerospike, key, %{"count" => 1})
+{:ok, record} = Aerospike.get(:aerospike, key)
 ```
 
-The public startup surface is intentionally small. Required options are
-`:name`, `:transport`, `:seeds`, and `:namespaces`. Cluster options such as
-retry, pool, breaker, and auth settings are validated synchronously by
-`Aerospike.start_link/1` through `Aerospike.Supervisor`.
+Required startup options are `:name`, `:transport`, `:seeds`, and
+`:namespaces`. Cluster options such as retry, pool, breaker, and auth settings
+are validated synchronously by `Aerospike.start_link/1` through
+`Aerospike.Supervisor`.
+
+## Runtime Model
+
+This client is deliberately OTP-first:
+
+- `Aerospike.Supervisor` owns cluster startup and validation
+- `Aerospike.Tender` is the single writer for mutable cluster topology state
+- `Aerospike.NodeSupervisor` and `Aerospike.NodePool` own per-node transport
+  pools
+- routing decisions are derived from published cluster state rather than hidden
+  mutable command-local state
+
+That separation is the main architectural difference from the legacy driver the
+workspace still carries as a reference implementation.
+
+## Supported Validation Profiles
+
+Support is currently profile-based, not a semver promise over a pinned
+Aerospike server matrix. The compose stacks still resolve `:latest`, so the
+honest support claim is limited to the exact images exercised during
+validation.
+
+| Profile | Purpose | Where it runs |
+| --- | --- | --- |
+| CE single-node | default local proof for unary, write-family, and index-query flows | `docker compose up -d` in this repo |
+| CE three-node cluster | cluster routing, batch, and scan proofs | `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `../aerospike_driver/` |
+| EE single-node variants | transactions, TLS, auth, and combined operator-surface smoke | `docker compose --profile enterprise up -d ...` in this repo |
+
+Reviewers should record the resolved image ids when they run the final gate.
 
 ## Command Boundaries
 
-This repo is deliberately narrower than a full Aerospike client.
+This library is not yet claiming full Aerospike feature parity.
 
 - `batch_get/4` supports only `bins: :all` and `:timeout`
-- `operate/4` proves simple tuple operations plus the list/map CDT helpers
+- `operate/4` supports the currently admitted tuple/CDT surface, not the full
+  historical operate breadth
 - query filters use `Aerospike.Filter` values instead of pre-encoded bytes
 - broader expression filters, general UDF package management, and a wider
   policy surface remain deferred
@@ -98,14 +115,14 @@ This repo is deliberately narrower than a full Aerospike client.
 - `%Aerospike.Txn{}` is an immutable handle backed by ETS tracking in the
   started cluster, not a transaction owner process
 
-The write-family proof does not claim broad TTL semantics yet. The live
-evidence only covers the currently exercised paths.
+The write-family proof does not yet claim broad TTL semantics beyond the paths
+currently exercised in live validation.
 
 ## Telemetry Contract
 
-The spike emits a fixed telemetry taxonomy under `[:aerospike, ...]`. Use
-`Aerospike.Telemetry` as the contract source instead of copying raw lists into
-handlers or metrics modules.
+The library emits a fixed telemetry taxonomy under `[:aerospike, ...]`. Use
+`Aerospike.Telemetry` as the contract source instead of copying raw event lists
+into handlers or metrics modules.
 
 - Pool checkout: `[:aerospike, :pool, :checkout, :start | :stop]`
 - Command transport: `[:aerospike, :command, :send, ...]` and
@@ -127,7 +144,7 @@ Common metadata:
 - `:bytes` on command-recv `:stop`
 
 ```elixir
-handler_id = "aerospike-spike-logger"
+handler_id = "aerospike-driver-logger"
 
 :ok =
   :telemetry.attach_many(
@@ -144,27 +161,44 @@ Use `Aerospike.Telemetry.handler_events/0` for whole-surface subscriptions and
 derive narrower families from `span_prefixes/0` or the individual helper
 functions when you only want part of the contract.
 
-## Review Proof Commands
+## Development And Validation
 
 Run commands from this directory unless the command explicitly says otherwise.
+
+The repo exposes explicit test categories so the command surface matches the
+environments the suite actually needs:
+
+- `mix test.unit` — deterministic default suite, no live Aerospike required
+- `mix test.coverage` — deterministic suite with the configured coverage gate
+- `mix test.integration.ce` — live Community Edition single-node proofs
+- `mix test.integration.cluster` — live three-node cluster proofs
+- `mix test.integration.enterprise` — live Enterprise Edition proofs
+- `mix test.integration.all` — all live proofs
+- `mix test.live` — CE single-node + cluster live proofs, but not EE
+- `mix validate` — format, compile, credo, unit, and coverage gate
+
+If you prefer one operator-facing entry point, the repo-local `Makefile` wraps
+the same categories:
+
+- `make test-unit`, `make test-coverage`, `make validate`
+- `make deps-up`, `make deps-cluster-up`, `make deps-enterprise-up`
+- `make test-ce`, `make test-cluster`, `make test-enterprise`
+- `make test-live`, `make test-all`, `make deps-down`
 
 Deterministic baseline:
 
 ```bash
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix credo --strict
-mix test --seed 0
-mix test --cover --seed 0
+mix test.unit
+mix test.coverage
+mix validate
 mix dialyzer
 ```
 
 Community Edition single-node live proofs:
 
 ```bash
-mix test --include integration test/integration/get_test.exs --seed 0
-mix test --include integration test/integration/write_family_test.exs --seed 0
-mix test --include integration test/integration/index_query_test.exs --seed 0
+docker compose up -d
+mix test.integration.ce
 ```
 
 Community Edition three-node cluster proofs:
@@ -172,8 +206,7 @@ Community Edition three-node cluster proofs:
 ```bash
 docker compose -f ../aerospike_driver/docker-compose.yml --profile cluster down -v
 docker compose -f ../aerospike_driver/docker-compose.yml --profile cluster up -d aerospike aerospike2 aerospike3
-mix test --include integration --include cluster test/integration/batch_get_test.exs --seed 0
-mix test --include integration --include cluster test/integration/scan_test.exs --seed 0
+mix test.integration.cluster
 ```
 
 Enterprise Edition proofs:
@@ -181,14 +214,16 @@ Enterprise Edition proofs:
 ```bash
 docker compose --profile enterprise down -v
 docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki aerospike-ee-security aerospike-ee-security-tls
-mix test --include integration --include enterprise test/integration/txn_test.exs --seed 0
-mix test --include integration --include enterprise test/integration/tls_test.exs --seed 0
-mix test --include integration --include enterprise test/integration/auth_test.exs --seed 0
-mix test --include integration --include enterprise test/integration/operator_surface_smoke_test.exs --seed 0
+mix test.integration.enterprise
 ```
 
-The deterministic coverage threshold is configured as part of the repo surface.
-If `mix test --cover --seed 0` fails, the review gate is still open.
+All live proofs:
+
+```bash
+mix test.integration.all
+```
+
+If `mix test.coverage` fails, the review gate is still open.
 
 ## Where To Look In Code
 
