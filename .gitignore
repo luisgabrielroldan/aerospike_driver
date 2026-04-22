@@ -22,3 +22,6 @@ aerospike_spike-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 priv/plts/
+
+# Benchmark run artifacts.
+/bench/results/
