@@ -779,11 +779,11 @@ defmodule Aerospike.NodePoolTest do
                  )
 
         assert_receive {:event, [:aerospike, :pool, :checkout, :start], _m,
-                        %{node_name: @node_name}},
+                        %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ctx}},
                        500
 
         assert_receive {:event, [:aerospike, :pool, :checkout, :stop], %{duration: _},
-                        %{node_name: @node_name}},
+                        %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ^ctx}},
                        500
       after
         :telemetry.detach(handler)
@@ -831,10 +831,12 @@ defmodule Aerospike.NodePoolTest do
                    1_000
                  )
 
-        assert_receive {:event, [:aerospike, :pool, :checkout, :start], _m, %{node_name: nil}},
+        assert_receive {:event, [:aerospike, :pool, :checkout, :start], _m,
+                        %{node_name: nil, pool_pid: ^pool, telemetry_span_context: ctx}},
                        500
 
-        assert_receive {:event, [:aerospike, :pool, :checkout, :stop], _m, %{node_name: nil}},
+        assert_receive {:event, [:aerospike, :pool, :checkout, :stop], _m,
+                        %{node_name: nil, pool_pid: ^pool, telemetry_span_context: ^ctx}},
                        500
       after
         :telemetry.detach(handler)
@@ -863,7 +865,9 @@ defmodule Aerospike.NodePoolTest do
                         %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ^ctx}},
                        500
 
-        refute_receive {:event, [:aerospike, :pool, :checkout, :stop], _, _}, 100
+        refute_receive {:event, [:aerospike, :pool, :checkout, :stop], _,
+                        %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ^ctx}},
+                       100
       after
         :telemetry.detach(handler)
       end

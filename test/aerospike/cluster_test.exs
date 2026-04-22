@@ -122,7 +122,12 @@ defmodule Aerospike.ClusterTest do
 
   defp stop_process(pid) do
     if Process.alive?(pid) do
-      GenServer.stop(pid)
+      try do
+        GenServer.stop(pid)
+      catch
+        :exit, {:noproc, _} -> :ok
+        :exit, :noproc -> :ok
+      end
     else
       :ok
     end

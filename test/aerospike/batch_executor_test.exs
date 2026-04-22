@@ -71,13 +71,16 @@ defmodule Aerospike.BatchExecutorTest do
     test "transport retry reroutes one grouped node request without aborting the batch" do
       parent = self()
       handler = attach_retry_handler(:batch_transport_retry)
+      node_a = unique_node_name("A1")
+      node_b = unique_node_name("B1")
+      node_c = unique_node_name("C1")
 
       try do
         responses =
           start_responses!(%{
-            "A1" => [{:error, Error.from_result_code(:network_error, message: "boom-a1")}],
-            "B1" => [{:ok, "body-b1"}],
-            "C1" => [{:ok, "body-c1"}]
+            node_a => [{:error, Error.from_result_code(:network_error, message: "boom-a1")}],
+            node_b => [{:ok, "body-b1"}],
+            node_c => [{:ok, "body-c1"}]
           })
 
         command =
@@ -93,34 +96,37 @@ defmodule Aerospike.BatchExecutorTest do
             executor_for(max_retries: 1),
             command,
             :batch,
-            [node_request("A1", [0]), node_request("C1", [1])],
+            [node_request(node_a, [0]), node_request(node_c, [1])],
             ctx(parent, responses,
               reroute_request: fn
-                :transport, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: "B1"}}
+                :transport, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: node_b}}
                 kind, %NodeRequest{} = request, _attempt -> {:ok, %{request | payload: kind}}
               end
             )
           )
 
         assert result == [
-                 {0, "B1", 1, {:ok, "body-b1"}},
-                 {1, "C1", 0, {:ok, "body-c1"}}
+                 {0, node_b, 1, {:ok, "body-b1"}},
+                 {1, node_c, 0, {:ok, "body-c1"}}
                ]
 
         assert_receive {:event, [:aerospike, :retry, :attempt], %{remaining_budget_ms: budget},
-                        %{classification: :transport, attempt: 1, node_name: "A1"}},
+                        %{classification: :transport, attempt: 1, node_name: ^node_a}},
                        500
 
         assert is_integer(budget) and budget >= 0
 
-        assert_receive {:transport, "A1", "batch:A1:0", _deadline,
+        assert_receive {:transport, ^node_a, request_a, _deadline,
                         [use_compression: false, attempt: 0]}
+        assert request_a == "batch:#{node_a}:0"
 
-        assert_receive {:transport, "B1", "batch:B1:0", _deadline,
+        assert_receive {:transport, ^node_b, request_b, _deadline,
                         [use_compression: false, attempt: 1]}
+        assert request_b == "batch:#{node_b}:0"
 
-        assert_receive {:transport, "C1", "batch:C1:1", _deadline,
+        assert_receive {:transport, ^node_c, request_c, _deadline,
                         [use_compression: false, attempt: 0]}
+        assert request_c == "batch:#{node_c}:1"
       after
         :telemetry.detach(handler)
       end
@@ -129,13 +135,16 @@ defmodule Aerospike.BatchExecutorTest do
     test "rebalance retries call the tend hook and preserve per-node outcomes" do
       parent = self()
       handler = attach_retry_handler(:batch_rebalance_retry)
+      node_a = unique_node_name("A1")
+      node_b = unique_node_name("B1")
+      node_c = unique_node_name("C1")
 
       try do
         responses =
           start_responses!(%{
-            "A1" => [{:error, Error.from_result_code(:partition_unavailable)}],
-            "B1" => [{:ok, "body-b1"}],
-            "C1" => [{:error, Error.from_result_code(:key_not_found)}]
+            node_a => [{:error, Error.from_result_code(:partition_unavailable)}],
+            node_b => [{:ok, "body-b1"}],
+            node_c => [{:error, Error.from_result_code(:key_not_found)}]
           })
 
         command =
@@ -151,34 +160,37 @@ defmodule Aerospike.BatchExecutorTest do
             executor_for(max_retries: 1, on_rebalance: fn -> send(parent, :tend_now) end),
             command,
             :batch,
-            [node_request("A1", [0]), node_request("C1", [1])],
+            [node_request(node_a, [0]), node_request(node_c, [1])],
             ctx(parent, responses,
               reroute_request: fn
-                :rebalance, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: "B1"}}
+                :rebalance, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: node_b}}
                 _kind, %NodeRequest{} = request, _attempt -> {:ok, request}
               end
             )
           )
 
         assert result == %{
-                 0 => {"B1", 1, {:ok, "body-b1"}},
-                 1 => {"C1", 0, {:error, Error.from_result_code(:key_not_found)}}
+                 0 => {node_b, 1, {:ok, "body-b1"}},
+                 1 => {node_c, 0, {:error, Error.from_result_code(:key_not_found)}}
                }
 
         assert_receive :tend_now
 
         assert_receive {:event, [:aerospike, :retry, :attempt], _measurements,
-                        %{classification: :rebalance, attempt: 1, node_name: "A1"}},
+                        %{classification: :rebalance, attempt: 1, node_name: ^node_a}},
                        500
 
-        assert_receive {:transport, "A1", "batch:A1:0", _deadline,
+        assert_receive {:transport, ^node_a, request_a, _deadline,
                         [use_compression: false, attempt: 0]}
+        assert request_a == "batch:#{node_a}:0"
 
-        assert_receive {:transport, "B1", "batch:B1:0", _deadline,
+        assert_receive {:transport, ^node_b, request_b, _deadline,
                         [use_compression: false, attempt: 1]}
+        assert request_b == "batch:#{node_b}:0"
 
-        assert_receive {:transport, "C1", "batch:C1:1", _deadline,
+        assert_receive {:transport, ^node_c, request_c, _deadline,
                         [use_compression: false, attempt: 0]}
+        assert request_c == "batch:#{node_c}:1"
       after
         :telemetry.detach(handler)
       end
@@ -295,6 +307,10 @@ defmodule Aerospike.BatchExecutorTest do
       )
 
     handler_id
+  end
+
+  defp unique_node_name(prefix) do
+    "#{prefix}-#{System.unique_integer([:positive])}"
   end
 
   defp start_responses!(responses_by_node) do

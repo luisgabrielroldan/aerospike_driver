@@ -15,8 +15,8 @@ defmodule Aerospike.BatchRouterTest do
     tables = %{owners: owners, node_gens: node_gens, meta: meta}
 
     on_exit(fn ->
-      for tab <- [owners, node_gens, meta], :ets.info(tab) != :undefined do
-        :ets.delete(tab)
+      for tab <- [owners, node_gens, meta] do
+        delete_table_if_present(tab)
       end
     end)
 
@@ -113,5 +113,13 @@ defmodule Aerospike.BatchRouterTest do
     Stream.iterate(0, &(&1 + 1))
     |> Stream.map(&Key.new(namespace, set, "#{seed}-#{&1}"))
     |> Enum.find(&(Key.partition_id(&1) == partition_id))
+  end
+
+  defp delete_table_if_present(tab) do
+    try do
+      :ets.delete(tab)
+    catch
+      :error, :badarg -> :ok
+    end
   end
 end
