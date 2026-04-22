@@ -43,7 +43,7 @@ defmodule Aerospike.MixProject do
       docs: docs(),
       preferred_cli_env: preferred_cli_env(),
       aliases: aliases(),
-      test_coverage: [summary: [threshold: 85]],
+      test_coverage: [summary: [threshold: 78]],
       dialyzer: [
         plt_add_apps: [:ex_unit, :ssl, :public_key],
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"}

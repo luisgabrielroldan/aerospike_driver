@@ -15,6 +15,7 @@ defmodule Aerospike.BatchExecutor do
   alias Aerospike.NodePool
   alias Aerospike.Policy
   alias Aerospike.RetryPolicy
+  alias Aerospike.Telemetry
   alias Aerospike.Tender
 
   @default_max_concurrency max(System.schedulers_online(), 1)
@@ -225,21 +226,57 @@ defmodule Aerospike.BatchExecutor do
       %{bucket: :server_fatal} ->
         %NodeResult{request: node_request, result: result, attempt: attempt}
 
-      %{bucket: :transport} ->
-        retry_after_error(executor, command, ctx, :transport, node_request, attempt, result)
+      %{bucket: :transport, retry_classification: classification} ->
+        retry_after_error(
+          executor,
+          command,
+          ctx,
+          :transport,
+          classification,
+          node_request,
+          attempt,
+          result
+        )
 
-      %{bucket: :rebalance} ->
+      %{bucket: :rebalance, retry_classification: classification} ->
         executor.on_rebalance.()
-        retry_after_error(executor, command, ctx, :rebalance, node_request, attempt, result)
+
+        retry_after_error(
+          executor,
+          command,
+          ctx,
+          :rebalance,
+          classification,
+          node_request,
+          attempt,
+          result
+        )
     end
   end
 
-  defp retry_after_error(executor, command, ctx, reroute_kind, node_request, attempt, result) do
+  defp retry_after_error(
+         executor,
+         command,
+         ctx,
+         reroute_kind,
+         classification,
+         node_request,
+         attempt,
+         result
+       ) do
     maybe_sleep(executor.policy.retry)
+    next_attempt = attempt + 1
 
-    case reroute_request(ctx, reroute_kind, node_request, attempt + 1) do
+    case reroute_request(ctx, reroute_kind, node_request, next_attempt) do
       {:ok, %NodeRequest{} = next_request} ->
-        attempt_loop(executor, command, ctx, next_request, attempt + 1, result)
+        Telemetry.emit_retry_attempt(
+          node_request.node_name,
+          next_attempt,
+          classification,
+          remaining_budget(executor)
+        )
+
+        attempt_loop(executor, command, ctx, next_request, next_attempt, result)
 
       {:error, %Error{}} = err ->
         %NodeResult{request: node_request, result: err, attempt: attempt}

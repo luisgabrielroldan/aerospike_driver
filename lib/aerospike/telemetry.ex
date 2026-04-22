@@ -5,7 +5,8 @@ defmodule Aerospike.Telemetry do
   All events live under the `[:aerospike, ...]` namespace. Callers attach
   handlers via `:telemetry.attach/4` (or `:telemetry.attach_many/4`) using
   the event names returned by the functions in this module. Emitters call
-  `:telemetry.span/3` or `:telemetry.execute/3` with those same names.
+  `:telemetry.span/3` or emit the concrete event names directly via
+  `:telemetry.execute/3` with those same names.
 
   Using the constants from here is the contract. Handler code relies on
   these exact event names and metadata keys; emitters must not invent
@@ -35,17 +36,19 @@ defmodule Aerospike.Telemetry do
   `handler_events/0`, which expands the current taxonomy into concrete
   event names suitable for `:telemetry.attach_many/4`.
 
+  For the operator-facing reference, including emitter locations and the
+  supported metadata/measurement contract for each family, see
+  `spike-docs/telemetry.md` in the workspace root.
+
   ## Taxonomy
 
   Span events (prefix + `:start | :stop | :exception`):
 
     * `[:aerospike, :pool, :checkout]` — wraps every
-      `Aerospike.NodePool.checkout!/3`. This path currently emits the
-      concrete `:start` and `:stop` names directly rather than via
-      `:telemetry.span/3`, so operators should rely on those two events,
-      not on `:exception`. Metadata: `:node_name`, `:pool_pid`,
-      `:telemetry_span_context`. Measurements: `:system_time` and
-      `:monotonic_time` on start; `:duration` on stop.
+      `Aerospike.NodePool.checkout!/3`. Metadata: `:node_name`,
+      `:pool_pid`, `:telemetry_span_context`. Measurements:
+      `:system_time` and `:monotonic_time` on start; `:duration` on
+      stop.
 
     * `[:aerospike, :command, :send]` — wraps the send side of a
       per-attempt command on the transport. Metadata: `:node_name`,
@@ -99,8 +102,8 @@ defmodule Aerospike.Telemetry do
   Event prefix for the pool-checkout span.
 
   This prefix names the checkout telemetry family. The current emitter
-  dispatches the concrete `[..., :start]` and `[..., :stop]` names
-  directly rather than routing through `:telemetry.span/3`.
+  dispatches the concrete `:start`, `:stop`, and `:exception` names
+  directly so it can keep the same metadata on every suffix.
   """
   @spec pool_checkout_span() :: [:aerospike | :pool | :checkout, ...]
   def pool_checkout_span, do: @pool_checkout_span
@@ -173,6 +176,26 @@ defmodule Aerospike.Telemetry do
   def retry_attempt, do: @retry_attempt
 
   @doc """
+  Emits one retry-attempt event beyond the first command attempt.
+
+  Unary and batch executors share this helper so the retry metadata stays
+  aligned across execution paths.
+  """
+  @spec emit_retry_attempt(String.t() | nil, non_neg_integer(), atom(), integer()) :: :ok
+  def emit_retry_attempt(node_name, attempt, classification, remaining_budget_ms)
+      when is_integer(attempt) and attempt >= 0 and is_integer(remaining_budget_ms) do
+    :telemetry.execute(
+      retry_attempt(),
+      %{remaining_budget_ms: max(remaining_budget_ms, 0)},
+      %{
+        classification: classification,
+        attempt: attempt,
+        node_name: node_name
+      }
+    )
+  end
+
+  @doc """
   Returns every span prefix in the supported telemetry taxonomy.
 
   This is the stable list for code that needs to derive concrete
@@ -205,17 +228,12 @@ defmodule Aerospike.Telemetry do
   @doc """
   Returns the concrete event names operators can attach to directly.
 
-  Span prefixes are expanded to the event names the current runtime
-  actually emits, then instant events are appended. That means the
-  pool-checkout family contributes only `:start` and `:stop`.
+  Span prefixes are expanded to the standard `:start`, `:stop`, and
+  `:exception` event names, then instant events are appended.
   """
   @spec handler_events() :: [[atom()]]
   def handler_events do
     Enum.flat_map(span_prefixes(), &span_event_names/1) ++ instant_event_names()
-  end
-
-  defp span_event_names(prefix) when prefix == @pool_checkout_span do
-    Enum.map([:start, :stop], &(prefix ++ [&1]))
   end
 
   defp span_event_names(prefix) do

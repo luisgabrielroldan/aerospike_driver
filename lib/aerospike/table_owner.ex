@@ -13,17 +13,19 @@ defmodule Aerospike.TableOwner do
 
     * `owners` — partition ownership, keyed by `{namespace, partition_id}`.
     * `node_gens` — per-node `partition-generation` values.
-    * `meta` — lock-free cluster flags (currently only `:ready`).
+    * `meta` — lock-free published cluster state (`:ready`,
+      `:retry_opts`, `:active_nodes`).
     * `txn_tracking` - transaction state for explicit multi-record transactions.
 
   After `init/1`, the TableOwner has no state beyond the `:name` and the
-  three table names, and handles no messages. Its sole purpose is to own
+  four table names, and handles no messages. Its sole purpose is to own
   the tables so they share its lifetime.
   """
 
   use GenServer
 
   alias Aerospike.PartitionMap
+  alias Aerospike.RetryPolicy
 
   @type tables :: %{owners: atom(), node_gens: atom(), meta: atom(), txn_tracking: atom()}
 
@@ -63,7 +65,7 @@ defmodule Aerospike.TableOwner do
   def via(name) when is_atom(name), do: :"#{name}_table_owner"
 
   @doc """
-  Returns the three ETS table names owned by this TableOwner.
+  Returns the ETS table names owned by this TableOwner.
   """
   @spec tables(GenServer.server()) :: tables()
   def tables(server) do
@@ -82,6 +84,8 @@ defmodule Aerospike.TableOwner do
     :ets.new(txn_tracking, [:set, :public, :named_table, read_concurrency: true])
     :ets.new(meta, [:set, :public, :named_table, read_concurrency: true])
     :ets.insert(meta, {:ready, false})
+    RetryPolicy.put(meta, RetryPolicy.defaults())
+    :ets.insert(meta, {:active_nodes, []})
 
     {:ok,
      %{

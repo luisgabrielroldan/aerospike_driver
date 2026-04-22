@@ -1,6 +1,6 @@
 defmodule Aerospike.Tender do
   @moduledoc """
-  Tend-cycle orchestrator and cluster-state public query surface.
+  Tend-cycle orchestrator plus operational runtime surface.
 
   Each cycle composes the following stages, one after the other, through a
   single process so every observable transition is serialised:
@@ -34,10 +34,12 @@ defmodule Aerospike.Tender do
   never open-codes the merge.
 
   ETS writes against the cluster-state tables (`owners`, `node_gens`,
-  `meta.:ready`) are routed through `Aerospike.PartitionMapWriter`. The
-  Tender never mutates those tables itself; every per-node `put_node_gen`,
-  `drop_node`, `delete_node_gen`, `apply_segments`, and `recompute_ready`
-  is a synchronous call into the writer so a `tend_now/1` observer sees a
+  published `meta` rows such as `:ready`, `:retry_opts`, and
+  `:active_nodes`) are routed through `Aerospike.PartitionMapWriter`.
+  The Tender never mutates those tables itself; every per-node
+  `put_node_gen`, `drop_node`, `delete_node_gen`, `apply_segments`,
+  active-node snapshot publication, and `recompute_ready` is a
+  synchronous call into the writer so a `tend_now/1` observer sees a
   fully-committed cycle.
 
   All I/O goes through the `Aerospike.NodeTransport` behaviour module
@@ -61,7 +63,6 @@ defmodule Aerospike.Tender do
   alias Aerospike.PartitionMapMerge
   alias Aerospike.PartitionMapWriter
   alias Aerospike.Policy
-  alias Aerospike.RetryPolicy
   alias Aerospike.TableOwner
   alias Aerospike.Telemetry
   alias Aerospike.TendHistogram
@@ -210,6 +211,9 @@ defmodule Aerospike.Tender do
 
   @doc """
   Returns whether every configured namespace has a complete partition map.
+
+  Read-side callers should prefer `Aerospike.Cluster.ready?/1` so the
+  named cluster seam stays the public owner of published readiness.
   """
   @spec ready?(GenServer.server()) :: boolean()
   def ready?(server) do
@@ -217,11 +221,11 @@ defmodule Aerospike.Tender do
   end
 
   @doc """
-  Returns the names of the Tender's ETS tables, intended for Router reads.
+  Returns the names of the cluster ETS tables.
 
-  The `:meta` table holds lock-free cluster state flags (currently only
-  `:ready`) so hot-path readers can consult cluster state without a
-  `GenServer.call` into the Tender.
+  Read-side callers should prefer `Aerospike.Cluster.tables/1`. This
+  wrapper remains for Tender-owned restart/orchestration paths and
+  compatibility callers that still need the published table names.
   """
   @spec tables(GenServer.server()) :: %{
           owners: atom(),
@@ -411,7 +415,8 @@ defmodule Aerospike.Tender do
     }
 
     %Policy.ClusterDefaults{retry: retry_opts} = Policy.cluster_defaults(opts)
-    RetryPolicy.put(meta_tab, retry_opts)
+    :ok = PartitionMapWriter.publish_retry_policy(writer, retry_opts)
+    :ok = PartitionMapWriter.publish_active_nodes(writer, [])
 
     user = Keyword.get(opts, :user)
     password = Keyword.get(opts, :password)
@@ -581,6 +586,7 @@ defmodule Aerospike.Tender do
         |> refresh_nodes()
         |> maybe_discover_peers()
         |> maybe_refresh_partition_maps()
+        |> publish_active_nodes()
         |> recompute_ready()
 
       {new_state, %{}}
@@ -1186,6 +1192,18 @@ defmodule Aerospike.Tender do
   end
 
   ## Ready flag
+
+  defp publish_active_nodes(state) do
+    active_nodes =
+      state.nodes
+      |> Enum.flat_map(fn
+        {name, %{status: :active}} -> [name]
+        _ -> []
+      end)
+
+    :ok = PartitionMapWriter.publish_active_nodes(state.writer, active_nodes)
+    state
+  end
 
   defp recompute_ready(state) do
     ready? = PartitionMapWriter.recompute_ready(state.writer, state.namespaces)

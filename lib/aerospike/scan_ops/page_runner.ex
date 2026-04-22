@@ -1,8 +1,8 @@
 defmodule Aerospike.ScanOps.PageRunner do
   @moduledoc false
 
-  alias Aerospike.CircuitBreaker
   alias Aerospike.Cursor
+  alias Aerospike.Cluster
   alias Aerospike.Error
   alias Aerospike.NodePartitions
   alias Aerospike.Page
@@ -10,7 +10,6 @@ defmodule Aerospike.ScanOps.PageRunner do
   alias Aerospike.PartitionMap
   alias Aerospike.PartitionTracker
   alias Aerospike.Policy
-  alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
@@ -18,6 +17,8 @@ defmodule Aerospike.ScanOps.PageRunner do
   alias Aerospike.Router
   alias Aerospike.Scan
   alias Aerospike.ScanOps
+  alias Aerospike.StreamingCommand
+  alias Aerospike.StreamingExecutor
   alias Aerospike.Tender
 
   @typep runtime :: %{
@@ -70,12 +71,12 @@ defmodule Aerospike.ScanOps.PageRunner do
   @spec runtime(GenServer.server(), Scan.t() | Query.t()) ::
           {:ok, runtime()} | {:error, Error.t()}
   def runtime(tender, scannable) do
-    if Tender.ready?(tender) do
+    if Cluster.ready?(tender) do
       {:ok,
        %{
          tender: tender,
          transport: Tender.transport(tender),
-         tables: Tender.tables(tender)
+         tables: Cluster.tables(tender)
        }}
     else
       {:error,
@@ -161,9 +162,7 @@ defmodule Aerospike.ScanOps.PageRunner do
 
   defp active_nodes(tender, nil, scannable) do
     tender
-    |> Tender.nodes_status()
-    |> Enum.filter(fn {_node_name, meta} -> Map.get(meta, :status) == :active end)
-    |> Enum.map(&elem(&1, 0))
+    |> Cluster.active_nodes()
     |> case do
       [] ->
         {:error,
@@ -178,11 +177,9 @@ defmodule Aerospike.ScanOps.PageRunner do
   end
 
   defp active_nodes(tender, node_name, _scannable) do
-    case Tender.nodes_status(tender) |> Map.fetch(node_name) do
-      {:ok, %{status: :active}} -> {:ok, [node_name]}
-      {:ok, %{status: :inactive}} -> {:error, unknown_node(node_name)}
-      :error -> {:error, unknown_node(node_name)}
-    end
+    if Cluster.active_node?(tender, node_name),
+      do: {:ok, [node_name]},
+      else: {:error, unknown_node(node_name)}
   end
 
   defp new_tracker(%Scan{} = scan, node_names, node_filter) do
@@ -261,16 +258,12 @@ defmodule Aerospike.ScanOps.PageRunner do
          node_requests,
          acc \\ []
        ) do
-    task_timeout = policy.task_timeout
-    max_concurrency = max_concurrency(policy, length(node_requests))
-
     case run_page_jobs(
            runtime,
            scannable,
            tracker,
            node_requests,
-           task_timeout,
-           max_concurrency
+           policy
          ) do
       {:ok, tracker, node_partitions_list, page_records} ->
         tracker = %{tracker | node_partitions_list: node_partitions_list}
@@ -304,7 +297,7 @@ defmodule Aerospike.ScanOps.PageRunner do
   end
 
   defp prepare_iteration(tender, scannable, tracker, %Policy.ScanQueryRuntime{} = policy) do
-    with {:ok, partition_map} <- partition_map(%{tables: Tender.tables(tender)}, scannable),
+    with {:ok, partition_map} <- partition_map(%{tables: Cluster.tables(tender)}, scannable),
          {:ok, tracker, node_partitions_list} <-
            PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
       tracker =
@@ -346,17 +339,11 @@ defmodule Aerospike.ScanOps.PageRunner do
          scannable,
          tracker,
          node_requests,
-         task_timeout,
-         max_concurrency
+         policy
        ) do
-    node_requests
-    |> Task.async_stream(
-      fn node_request -> run_node_request(runtime, scannable, node_request) end,
-      ordered: true,
-      max_concurrency: max_concurrency,
-      timeout: task_timeout,
-      on_timeout: :kill_task
-    )
+    command = page_command()
+
+    StreamingExecutor.run_node_requests(command, runtime, scannable, node_requests, policy)
     |> Enum.reduce_while({:ok, tracker, [], []}, fn
       {:ok, {:ok, records, parts, np}}, {:ok, tracker_acc, node_parts_acc, records_acc} ->
         {tracker2, np2, kept_records} =
@@ -388,104 +375,6 @@ defmodule Aerospike.ScanOps.PageRunner do
 
       {:error, %Error{} = err} ->
         {:error, err}
-    end
-  end
-
-  defp run_node_request(runtime, scannable, %{node_name: node_name} = node_request) do
-    case Tender.node_handle(runtime.tender, node_name) do
-      {:ok, handle} ->
-        case CircuitBreaker.allow?(handle.counters, handle.breaker) do
-          :ok -> connect_and_stream(runtime, scannable, node_request, handle)
-          {:error, %Error{} = err} -> {:error, err}
-        end
-
-      {:error, :unknown_node} ->
-        {:error, unknown_node(node_name)}
-    end
-  end
-
-  defp connect_and_stream(runtime, scannable, node_request, handle) do
-    transport = runtime.transport
-    timeout = node_request.policy.timeout
-    node_opts = [use_compression: handle.use_compression, attempt: 0]
-
-    request = build_wire(scannable, node_request.node_partitions, node_request.policy)
-
-    case transport.connect(handle.host, handle.port, handle.connect_opts) do
-      {:ok, conn} ->
-        case transport.stream_open(conn, request, timeout, node_opts) do
-          {:ok, stream} ->
-            read_stream(transport, stream, timeout, scannable, node_request)
-
-          {:error, %Error{} = err} ->
-            {:error, err}
-        end
-
-      {:error, %Error{} = err} ->
-        {:error, err}
-    end
-  end
-
-  defp read_stream(transport, stream, timeout, scannable, node_request) do
-    result = do_read_stream(transport, stream, timeout, scannable, node_request, [], [])
-    _ = transport.stream_close(stream)
-    result
-  end
-
-  defp do_read_stream(transport, stream, timeout, scannable, node_request, records, parts) do
-    case transport.stream_read(stream, timeout) do
-      {:ok, frame} ->
-        handle_stream_frame(
-          transport,
-          stream,
-          timeout,
-          scannable,
-          node_request,
-          records,
-          parts,
-          frame
-        )
-
-      :done ->
-        {:ok, Enum.reverse(records), Enum.reverse(parts), node_request.node_partitions}
-
-      {:error, %Error{} = err} ->
-        {:error, err, node_request.node_partitions}
-    end
-  end
-
-  defp handle_stream_frame(
-         transport,
-         stream,
-         timeout,
-         scannable,
-         node_request,
-         records,
-         parts,
-         frame
-       ) do
-    with {:ok, body} <- decode_stream_body(frame),
-         {:ok, new_records, new_parts, done?} <-
-           ScanResponse.parse_stream_chunk(body, namespace(scannable), set(scannable)) do
-      next_records = Enum.reverse(new_records, records)
-      next_parts = Enum.reverse(new_parts, parts)
-
-      if done? do
-        {:ok, Enum.reverse(next_records), Enum.reverse(next_parts), node_request.node_partitions}
-      else
-        do_read_stream(
-          transport,
-          stream,
-          timeout,
-          scannable,
-          node_request,
-          next_records,
-          next_parts
-        )
-      end
-    else
-      {:error, %Error{} = err} ->
-        {:error, err, node_request.node_partitions}
     end
   end
 
@@ -601,6 +490,41 @@ defmodule Aerospike.ScanOps.PageRunner do
     ScanQuery.build_query(query, request_partitions(node_partitions), policy)
   end
 
+  defp page_command do
+    StreamingCommand.new!(
+      name: __MODULE__,
+      build_request: fn %{scannable: scannable, node_request: node_request} ->
+        build_wire(scannable, node_request.node_partitions, node_request.policy)
+      end,
+      init: fn _input -> {[], []} end,
+      consume_frame: fn body,
+                        %{scannable: scannable, node_request: node_request},
+                        {records, parts} ->
+        with {:ok, new_records, new_parts, done?} <-
+               ScanResponse.parse_stream_chunk(body, namespace(scannable), set(scannable)) do
+          next_records = Enum.reverse(new_records, records)
+          next_parts = Enum.reverse(new_parts, parts)
+
+          if done? do
+            {:halt, page_result(next_records, next_parts, node_request)}
+          else
+            {:cont, {next_records, next_parts}}
+          end
+        end
+      end,
+      finish: fn {records, parts}, %{node_request: node_request} ->
+        page_result(records, parts, node_request)
+      end,
+      error_result: fn err, %{node_request: node_request} ->
+        {:error, err, node_request.node_partitions}
+      end
+    )
+  end
+
+  defp page_result(records, parts, node_request) do
+    {:ok, Enum.reverse(records), Enum.reverse(parts), node_request.node_partitions}
+  end
+
   defp request_partitions(%NodePartitions{
          parts_full: full,
          parts_partial: partials,
@@ -621,31 +545,10 @@ defmodule Aerospike.ScanOps.PageRunner do
     }
   end
 
-  defp max_concurrency(%Policy.ScanQueryRuntime{max_concurrent_nodes: 0}, fallback), do: fallback
-
-  defp max_concurrency(%Policy.ScanQueryRuntime{max_concurrent_nodes: n}, fallback)
-       when is_integer(n) and n > 0 do
-    min(n, fallback)
-  end
-
   defp unknown_node(node_name) do
     Error.from_result_code(:invalid_node, message: "query target node unavailable: #{node_name}")
   end
 
   defp operation_name(%Scan{}), do: "scan"
   defp operation_name(%Query{}), do: "query"
-
-  defp decode_stream_body(frame) do
-    case Message.decode(frame) do
-      {:ok, {2, 3, body}} ->
-        {:ok, body}
-
-      {:ok, {_version, _type, _body}} ->
-        {:error,
-         Error.from_result_code(:parse_error, message: "unexpected stream frame type from server")}
-
-      {:error, _reason} ->
-        {:error, Error.from_result_code(:parse_error, message: "invalid stream frame")}
-    end
-  end
 end

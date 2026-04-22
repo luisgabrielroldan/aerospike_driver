@@ -162,7 +162,8 @@ defmodule Aerospike.ScanOpsTest do
              Aerospike.query_execute(tender, query, [], node: "missing")
   end
 
-  test "background query execution reuses the shared node preparation seam", ctx do
+  test "background query helpers use command replies over the shared node preparation seam",
+       ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
     :ok = Tender.tend_now(tender)
@@ -180,6 +181,21 @@ defmodule Aerospike.ScanOpsTest do
               namespace: @namespace,
               set: "scan_ops"
             }} = Aerospike.query_execute(tender, query, [])
+
+    assert Fake.last_command_deadline(ctx.fake, "A1")
+    assert Fake.last_command_deadline(ctx.fake, "B1")
+    assert Fake.stream_close_count(ctx.fake, "A1") == 0
+    assert Fake.stream_close_count(ctx.fake, "B1") == 0
+
+    Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
+    Fake.script_command(ctx.fake, "B1", {:ok, scripted_reply_body(0, 4, 60)})
+
+    assert {:ok,
+            %Aerospike.ExecuteTask{
+              kind: :query_udf,
+              namespace: @namespace,
+              set: "scan_ops"
+            }} = Aerospike.query_udf(tender, query, "pkg", "fun", [])
   end
 
   test "count and paging surface deterministic parse and cursor errors as Aerospike.Error values",

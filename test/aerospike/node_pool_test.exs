@@ -70,6 +70,7 @@ defmodule Aerospike.NodePoolTest do
 
   defp stop_quietly(pid) do
     if Process.alive?(pid) do
+      Process.unlink(pid)
       ref = Process.monitor(pid)
       Process.exit(pid, :shutdown)
 
@@ -640,6 +641,25 @@ defmodule Aerospike.NodePoolTest do
       assert NodeCounters.failed(counters) == 0
     end
 
+    test "idle worker eviction leaves counters unchanged", _ctx do
+      counters = NodeCounters.new()
+
+      %{fake: fake} =
+        start_pool!(1,
+          counters: counters,
+          worker_idle_timeout: 10,
+          max_idle_pings: 1
+        )
+
+      # The warmed worker was never checked out, so idle eviction must not
+      # decrement `:in_flight` below zero while NimblePool tears down
+      # idle workers through `terminate_worker/3`.
+      :ok = wait_for_close_count(fake, 1, 500)
+
+      assert NodeCounters.in_flight(counters) == 0
+      assert NodeCounters.failed(counters) == 0
+    end
+
     test "pool_timeout does not bump :failed", _ctx do
       counters = NodeCounters.new()
       %{pool: pool} = start_pool!(1, counters: counters)
@@ -770,6 +790,33 @@ defmodule Aerospike.NodePoolTest do
       end
     end
 
+    test "emits a :stop event when the pool is unavailable" do
+      %{pool: pool} = start_pool!(1)
+      handler = attach_checkout_handler(:invalid_node)
+
+      stop_quietly(pool)
+
+      try do
+        assert {:error, %Error{code: :invalid_node}} =
+                 NodePool.checkout!(
+                   @node_name,
+                   pool,
+                   fn conn -> {:ok, conn} end,
+                   50
+                 )
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :start], _m,
+                        %{node_name: @node_name, pool_pid: ^pool}},
+                       500
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :stop], %{duration: _},
+                        %{node_name: @node_name, pool_pid: ^pool}},
+                       500
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
     test "checkout!/3 degrades :node_name to nil in span metadata" do
       %{fake: fake, pool: pool} = start_pool!(1)
       Fake.script_command(fake, @node_name, {:ok, <<"ok">>})
@@ -789,6 +836,34 @@ defmodule Aerospike.NodePoolTest do
 
         assert_receive {:event, [:aerospike, :pool, :checkout, :stop], _m, %{node_name: nil}},
                        500
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
+    test "emits :exception when the checkout callback raises" do
+      %{pool: pool} = start_pool!(1)
+      handler = attach_checkout_handler(:exception)
+
+      try do
+        assert_raise RuntimeError, "boom", fn ->
+          NodePool.checkout!(
+            @node_name,
+            pool,
+            fn _conn -> raise "boom" end,
+            1_000
+          )
+        end
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :start], _m,
+                        %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ctx}},
+                       500
+
+        assert_receive {:event, [:aerospike, :pool, :checkout, :exception], %{duration: _},
+                        %{node_name: @node_name, pool_pid: ^pool, telemetry_span_context: ^ctx}},
+                       500
+
+        refute_receive {:event, [:aerospike, :pool, :checkout, :stop], _, _}, 100
       after
         :telemetry.detach(handler)
       end

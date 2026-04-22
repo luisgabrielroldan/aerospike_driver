@@ -3,6 +3,7 @@ defmodule Aerospike.ExecuteTask do
   Tracks background query execution progress.
   """
 
+  alias Aerospike.Cluster
   alias Aerospike.Error
   alias Aerospike.NodePool
   alias Aerospike.Tender
@@ -191,15 +192,10 @@ defmodule Aerospike.ExecuteTask do
   defp target_node_names(%__MODULE__{conn: conn, node_name: node_name})
        when is_binary(node_name) do
     if cluster_ready?(conn) do
-      case tender_nodes_status(conn) |> Map.fetch(node_name) do
-        {:ok, %{status: :active}} ->
-          {:ok, [node_name]}
-
-        {:ok, %{status: :inactive}} ->
-          {:error, Error.from_result_code(:invalid_node, node: node_name)}
-
-        :error ->
-          {:error, Error.from_result_code(:invalid_node, node: node_name)}
+      if active_node?(conn, node_name) do
+        {:ok, [node_name]}
+      else
+        {:error, Error.from_result_code(:invalid_node, node: node_name)}
       end
     else
       {:error, Error.from_result_code(:cluster_not_ready)}
@@ -208,14 +204,9 @@ defmodule Aerospike.ExecuteTask do
 
   defp target_node_names(%__MODULE__{conn: conn}) do
     if cluster_ready?(conn) do
-      node_names =
-        tender_nodes_status(conn)
-        |> Enum.filter(fn {_node_name, meta} -> Map.get(meta, :status) == :active end)
-        |> Enum.map(&elem(&1, 0))
-
-      case node_names do
+      case active_nodes(conn) do
         [] -> {:error, Error.from_result_code(:invalid_node)}
-        _ -> {:ok, node_names}
+        node_names -> {:ok, node_names}
       end
     else
       {:error, Error.from_result_code(:cluster_not_ready)}
@@ -274,14 +265,20 @@ defmodule Aerospike.ExecuteTask do
   defp unknown_not_found_node(_state, _observed), do: []
 
   defp tender_ready?(conn) do
-    Tender.ready?(conn)
+    Cluster.ready?(conn)
   catch
     :exit, _ -> false
   end
 
-  defp tender_nodes_status(conn) do
-    Tender.nodes_status(conn)
+  defp active_nodes(conn) do
+    Cluster.active_nodes(conn)
   catch
-    :exit, _ -> %{}
+    :exit, _ -> []
+  end
+
+  defp active_node?(conn, node_name) do
+    Cluster.active_node?(conn, node_name)
+  catch
+    :exit, _ -> false
   end
 end

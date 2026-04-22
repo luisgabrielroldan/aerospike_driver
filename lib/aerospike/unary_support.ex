@@ -1,11 +1,11 @@
 defmodule Aerospike.UnarySupport do
   @moduledoc false
 
+  alias Aerospike.Cluster
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Policy
   alias Aerospike.Protocol.Response
-  alias Aerospike.RetryPolicy
   alias Aerospike.Tender
   alias Aerospike.UnaryCommand
   alias Aerospike.UnaryExecutor
@@ -76,7 +76,7 @@ defmodule Aerospike.UnarySupport do
   defp runtime_ctx(tender) do
     %{
       tender: tender,
-      tables: Tender.tables(tender),
+      tables: Cluster.tables(tender),
       transport: Tender.transport(tender)
     }
   end
@@ -89,11 +89,7 @@ defmodule Aerospike.UnarySupport do
   end
 
   defp base_retry(tender) do
-    tender
-    |> runtime_ctx()
-    |> Map.fetch!(:tables)
-    |> Map.fetch!(:meta)
-    |> RetryPolicy.load()
+    Cluster.retry_policy(tender)
   end
 
   # Rebalance recovery is best-effort and must not take down the caller.

@@ -12,10 +12,11 @@ defmodule Aerospike.Supervisor do
        `NimblePool` children. Lives independently of the Tender so the
        Tender can restart without losing already-started pools; the
        Tender's restart path sweeps orphans to reconcile.
-    3. `Aerospike.PartitionMapWriter` — sole writer for the partition-map
-       ETS tables. Promotes the single-writer invariant from convention
-       to a process boundary: every mutation of `owners`, `node_gens`,
-       and `meta.:ready` runs inside this PID.
+    3. `Aerospike.PartitionMapWriter` — sole writer for the published
+       cluster-state ETS tables. Promotes the single-writer invariant
+       from convention to a process boundary: every mutation of
+       `owners`, `node_gens`, and the published `meta` rows runs inside
+       this PID.
     4. `Aerospike.Tender` — the tend-cycle orchestrator. Started last so
        its `init/1` can read the TableOwner's tables and reference the
        NodeSupervisor and Writer by name.
@@ -51,7 +52,8 @@ defmodule Aerospike.Supervisor do
       (required).
     * `:seeds` — list of `{host, port}` tuples (required, non-empty).
     * `:namespaces` — list of namespace strings the cluster must serve
-      before `Tender.ready?/1` returns `true` (required, non-empty).
+      before `Aerospike.Cluster.ready?/1` returns `true` (required,
+      non-empty).
 
   Every other option is forwarded verbatim to `Aerospike.Tender` (for
   example `:connect_opts`, `:failure_threshold`, `:tend_interval_ms`,

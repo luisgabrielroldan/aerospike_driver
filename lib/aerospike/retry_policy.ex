@@ -11,11 +11,12 @@ defmodule Aerospike.RetryPolicy do
   ## Writer discipline
 
   The retry policy is cluster-scoped, not per-node, and is established
-  once at `Aerospike.start_link/1` time. The Tender writes the effective
-  policy to the `:meta` ETS table under the key `:retry_opts`; the
-  command path reads it lock-free via `load/1`. Only the Tender writes
-  this slot, matching the single-writer discipline that governs every
-  other `:meta` entry.
+  once at `Aerospike.start_link/1` time. The Tender computes the
+  effective policy and publishes it through `Aerospike.PartitionMapWriter`
+  to the `:meta` ETS table under the key `:retry_opts`; the command path
+  reads it lock-free via `load/1`. Runtime mutation still stays behind
+  the single-writer boundary that governs every other published `:meta`
+  entry.
 
   Per-command overrides (`:timeout`, `:max_retries`,
   `:sleep_between_retries_ms`, `:replica_policy`) may be passed through
@@ -149,8 +150,9 @@ defmodule Aerospike.RetryPolicy do
   @doc """
   Writes `policy` to `meta_tab` under the ETS key used by `load/1`.
 
-  Only the Tender calls this. Single-writer invariant: no other process
-  may update this slot.
+  Runtime publication flows through `Aerospike.PartitionMapWriter`; the
+  TableOwner also uses this helper once at table creation to seed the
+  default row before the Tender starts.
   """
   @spec put(atom(), t()) :: true
   def put(

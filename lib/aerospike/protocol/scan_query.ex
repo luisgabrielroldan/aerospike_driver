@@ -4,13 +4,13 @@ defmodule Aerospike.Protocol.ScanQuery do
   import Bitwise
 
   alias Aerospike.Filter
+  alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.MessagePack
-  alias Aerospike.Policy
   alias Aerospike.Query
   alias Aerospike.Scan
 

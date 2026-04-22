@@ -2,6 +2,7 @@ defmodule Aerospike.Admin do
   @moduledoc false
 
   alias Aerospike.Error
+  alias Aerospike.Cluster
   alias Aerospike.IndexTask
   alias Aerospike.NodePool
   alias Aerospike.Policy
@@ -59,9 +60,9 @@ defmodule Aerospike.Admin do
     transport = Tender.transport(tender)
 
     tender
-    |> Tender.nodes_status()
-    |> Enum.sort_by(fn {name, _} -> name end)
-    |> Enum.find_value(fn {node_name, %{status: :active}} ->
+    |> Cluster.active_nodes()
+    |> Enum.sort()
+    |> Enum.find_value(fn node_name ->
       case Tender.node_handle(tender, node_name) do
         {:ok, handle} -> {:ok, node_name, handle, transport}
         {:error, _} -> nil

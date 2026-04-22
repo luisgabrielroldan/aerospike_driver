@@ -10,7 +10,10 @@ defmodule Aerospike.NodeCounters do
       connection for this node. Incremented by `Aerospike.NodePool`
       inside `handle_checkout/4` before the caller's `fun.(conn)` runs;
       decremented in `handle_checkin/4` (both `:ok` and `:remove`
-      branches) and in `terminate_worker/3`.
+      branches) and in `handle_cancelled/2` when a caller dies while a
+      worker is checked out. `terminate_worker/3` does not touch the
+      slot because it cannot distinguish an abandoned checkout from an
+      idle worker being torn down.
 
     * `@queued` (2) — reserved. No writer currently maintains this slot.
       NimblePool's queue length is available via `:sys.get_state/1`,
@@ -30,8 +33,9 @@ defmodule Aerospike.NodeCounters do
 
   Writer discipline:
 
-    * `@in_flight` — single writer = `Aerospike.NodePool` (callbacks run
-      inside the pool's own process).
+    * `@in_flight` — single writer = `Aerospike.NodePool` (`handle_checkout/4`,
+      `handle_checkin/4`, and `handle_cancelled/2` run inside the pool's
+      own process).
     * `@queued` — no writer.
     * `@failed` — two writers: `Aerospike.NodePool` (increment on
       transport-class failure) and `Aerospike.Tender` (zero on tend

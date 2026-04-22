@@ -17,6 +17,7 @@ defmodule Aerospike.BatchGet do
   alias Aerospike.BatchCommand
   alias Aerospike.BatchCommand.NodeRequest
   alias Aerospike.BatchCommand.NodeResult
+  alias Aerospike.Cluster
   alias Aerospike.BatchExecutor
   alias Aerospike.BatchRouter
   alias Aerospike.Error
@@ -25,7 +26,6 @@ defmodule Aerospike.BatchGet do
   alias Aerospike.Protocol.BatchRead
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
-  alias Aerospike.RetryPolicy
   alias Aerospike.Tender
 
   @type option :: {:timeout, non_neg_integer()}
@@ -171,10 +171,7 @@ defmodule Aerospike.BatchGet do
 
   defp batch_policy(tender, opts) do
     tender
-    |> runtime_ctx()
-    |> Map.fetch!(:tables)
-    |> Map.fetch!(:meta)
-    |> RetryPolicy.load()
+    |> Cluster.retry_policy()
     |> Policy.batch_read(opts)
   end
 
@@ -185,7 +182,7 @@ defmodule Aerospike.BatchGet do
   defp runtime_ctx(tender) do
     %{
       tender: tender,
-      tables: Tender.tables(tender),
+      tables: Cluster.tables(tender),
       transport: Tender.transport(tender)
     }
   end

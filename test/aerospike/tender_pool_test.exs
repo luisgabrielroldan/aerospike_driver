@@ -245,7 +245,14 @@ defmodule Aerospike.TenderPoolTest do
   defp stop_tender(pid) do
     if Process.alive?(pid) do
       ref = Process.monitor(pid)
-      GenServer.stop(pid, :normal, 2_000)
+
+      # `GenServer.stop/3` can still race a concurrent exit after the
+      # `Process.alive?/1` check; other Tender tests already absorb that.
+      try do
+        GenServer.stop(pid, :normal, 2_000)
+      catch
+        :exit, _ -> :ok
+      end
 
       receive do
         {:DOWN, ^ref, _, _, _} -> :ok

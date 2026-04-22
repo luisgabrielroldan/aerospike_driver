@@ -2,13 +2,13 @@ defmodule Aerospike.Protocol.ScanQueryTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Filter
+  alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.MessagePack
-  alias Aerospike.Policy
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Query
   alias Aerospike.Scan

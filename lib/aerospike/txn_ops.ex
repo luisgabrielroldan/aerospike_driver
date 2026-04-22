@@ -1,9 +1,9 @@
 defmodule Aerospike.TxnOps do
   @moduledoc false
 
+  alias Aerospike.Cluster
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.Tender
   alias Aerospike.Txn
 
   @type tracking :: %{
@@ -218,10 +218,15 @@ defmodule Aerospike.TxnOps do
   end
 
   defp tracking_table(conn_name) do
-    Tender.tables(conn_name).txn_tracking
-  catch
-    :exit, _ ->
-      raise ArgumentError,
-            "transaction tracking table is unavailable for #{inspect(conn_name)}"
+    table = Cluster.tables(conn_name).txn_tracking
+
+    case :ets.info(table) do
+      :undefined ->
+        raise ArgumentError,
+              "transaction tracking table is unavailable for #{inspect(conn_name)}"
+
+      _info ->
+        table
+    end
   end
 end

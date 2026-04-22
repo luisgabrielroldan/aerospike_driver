@@ -1,6 +1,7 @@
 defmodule Aerospike.SupervisorTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionMap
   alias Aerospike.PartitionMapWriter
@@ -311,11 +312,11 @@ defmodule Aerospike.SupervisorTest do
 
       {:ok, _sup} = start_supervisor(ctx)
 
-      refute Tender.ready?(ctx.name)
+      refute Cluster.ready?(ctx.name)
       :ok = Tender.tend_now(ctx.name)
-      assert Tender.ready?(ctx.name)
+      assert Cluster.ready?(ctx.name)
 
-      %{owners: owners} = Tender.tables(ctx.name)
+      %{owners: owners} = Cluster.tables(ctx.name)
       {:ok, po} = PartitionMap.owners(owners, "test", 0)
       assert po.replicas == ["A1"]
     end
@@ -332,9 +333,9 @@ defmodule Aerospike.SupervisorTest do
       writer_before = Process.whereis(PartitionMapWriter.via(ctx.name))
 
       :ok = Tender.tend_now(ctx.name)
-      tables_before = Tender.tables(ctx.name)
+      tables_before = Cluster.tables(ctx.name)
       {:ok, po_before} = PartitionMap.owners(tables_before.owners, "test", 0)
-      assert Tender.ready?(ctx.name)
+      assert Cluster.ready?(ctx.name)
 
       Process.exit(tender_before, :kill)
       await_replaced(ctx.name, tender_before)
@@ -348,10 +349,10 @@ defmodule Aerospike.SupervisorTest do
       # TableOwner kept the rows the previous Tender wrote — the new
       # Tender exposes the exact same tables and the :ready meta flag
       # survives the restart.
-      assert Tender.tables(ctx.name) == tables_before
+      assert Cluster.tables(ctx.name) == tables_before
       {:ok, po_after} = PartitionMap.owners(tables_before.owners, "test", 0)
       assert po_after == po_before
-      assert Tender.ready?(ctx.name)
+      assert Cluster.ready?(ctx.name)
     end
 
     test "killing TableOwner restarts the whole subtree with fresh tables", ctx do
@@ -359,7 +360,7 @@ defmodule Aerospike.SupervisorTest do
 
       {:ok, _sup} = start_supervisor(ctx)
       :ok = Tender.tend_now(ctx.name)
-      assert Tender.ready?(ctx.name)
+      assert Cluster.ready?(ctx.name)
 
       tender_before = Process.whereis(ctx.name)
       owner_before = Process.whereis(TableOwner.via(ctx.name))
@@ -380,7 +381,7 @@ defmodule Aerospike.SupervisorTest do
 
       # Fresh TableOwner means a fresh :meta row — ready? is back to
       # false until the replacement Tender tends again.
-      refute Tender.ready?(ctx.name)
+      refute Cluster.ready?(ctx.name)
     end
   end
 

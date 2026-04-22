@@ -6,13 +6,14 @@ defmodule Aerospike.ScanOps.StreamRunner do
   alias Aerospike.ExecuteTask
   alias Aerospike.NodePool
   alias Aerospike.Policy
-  alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
   alias Aerospike.Scan
   alias Aerospike.ScanOps.PageRunner
+  alias Aerospike.StreamingCommand
+  alias Aerospike.StreamingExecutor
   alias Aerospike.Tender
 
   @spec stream(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
@@ -121,20 +122,10 @@ defmodule Aerospike.ScanOps.StreamRunner do
          {:ok, policy} <- Policy.scan_query_runtime(opts),
          {:ok, _tracker, node_requests} <-
            PageRunner.prepare_node_requests(runtime, scannable, node_filter, policy) do
-      task_timeout = policy.task_timeout
-      max_concurrency = max_concurrency(policy, length(node_requests))
+      command = stream_command(wire_builder, parser)
 
       stream =
-        node_requests
-        |> Task.async_stream(
-          fn node_request ->
-            run_node_request(runtime, scannable, node_request, wire_builder, parser)
-          end,
-          ordered: true,
-          max_concurrency: max_concurrency,
-          timeout: task_timeout,
-          on_timeout: :kill_task
-        )
+        StreamingExecutor.run_node_requests(command, runtime, scannable, node_requests, policy)
         |> Stream.flat_map(&flatten_task_result/1)
 
       {:ok, stream}
@@ -180,93 +171,6 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp run_node_request(
-         runtime,
-         scannable,
-         %{node_name: node_name} = node_request,
-         wire_builder,
-         parser
-       ) do
-    case Tender.node_handle(runtime.tender, node_name) do
-      {:ok, handle} ->
-        case CircuitBreaker.allow?(handle.counters, handle.breaker) do
-          :ok ->
-            connect_and_stream(
-              runtime,
-              scannable,
-              node_request,
-              handle,
-              wire_builder,
-              parser
-            )
-
-          {:error, %Error{} = err} ->
-            {:error, err}
-        end
-
-      {:error, :unknown_node} ->
-        {:error, unknown_node(node_name)}
-    end
-  end
-
-  defp connect_and_stream(runtime, scannable, node_request, handle, wire_builder, parser) do
-    transport = runtime.transport
-    timeout = node_request.policy.timeout
-    node_opts = [use_compression: handle.use_compression, attempt: 0]
-
-    request =
-      build_wire(scannable, node_request.node_partitions, node_request.policy, wire_builder)
-
-    case transport.connect(handle.host, handle.port, handle.connect_opts) do
-      {:ok, conn} ->
-        case transport.stream_open(conn, request, timeout, node_opts) do
-          {:ok, stream} ->
-            read_stream(transport, stream, timeout, namespace(scannable), set(scannable), parser)
-
-          {:error, %Error{} = err} ->
-            {:error, err}
-        end
-
-      {:error, %Error{} = err} ->
-        {:error, err}
-    end
-  end
-
-  defp read_stream(transport, stream, timeout, namespace, set, parser) do
-    result = do_read_stream(transport, stream, timeout, namespace, set, parser, [])
-    _ = transport.stream_close(stream)
-    result
-  end
-
-  defp do_read_stream(transport, stream, timeout, namespace, set, parser, acc) do
-    case transport.stream_read(stream, timeout) do
-      {:ok, frame} ->
-        handle_stream_frame(transport, stream, timeout, namespace, set, parser, acc, frame)
-
-      :done ->
-        {:ok, Enum.reverse(acc)}
-
-      {:error, %Error{} = err} ->
-        {:error, err}
-    end
-  end
-
-  defp handle_stream_frame(transport, stream, timeout, namespace, set, parser, acc, frame) do
-    with {:ok, body} <- decode_stream_body(frame),
-         {:ok, records, _partition_done, done?} <- parser.(body, namespace, set) do
-      next_acc = Enum.reverse(records, acc)
-      continue_stream(transport, stream, timeout, namespace, set, parser, next_acc, done?)
-    end
-  end
-
-  defp continue_stream(_transport, _stream, _timeout, _namespace, _set, _parser, acc, true) do
-    {:ok, Enum.reverse(acc)}
-  end
-
-  defp continue_stream(transport, stream, timeout, namespace, set, parser, acc, false) do
-    do_read_stream(transport, stream, timeout, namespace, set, parser, acc)
-  end
-
   defp request_partitions(%{parts_full: full, parts_partial: partials, record_max: record_max}) do
     %{
       parts_full: Enum.map(full, & &1.id),
@@ -298,6 +202,30 @@ defmodule Aerospike.ScanOps.StreamRunner do
 
   defp build_wire(%Query{} = query, node_partitions, %Policy.ScanQueryRuntime{} = policy, nil),
     do: build_wire(query, node_partitions, policy)
+
+  defp stream_command(wire_builder, parser) do
+    StreamingCommand.new!(
+      name: __MODULE__,
+      build_request: fn %{scannable: scannable, node_request: node_request} ->
+        build_wire(scannable, node_request.node_partitions, node_request.policy, wire_builder)
+      end,
+      init: fn _input -> [] end,
+      consume_frame: fn body, %{scannable: scannable}, acc ->
+        with {:ok, records, _partition_done, done?} <-
+               parser.(body, namespace(scannable), set(scannable)) do
+          next_acc = Enum.reverse(records, acc)
+
+          if done? do
+            {:halt, {:ok, Enum.reverse(next_acc)}}
+          else
+            {:cont, next_acc}
+          end
+        end
+      end,
+      finish: fn acc, _input -> {:ok, Enum.reverse(acc)} end,
+      error_result: fn err, _input -> {:error, err} end
+    )
+  end
 
   defp namespace(%Scan{namespace: namespace}), do: namespace
   defp namespace(%Query{namespace: namespace}), do: namespace
@@ -426,19 +354,5 @@ defmodule Aerospike.ScanOps.StreamRunner do
 
   defp unknown_node(node_name) do
     Error.from_result_code(:invalid_node, message: "scan target node unavailable: #{node_name}")
-  end
-
-  defp decode_stream_body(frame) do
-    case Message.decode(frame) do
-      {:ok, {2, 3, body}} ->
-        {:ok, body}
-
-      {:ok, {_version, _type, _body}} ->
-        {:error,
-         Error.from_result_code(:parse_error, message: "unexpected stream frame type from server")}
-
-      {:error, _reason} ->
-        {:error, Error.from_result_code(:parse_error, message: "invalid stream frame")}
-    end
   end
 end

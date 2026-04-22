@@ -10,9 +10,11 @@ defmodule Aerospike.NodePool do
   the caller returns `:close` at check-in to have the worker torn down
   and replaced.
 
-  The pool deliberately omits login/auth and TLS. It does emit checkout
-  telemetry around the pool-owned connection handoff, then adds
-  idle-deadline eviction via `handle_ping/2` (see "Idle eviction" below).
+  The pool deliberately omits login/auth and TLS. Checkout observability
+  and pool-exit translation live in `Aerospike.PoolCheckout`, which wraps
+  the public checkout entry points, while the callback module stays
+  focused on worker lifecycle plus idle-deadline eviction via
+  `handle_ping/2` (see "Idle eviction" below).
 
   ## Warm-up
 
@@ -62,7 +64,9 @@ defmodule Aerospike.NodePool do
   `Aerospike.NodeCounters` for writer discipline per slot. When
   `counters` is `nil` the callbacks degrade to no-ops so the pool keeps
   working in tests and cluster-state-only modes that never allocate a
-  counters reference.
+  counters reference. The nil-tolerant branch stays in `NodePool`
+  because the pool callbacks own the write timing; `NodeCounters`
+  remains the concrete-ref API rather than learning about pool_state.
 
   `features` is the set of capability tokens the Tender captured from
   the node's `features` info-key reply at registration. The pool itself
@@ -91,7 +95,7 @@ defmodule Aerospike.NodePool do
 
   alias Aerospike.Error
   alias Aerospike.NodeCounters
-  alias Aerospike.Telemetry
+  alias Aerospike.PoolCheckout
 
   require Logger
 
@@ -118,7 +122,7 @@ defmodule Aerospike.NodePool do
   """
   @spec checkout!(
           NimblePool.pool(),
-          (conn :: term() -> {result(), term() | :close}),
+          (conn :: term() -> {result(), checkin_value()}),
           timeout()
         ) :: result() | {:error, Error.t()}
   def checkout!(pool, fun, timeout), do: checkout!(nil, pool, fun, timeout)
@@ -143,77 +147,35 @@ defmodule Aerospike.NodePool do
   `fun` did not run against a live connection — there is no node-health
   signal to record.
 
-  Emits `[:aerospike, :pool, :checkout, :start | :stop | :exception]`
-  events around the checkout. Stop events fire for both the success
-  path and the pool-level error translations above; exception events
-  fire only for unexpected exits (which are then re-raised so the
-  supervision tree observes them). Metadata carries `:node_name` and
-  `:pool_pid`; measurements are `:system_time` on start and `:duration`
-  on stop/exception.
+  `Aerospike.PoolCheckout` emits
+  `[:aerospike, :pool, :checkout, :start | :stop]` events around the
+  checkout wrapper. Stop events fire for both the success path and the
+  pool-level error translations above. Metadata carries `:node_name`
+  and `:pool_pid`; measurements are `:system_time` on start and
+  `:duration` on stop.
   """
   @spec checkout!(
           String.t() | nil,
           NimblePool.pool(),
-          (conn :: term() -> {result(), term() | :close}),
+          (conn :: term() -> {result(), checkin_value()}),
           timeout()
         ) :: result() | {:error, Error.t()}
   def checkout!(node_name, pool, fun, timeout)
       when is_function(fun, 1) and is_integer(timeout) do
-    start_time = System.monotonic_time()
-    span_id = make_ref()
-    metadata = %{node_name: node_name, pool_pid: pool}
-
-    :telemetry.execute(
-      Telemetry.pool_checkout_span() ++ [:start],
-      %{system_time: System.system_time(), monotonic_time: start_time},
-      Map.put(metadata, :telemetry_span_context, span_id)
-    )
-
-    do_checkout(pool, fun, timeout, start_time, metadata, span_id)
-  end
-
-  defp do_checkout(pool, fun, timeout, start_time, metadata, span_id) do
-    result =
-      NimblePool.checkout!(
-        pool,
-        @checkout_reason,
-        fn _from, conn ->
-          fun.(conn)
-        end,
-        timeout
-      )
-
-    emit_checkout_stop(start_time, metadata, span_id)
-    result
-  catch
-    :exit, {:timeout, {NimblePool, :checkout, _}} ->
-      emit_checkout_stop(start_time, metadata, span_id)
-      {:error, Error.from_result_code(:pool_timeout)}
-
-    :exit, {:noproc, {NimblePool, :checkout, _}} ->
-      emit_checkout_stop(start_time, metadata, span_id)
-
-      {:error,
-       %Error{
-         code: :invalid_node,
-         message: "Aerospike.NodePool: pool not available"
-       }}
-
-    :exit, reason ->
-      emit_checkout_stop(start_time, metadata, span_id)
-
-      {:error,
-       %Error{
-         code: :network_error,
-         message: "Aerospike.NodePool: checkout exited: #{inspect(reason)}"
-       }}
-  end
-
-  defp emit_checkout_stop(start_time, metadata, span_id) do
-    :telemetry.execute(
-      Telemetry.pool_checkout_span() ++ [:stop],
-      %{duration: System.monotonic_time() - start_time},
-      Map.put(metadata, :telemetry_span_context, span_id)
+    PoolCheckout.run(
+      node_name,
+      pool,
+      fn ->
+        NimblePool.checkout!(
+          pool,
+          @checkout_reason,
+          fn _from, conn ->
+            fun.(conn)
+          end,
+          timeout
+        )
+      end,
+      timeout
     )
   end
 
@@ -361,6 +323,10 @@ defmodule Aerospike.NodePool do
   end
 
   ## Counter helpers
+
+  # Keep the optional `nil` branch at the pool boundary so the callback
+  # write paths stay explicit and `NodeCounters` only models concrete
+  # slot operations.
 
   defp incr_in_flight(pool_state) do
     case Keyword.get(pool_state, :counters) do

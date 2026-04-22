@@ -224,21 +224,14 @@ defmodule Aerospike.UnaryExecutor do
     maybe_sleep(executor.policy.retry)
     next_attempt = attempt + 1
 
-    emit_retry_event(executor, node_name, next_attempt, classification)
+    Telemetry.emit_retry_attempt(
+      node_name,
+      next_attempt,
+      classification,
+      remaining_budget(executor)
+    )
 
     attempt_loop(executor, attempt_fun, next_attempt, err)
-  end
-
-  defp emit_retry_event(executor, node_name, next_attempt, classification) do
-    :telemetry.execute(
-      Telemetry.retry_attempt(),
-      %{remaining_budget_ms: max(remaining_budget(executor), 0)},
-      %{
-        classification: classification,
-        attempt: next_attempt,
-        node_name: node_name
-      }
-    )
   end
 
   defp maybe_sleep(%{sleep_between_retries_ms: 0}), do: :ok

@@ -28,9 +28,9 @@ defmodule Aerospike.Router do
   @type reason :: :cluster_not_ready | :no_master
 
   @typedoc """
-  ETS table names published by `Aerospike.Tender.tables/1`. The router reads
+  ETS table names published through `Aerospike.Cluster.tables/1`. The router reads
   `:owners` for partition ownership and `:meta` for the `:ready` flag.
-  `:node_gens` is accepted for API symmetry with the Tender and is currently
+  `:node_gens` is accepted for API symmetry with the cluster tables map and is currently
   unused.
   """
   @type tables :: %{owners: atom(), node_gens: atom(), meta: atom(), txn_tracking: atom()}

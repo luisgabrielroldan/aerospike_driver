@@ -5,6 +5,7 @@ defmodule Aerospike.TenderTest do
   alias Aerospike.NodeCounters
   alias Aerospike.PartitionMap
   alias Aerospike.PartitionMapWriter
+  alias Aerospike.RetryPolicy
   alias Aerospike.TableOwner
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
@@ -65,6 +66,37 @@ defmodule Aerospike.TenderTest do
 
       assert tables == ctx.tables
       assert is_atom(tables.txn_tracking)
+    end
+  end
+
+  describe "published read model" do
+    test "init publishes the configured retry policy to the meta table", ctx do
+      {:ok, pid} =
+        start_tender(ctx, "test",
+          max_retries: 5,
+          sleep_between_retries_ms: 25,
+          replica_policy: :master
+        )
+
+      assert RetryPolicy.load(ctx.tables.meta) == %{
+               max_retries: 5,
+               sleep_between_retries_ms: 25,
+               replica_policy: :master
+             }
+
+      stop_process(pid)
+    end
+
+    test "tend cycles publish the active node-name snapshot", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+
+      assert :ets.lookup(ctx.tables.meta, :active_nodes) == [{:active_nodes, []}]
+
+      :ok = Tender.tend_now(pid)
+
+      assert :ets.lookup(ctx.tables.meta, :active_nodes) == [{:active_nodes, ["A1"]}]
     end
   end
 
@@ -2279,6 +2311,12 @@ defmodule Aerospike.TenderTest do
         :max_concurrent_ops_per_node,
         Keyword.get(opts, :max_concurrent_ops_per_node)
       )
+      |> maybe_put(:max_retries, Keyword.get(opts, :max_retries))
+      |> maybe_put(
+        :sleep_between_retries_ms,
+        Keyword.get(opts, :sleep_between_retries_ms)
+      )
+      |> maybe_put(:replica_policy, Keyword.get(opts, :replica_policy))
       |> maybe_put(:use_compression, Keyword.get(opts, :use_compression))
       |> maybe_put(:use_services_alternate, Keyword.get(opts, :use_services_alternate))
 

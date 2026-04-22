@@ -7,6 +7,7 @@ defmodule Aerospike.BatchExecutorTest do
   alias Aerospike.BatchExecutor
   alias Aerospike.Error
   alias Aerospike.Policy
+  alias Aerospike.Telemetry
 
   describe "run_command/5" do
     test "hands grouped node requests to a bounded runner and merges by caller order" do
@@ -69,98 +70,118 @@ defmodule Aerospike.BatchExecutorTest do
 
     test "transport retry reroutes one grouped node request without aborting the batch" do
       parent = self()
+      handler = attach_retry_handler(:batch_transport_retry)
 
-      responses =
-        start_responses!(%{
-          "A1" => [{:error, Error.from_result_code(:network_error, message: "boom-a1")}],
-          "B1" => [{:ok, "body-b1"}],
-          "C1" => [{:ok, "body-c1"}]
-        })
+      try do
+        responses =
+          start_responses!(%{
+            "A1" => [{:error, Error.from_result_code(:network_error, message: "boom-a1")}],
+            "B1" => [{:ok, "body-b1"}],
+            "C1" => [{:ok, "body-c1"}]
+          })
 
-      command =
-        command(fn results, _input ->
-          Enum.map(results, fn node_result ->
-            {entry_index(node_result.request), node_result.request.node_name, node_result.attempt,
-             node_result.result}
+        command =
+          command(fn results, _input ->
+            Enum.map(results, fn node_result ->
+              {entry_index(node_result.request), node_result.request.node_name,
+               node_result.attempt, node_result.result}
+            end)
           end)
-        end)
 
-      result =
-        BatchExecutor.run_command(
-          executor_for(max_retries: 1),
-          command,
-          :batch,
-          [node_request("A1", [0]), node_request("C1", [1])],
-          ctx(parent, responses,
-            reroute_request: fn
-              :transport, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: "B1"}}
-              kind, %NodeRequest{} = request, _attempt -> {:ok, %{request | payload: kind}}
-            end
+        result =
+          BatchExecutor.run_command(
+            executor_for(max_retries: 1),
+            command,
+            :batch,
+            [node_request("A1", [0]), node_request("C1", [1])],
+            ctx(parent, responses,
+              reroute_request: fn
+                :transport, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: "B1"}}
+                kind, %NodeRequest{} = request, _attempt -> {:ok, %{request | payload: kind}}
+              end
+            )
           )
-        )
 
-      assert result == [
-               {0, "B1", 1, {:ok, "body-b1"}},
-               {1, "C1", 0, {:ok, "body-c1"}}
-             ]
+        assert result == [
+                 {0, "B1", 1, {:ok, "body-b1"}},
+                 {1, "C1", 0, {:ok, "body-c1"}}
+               ]
 
-      assert_receive {:transport, "A1", "batch:A1:0", _deadline,
-                      [use_compression: false, attempt: 0]}
+        assert_receive {:event, [:aerospike, :retry, :attempt], %{remaining_budget_ms: budget},
+                        %{classification: :transport, attempt: 1, node_name: "A1"}},
+                       500
 
-      assert_receive {:transport, "B1", "batch:B1:0", _deadline,
-                      [use_compression: false, attempt: 1]}
+        assert is_integer(budget) and budget >= 0
 
-      assert_receive {:transport, "C1", "batch:C1:1", _deadline,
-                      [use_compression: false, attempt: 0]}
+        assert_receive {:transport, "A1", "batch:A1:0", _deadline,
+                        [use_compression: false, attempt: 0]}
+
+        assert_receive {:transport, "B1", "batch:B1:0", _deadline,
+                        [use_compression: false, attempt: 1]}
+
+        assert_receive {:transport, "C1", "batch:C1:1", _deadline,
+                        [use_compression: false, attempt: 0]}
+      after
+        :telemetry.detach(handler)
+      end
     end
 
     test "rebalance retries call the tend hook and preserve per-node outcomes" do
       parent = self()
+      handler = attach_retry_handler(:batch_rebalance_retry)
 
-      responses =
-        start_responses!(%{
-          "A1" => [{:error, Error.from_result_code(:partition_unavailable)}],
-          "B1" => [{:ok, "body-b1"}],
-          "C1" => [{:error, Error.from_result_code(:key_not_found)}]
-        })
+      try do
+        responses =
+          start_responses!(%{
+            "A1" => [{:error, Error.from_result_code(:partition_unavailable)}],
+            "B1" => [{:ok, "body-b1"}],
+            "C1" => [{:error, Error.from_result_code(:key_not_found)}]
+          })
 
-      command =
-        command(fn results, _input ->
-          Map.new(results, fn node_result ->
-            {entry_index(node_result.request),
-             {node_result.request.node_name, node_result.attempt, node_result.result}}
+        command =
+          command(fn results, _input ->
+            Map.new(results, fn node_result ->
+              {entry_index(node_result.request),
+               {node_result.request.node_name, node_result.attempt, node_result.result}}
+            end)
           end)
-        end)
 
-      result =
-        BatchExecutor.run_command(
-          executor_for(max_retries: 1, on_rebalance: fn -> send(parent, :tend_now) end),
-          command,
-          :batch,
-          [node_request("A1", [0]), node_request("C1", [1])],
-          ctx(parent, responses,
-            reroute_request: fn
-              :rebalance, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: "B1"}}
-              _kind, %NodeRequest{} = request, _attempt -> {:ok, request}
-            end
+        result =
+          BatchExecutor.run_command(
+            executor_for(max_retries: 1, on_rebalance: fn -> send(parent, :tend_now) end),
+            command,
+            :batch,
+            [node_request("A1", [0]), node_request("C1", [1])],
+            ctx(parent, responses,
+              reroute_request: fn
+                :rebalance, %NodeRequest{} = request, 1 -> {:ok, %{request | node_name: "B1"}}
+                _kind, %NodeRequest{} = request, _attempt -> {:ok, request}
+              end
+            )
           )
-        )
 
-      assert result == %{
-               0 => {"B1", 1, {:ok, "body-b1"}},
-               1 => {"C1", 0, {:error, Error.from_result_code(:key_not_found)}}
-             }
+        assert result == %{
+                 0 => {"B1", 1, {:ok, "body-b1"}},
+                 1 => {"C1", 0, {:error, Error.from_result_code(:key_not_found)}}
+               }
 
-      assert_receive :tend_now
+        assert_receive :tend_now
 
-      assert_receive {:transport, "A1", "batch:A1:0", _deadline,
-                      [use_compression: false, attempt: 0]}
+        assert_receive {:event, [:aerospike, :retry, :attempt], _measurements,
+                        %{classification: :rebalance, attempt: 1, node_name: "A1"}},
+                       500
 
-      assert_receive {:transport, "B1", "batch:B1:0", _deadline,
-                      [use_compression: false, attempt: 1]}
+        assert_receive {:transport, "A1", "batch:A1:0", _deadline,
+                        [use_compression: false, attempt: 0]}
 
-      assert_receive {:transport, "C1", "batch:C1:1", _deadline,
-                      [use_compression: false, attempt: 0]}
+        assert_receive {:transport, "B1", "batch:B1:0", _deadline,
+                        [use_compression: false, attempt: 1]}
+
+        assert_receive {:transport, "C1", "batch:C1:1", _deadline,
+                        [use_compression: false, attempt: 0]}
+      after
+        :telemetry.detach(handler)
+      end
     end
 
     test "unknown-node refusal remains scoped to one grouped request" do
@@ -257,6 +278,23 @@ defmodule Aerospike.BatchExecutorTest do
       %{pool: :pool, counters: :counters, breaker: :breaker, use_compression: false},
       Map.new(overrides)
     )
+  end
+
+  defp attach_retry_handler(tag) do
+    parent = self()
+    handler_id = "batch-retry-#{tag}-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        Telemetry.retry_attempt(),
+        fn event, measurements, metadata, _config ->
+          send(parent, {:event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    handler_id
   end
 
   defp start_responses!(responses_by_node) do
