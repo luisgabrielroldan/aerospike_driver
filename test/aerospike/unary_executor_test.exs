@@ -2,22 +2,24 @@ defmodule Aerospike.UnaryExecutorTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.Policy
   alias Aerospike.Telemetry
   alias Aerospike.UnaryCommand
   alias Aerospike.UnaryExecutor
 
   describe "new!/1" do
-    test "merges per-call retry options over the base policy" do
+    test "accepts a validated unary policy struct" do
       executor =
         UnaryExecutor.new!(
-          base_policy: %{max_retries: 5, sleep_between_retries_ms: 10, replica_policy: :master},
-          command_opts: [max_retries: 1, replica_policy: :sequence]
+          policy: %Policy.UnaryRead{
+            timeout: 5_000,
+            retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
+          }
         )
 
-      assert executor.policy == %{
-               max_retries: 1,
-               sleep_between_retries_ms: 10,
-               replica_policy: :sequence
+      assert executor.policy == %Policy.UnaryRead{
+               timeout: 5_000,
+               retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
              }
     end
   end
@@ -339,16 +341,17 @@ defmodule Aerospike.UnaryExecutorTest do
   end
 
   defp executor_for(opts) do
-    base_policy = %{max_retries: 2, sleep_between_retries_ms: 0, replica_policy: :sequence}
-
-    command_opts =
-      Keyword.take(opts, [:max_retries, :sleep_between_retries_ms, :replica_policy, :timeout])
-
     on_rebalance = Keyword.get(opts, :on_rebalance, fn -> :ok end)
 
     UnaryExecutor.new!(
-      base_policy: base_policy,
-      command_opts: command_opts,
+      policy: %Policy.UnaryRead{
+        timeout: Keyword.get(opts, :timeout, 5_000),
+        retry: %{
+          max_retries: Keyword.get(opts, :max_retries, 2),
+          sleep_between_retries_ms: Keyword.get(opts, :sleep_between_retries_ms, 0),
+          replica_policy: Keyword.get(opts, :replica_policy, :sequence)
+        }
+      },
       on_rebalance: on_rebalance
     )
   end

@@ -8,6 +8,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.MessagePack
+  alias Aerospike.Policy
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Query
   alias Aerospike.Scan
@@ -33,6 +34,9 @@ defmodule Aerospike.Protocol.ScanQueryTest do
       |> Scan.select(["a", "b"])
       |> Scan.records_per_second(50)
 
+    {:ok, policy} =
+      Policy.scan_query_runtime(timeout: 12_345, task_id: 9_001_234_567_890)
+
     wire =
       ScanQuery.build_scan(
         scan,
@@ -41,8 +45,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
           parts_partial: [%{id: 10, digest: :crypto.strong_rand_bytes(20), bval: -1}],
           record_max: 100
         },
-        timeout: 12_345,
-        task_id: 9_001_234_567_890
+        policy
       )
 
     msg = decode_as_msg(wire)
@@ -72,6 +75,8 @@ defmodule Aerospike.Protocol.ScanQueryTest do
       |> Query.select(["score"])
       |> Query.records_per_second(7)
 
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 42)
+
     wire =
       ScanQuery.build_query(
         query,
@@ -80,8 +85,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
           parts_partial: [%{id: 11, digest: :crypto.strong_rand_bytes(20), bval: 99}],
           record_max: 4
         },
-        timeout: 5_000,
-        task_id: 42
+        policy
       )
 
     msg = decode_as_msg(wire)
@@ -105,14 +109,14 @@ defmodule Aerospike.Protocol.ScanQueryTest do
       |> Query.max_records(4)
 
     {:ok, write_op} = Operation.write("state", "executed")
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 42)
 
     wire =
       ScanQuery.build_query_execute(
         query,
         %{parts_full: [4], parts_partial: [], record_max: 9},
         [write_op],
-        timeout: 5_000,
-        task_id: 42
+        policy
       )
 
     msg = decode_as_msg(wire)
@@ -133,6 +137,8 @@ defmodule Aerospike.Protocol.ScanQueryTest do
       Query.new("testns", "users")
       |> Query.where(Filter.range("age", 10, 20))
 
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 7)
+
     wire =
       ScanQuery.build_query_udf(
         query,
@@ -140,8 +146,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
         "demo",
         "echo",
         [1, true, nil],
-        timeout: 5_000,
-        task_id: 7
+        policy
       )
 
     msg = decode_as_msg(wire)
@@ -162,6 +167,8 @@ defmodule Aerospike.Protocol.ScanQueryTest do
       |> Query.where(Filter.range("age", 10, 20))
       |> Query.select(["score"])
 
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 11)
+
     wire =
       ScanQuery.build_query_aggregate(
         query,
@@ -169,8 +176,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
         "demo",
         "sum",
         ["score"],
-        timeout: 5_000,
-        task_id: 11
+        policy
       )
 
     msg = decode_as_msg(wire)

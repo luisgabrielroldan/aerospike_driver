@@ -4,6 +4,7 @@ defmodule Aerospike.PageRunnerTest do
   alias Aerospike.Cursor
   alias Aerospike.Filter
   alias Aerospike.NodeSupervisor
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
@@ -24,10 +25,12 @@ defmodule Aerospike.PageRunnerTest do
     {:ok, fake} = Fake.start_link(nodes: [{"A1", "10.0.0.1", 3000}, {"B1", "10.0.0.2", 3000}])
     {:ok, owner} = TableOwner.start_link(name: name)
     tables = TableOwner.tables(owner)
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
     {:ok, node_sup} = NodeSupervisor.start_link(name: name)
 
     on_exit(fn ->
       stop_quietly(node_sup)
+      stop_quietly(writer)
       stop_quietly(owner)
       stop_quietly(fake)
     end)
@@ -44,7 +47,7 @@ defmodule Aerospike.PageRunnerTest do
     assert message =~ "scan requires a ready cluster"
   end
 
-  test "prepare_node_requests activates the record budget and carries request opts", ctx do
+  test "prepare_node_requests activates the record budget and carries validated policy", ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
     :ok = Tender.tend_now(tender)
@@ -67,7 +70,8 @@ defmodule Aerospike.PageRunnerTest do
     assert Enum.sort(Enum.map(node_requests, & &1.node_name)) == ["A1", "B1"]
 
     assert Enum.all?(node_requests, fn request ->
-             request.request_opts == [timeout: 1_234, task_id: 77] and
+             request.policy.timeout == 1_234 and
+               request.policy.task_id == 77 and
                request.pool_checkout_timeout == 99 and
                match?(%Query{}, request.scannable)
            end)
@@ -162,15 +166,27 @@ defmodule Aerospike.PageRunnerTest do
     Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
     Fake.script_info(fake, "B1", ["node", "features"], %{"node" => "B1", "features" => ""})
 
-    Fake.script_info(fake, "A1", ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => "1",
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      "A1",
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
-    Fake.script_info(fake, "B1", ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => "1",
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      "B1",
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
     Fake.script_info(fake, "B1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})

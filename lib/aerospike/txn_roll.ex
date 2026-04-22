@@ -195,7 +195,9 @@ defmodule Aerospike.TxnRoll do
   end
 
   defp run_verify_command(conn_name, route_key, opts, input) do
-    UnarySupport.run_command(conn_name, route_key, opts, verify_command(), input)
+    with {:ok, policy} <- UnarySupport.read_policy(conn_name, opts) do
+      UnarySupport.run_command(conn_name, route_key, policy, verify_command(), input)
+    end
   end
 
   defp roll_writes(conn_name, txn, opts, direction) do
@@ -238,7 +240,9 @@ defmodule Aerospike.TxnRoll do
   end
 
   defp run_roll_command(conn_name, route_key, opts, input) do
-    UnarySupport.run_command(conn_name, route_key, opts, roll_command(), input)
+    with {:ok, policy} <- UnarySupport.write_policy(conn_name, opts) do
+      UnarySupport.run_command(conn_name, route_key, policy, roll_command(), input)
+    end
   end
 
   defp encode_verify_request(%{key: %Key{} = key, version: version}) do

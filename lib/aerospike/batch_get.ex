@@ -21,6 +21,7 @@ defmodule Aerospike.BatchGet do
   alias Aerospike.BatchRouter
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Policy
   alias Aerospike.Protocol.BatchRead
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
@@ -40,19 +41,20 @@ defmodule Aerospike.BatchGet do
   def execute(tender, keys, bins, opts \\ [])
 
   def execute(_tender, [], :all, opts) when is_list(opts) do
-    with :ok <- validate_opts(opts) do
+    with {:ok, _policy} <- Policy.batch_read(opts) do
       {:ok, []}
     end
   end
 
   def execute(tender, keys, :all, opts) when is_list(keys) and is_list(opts) do
     with :ok <- validate_keys(keys),
-         :ok <- validate_opts(opts) do
+         {:ok, _validated} <- Policy.batch_read(opts),
+         {:ok, policy} <- batch_policy(tender, opts) do
       runtime = runtime_ctx(tender)
-      executor = executor(runtime.tables, opts)
+      executor = executor(policy)
 
       case BatchRouter.group_keys(runtime.tables, keys,
-             dispatch: {:read, executor.policy.replica_policy, 0}
+             dispatch: {:read, executor.policy.retry.replica_policy, 0}
            ) do
         {:ok, grouping} ->
           BatchExecutor.run_command(
@@ -167,32 +169,17 @@ defmodule Aerospike.BatchGet do
     end
   end
 
-  defp validate_opts(opts) do
-    case Enum.find(opts, fn
-           {:timeout, timeout} -> not (is_integer(timeout) and timeout >= 0)
-           {key, _value} -> key != :timeout
-         end) do
-      nil ->
-        :ok
-
-      {:timeout, _bad_timeout} ->
-        invalid_argument("Aerospike.batch_get/4 expects :timeout to be a non-negative integer")
-
-      {key, _value} ->
-        invalid_argument(
-          "Aerospike.batch_get/4 currently supports only the :timeout option, got #{inspect(key)}"
-        )
-    end
+  defp batch_policy(tender, opts) do
+    tender
+    |> runtime_ctx()
+    |> Map.fetch!(:tables)
+    |> Map.fetch!(:meta)
+    |> RetryPolicy.load()
+    |> Policy.batch_read(opts)
   end
 
-  defp executor(tables, opts) do
-    base_policy =
-      tables.meta
-      |> RetryPolicy.load()
-      |> Map.put(:max_retries, 0)
-      |> Map.put(:sleep_between_retries_ms, 0)
-
-    BatchExecutor.new!(base_policy: base_policy, command_opts: Keyword.take(opts, [:timeout]))
+  defp executor(%Policy.BatchRead{} = policy) do
+    BatchExecutor.new!(policy: policy)
   end
 
   defp runtime_ctx(tender) do

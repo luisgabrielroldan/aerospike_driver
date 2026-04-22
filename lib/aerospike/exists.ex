@@ -29,11 +29,12 @@ defmodule Aerospike.Exists do
   @spec execute(GenServer.server(), Key.t(), [option()]) :: result()
   def execute(tender, %Key{} = key, opts \\ []) when is_list(opts) do
     with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
+         {:ok, policy} <- UnarySupport.read_policy(tender, opts),
          :ok <- TxnSupport.prepare_txn_read(tender, txn, key) do
       UnarySupport.run_command(
         tender,
         key,
-        opts,
+        policy,
         command(),
         %{key: key, conn: tender, txn: txn, opts: opts}
       )

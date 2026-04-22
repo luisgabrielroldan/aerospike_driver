@@ -3,7 +3,7 @@ defmodule Aerospike.UnaryExecutor do
   Internal retry driver for unary commands.
 
   This module owns the shared per-call setup and retry loop that unary
-  commands should not copy: policy merge, monotonic deadline budgeting,
+  commands should not copy: validated policy execution, monotonic deadline budgeting,
   retry telemetry, classification-driven redispatch, and the unary
   node-dispatch path (`Router` -> `Tender.node_handle/2` ->
   `CircuitBreaker` -> `NodePool.checkout!/4`).
@@ -17,13 +17,12 @@ defmodule Aerospike.UnaryExecutor do
   alias Aerospike.CircuitBreaker
   alias Aerospike.Error
   alias Aerospike.NodePool
+  alias Aerospike.Policy
   alias Aerospike.RetryPolicy
   alias Aerospike.Router
   alias Aerospike.Telemetry
   alias Aerospike.Tender
   alias Aerospike.UnaryCommand
-
-  @default_timeout 5_000
 
   @enforce_keys [:policy, :deadline, :on_rebalance]
   defstruct [:policy, :deadline, :on_rebalance]
@@ -56,8 +55,10 @@ defmodule Aerospike.UnaryExecutor do
           optional(:checkout) => checkout_fun()
         }
 
+  @type policy :: Policy.UnaryRead.t() | Policy.UnaryWrite.t()
+
   @type t :: %__MODULE__{
-          policy: RetryPolicy.t(),
+          policy: policy(),
           deadline: integer(),
           on_rebalance: on_rebalance_fun()
         }
@@ -67,14 +68,12 @@ defmodule Aerospike.UnaryExecutor do
   """
   @spec new!(keyword()) :: t()
   def new!(opts) when is_list(opts) do
-    base_policy = Keyword.fetch!(opts, :base_policy)
-    command_opts = Keyword.get(opts, :command_opts, [])
-    timeout = Keyword.get(command_opts, :timeout, @default_timeout)
+    policy = Keyword.fetch!(opts, :policy)
     on_rebalance = Keyword.get(opts, :on_rebalance, fn -> :ok end)
 
     %__MODULE__{
-      policy: RetryPolicy.merge(base_policy, command_opts),
-      deadline: monotonic_now() + timeout,
+      policy: policy,
+      deadline: monotonic_now() + policy.timeout,
       on_rebalance: on_rebalance
     }
   end
@@ -108,7 +107,13 @@ defmodule Aerospike.UnaryExecutor do
     pick_node = Map.get(ctx, :pick_node, &pick_node/5)
     dispatch = UnaryCommand.dispatch_kind(command)
 
-    case pick_node.(dispatch, ctx.tables, ctx.route_key, retry_ctx.policy.replica_policy, attempt) do
+    case pick_node.(
+           dispatch,
+           ctx.tables,
+           ctx.route_key,
+           retry_ctx.policy.retry.replica_policy,
+           attempt
+         ) do
       {:ok, node_name} ->
         {node_name, dispatch_node(retry_ctx, attempt, command, ctx, node_name)}
 
@@ -173,7 +178,7 @@ defmodule Aerospike.UnaryExecutor do
 
   defp attempt_loop(executor, attempt_fun, attempt, last_error) do
     cond do
-      attempt > executor.policy.max_retries ->
+      attempt > executor.policy.retry.max_retries ->
         exhausted(last_error, :max_retries)
 
       budget_exhausted?(executor) ->
@@ -216,7 +221,7 @@ defmodule Aerospike.UnaryExecutor do
   end
 
   defp retry_after_error(executor, attempt_fun, node_name, attempt, err, classification) do
-    maybe_sleep(executor.policy)
+    maybe_sleep(executor.policy.retry)
     next_attempt = attempt + 1
 
     emit_retry_event(executor, node_name, next_attempt, classification)

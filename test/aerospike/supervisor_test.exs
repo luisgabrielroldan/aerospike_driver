@@ -3,6 +3,7 @@ defmodule Aerospike.SupervisorTest do
 
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionMap
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.Supervisor, as: ClusterSupervisor
   alias Aerospike.TableOwner
   alias Aerospike.Tender
@@ -282,7 +283,8 @@ defmodule Aerospike.SupervisorTest do
   end
 
   describe "supervision tree shape" do
-    test "starts TableOwner, NodeSupervisor, and Tender under one supervisor", ctx do
+    test "starts TableOwner, NodeSupervisor, PartitionMapWriter, and Tender under one supervisor",
+         ctx do
       {:ok, sup} = start_supervisor(ctx)
 
       assert Process.alive?(sup)
@@ -290,6 +292,7 @@ defmodule Aerospike.SupervisorTest do
 
       assert Process.alive?(Process.whereis(TableOwner.via(ctx.name)))
       assert Process.alive?(Process.whereis(NodeSupervisor.sup_name(ctx.name)))
+      assert Process.alive?(Process.whereis(PartitionMapWriter.via(ctx.name)))
       assert Process.alive?(Process.whereis(ctx.name))
 
       ids =
@@ -299,6 +302,7 @@ defmodule Aerospike.SupervisorTest do
 
       assert {TableOwner, ctx.name} in ids
       assert {NodeSupervisor, ctx.name} in ids
+      assert {PartitionMapWriter, ctx.name} in ids
       assert {Tender, ctx.name} in ids
     end
 
@@ -325,6 +329,7 @@ defmodule Aerospike.SupervisorTest do
       tender_before = Process.whereis(ctx.name)
       owner_before = Process.whereis(TableOwner.via(ctx.name))
       node_sup_before = Process.whereis(NodeSupervisor.sup_name(ctx.name))
+      writer_before = Process.whereis(PartitionMapWriter.via(ctx.name))
 
       :ok = Tender.tend_now(ctx.name)
       tables_before = Tender.tables(ctx.name)
@@ -338,6 +343,7 @@ defmodule Aerospike.SupervisorTest do
       assert tender_after != tender_before
       assert Process.whereis(TableOwner.via(ctx.name)) == owner_before
       assert Process.whereis(NodeSupervisor.sup_name(ctx.name)) == node_sup_before
+      assert Process.whereis(PartitionMapWriter.via(ctx.name)) == writer_before
 
       # TableOwner kept the rows the previous Tender wrote — the new
       # Tender exposes the exact same tables and the :ready meta flag
@@ -403,10 +409,16 @@ defmodule Aerospike.SupervisorTest do
       "features" => ""
     })
 
-    Fake.script_info(fake, node_name, ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => Integer.to_string(partition_gen),
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      node_name,
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => Integer.to_string(partition_gen),
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, node_name, ["peers-clear-std"], %{
       "peers-clear-std" => "0,3000,[]"

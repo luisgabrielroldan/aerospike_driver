@@ -9,6 +9,7 @@ defmodule Aerospike.ScanOps.PageRunner do
   alias Aerospike.PartitionFilter
   alias Aerospike.PartitionMap
   alias Aerospike.PartitionTracker
+  alias Aerospike.Policy
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
@@ -18,9 +19,6 @@ defmodule Aerospike.ScanOps.PageRunner do
   alias Aerospike.Scan
   alias Aerospike.ScanOps
   alias Aerospike.Tender
-
-  @default_timeout 5_000
-  @default_pool_checkout_timeout 5_000
 
   @typep runtime :: %{
            tender: GenServer.server(),
@@ -93,16 +91,26 @@ defmodule Aerospike.ScanOps.PageRunner do
           runtime(),
           Scan.t() | Query.t(),
           String.t() | nil,
-          keyword()
+          keyword() | Policy.ScanQueryRuntime.t()
         ) :: {:ok, PartitionTracker.t(), [map()]} | {:error, Error.t()}
-  def prepare_node_requests(runtime, scannable, node_filter, opts) do
+  def prepare_node_requests(runtime, scannable, node_filter, opts) when is_list(opts) do
+    with {:ok, policy} <- Policy.scan_query_runtime(opts) do
+      prepare_node_requests(runtime, scannable, node_filter, policy)
+    end
+  end
+
+  def prepare_node_requests(runtime, scannable, node_filter, %Policy.ScanQueryRuntime{} = policy) do
+    do_prepare_node_requests(runtime, scannable, node_filter, policy)
+  end
+
+  defp do_prepare_node_requests(runtime, scannable, node_filter, policy) do
     with {:ok, node_names} <- active_nodes(runtime.tender, node_filter, scannable),
          {:ok, tracker} <- new_tracker(scannable, node_names, node_filter),
          {:ok, partition_map} <- partition_map(runtime, scannable),
          {:ok, tracker, node_partitions} <-
            PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
       tracker = activate_record_budget(tracker, scannable)
-      {:ok, tracker, build_node_requests(node_partitions, scannable, opts)}
+      {:ok, tracker, build_node_requests(node_partitions, scannable, policy)}
     end
   end
 
@@ -144,9 +152,10 @@ defmodule Aerospike.ScanOps.PageRunner do
 
   defp page_internal(tender, scannable, opts, node_filter) do
     with {:ok, runtime} <- runtime(tender, scannable),
+         {:ok, policy} <- Policy.scan_query_runtime(opts),
          {:ok, tracker, node_requests} <-
-           prepare_node_requests(runtime, scannable, node_filter, opts) do
-      run_tracker_page(tender, scannable, opts, node_filter, runtime, tracker, node_requests)
+           prepare_node_requests(runtime, scannable, node_filter, policy) do
+      run_tracker_page(tender, scannable, node_filter, runtime, policy, tracker, node_requests)
     end
   end
 
@@ -230,18 +239,14 @@ defmodule Aerospike.ScanOps.PageRunner do
     end)
   end
 
-  defp build_node_requests(node_partitions, scannable, opts) do
-    task_id = Keyword.get(opts, :task_id, System.unique_integer([:positive]))
-    request_opts = [timeout: Keyword.get(opts, :timeout, @default_timeout), task_id: task_id]
-
+  defp build_node_requests(node_partitions, scannable, %Policy.ScanQueryRuntime{} = policy) do
     Enum.map(node_partitions, fn node_partitions_item ->
       %{
         node_name: node_partitions_item.node,
         node_partitions: node_partitions_item,
-        request_opts: request_opts,
+        policy: policy,
         scannable: scannable,
-        pool_checkout_timeout:
-          Keyword.get(opts, :pool_checkout_timeout, @default_pool_checkout_timeout)
+        pool_checkout_timeout: policy.pool_checkout_timeout
       }
     end)
   end
@@ -249,15 +254,15 @@ defmodule Aerospike.ScanOps.PageRunner do
   defp run_tracker_page(
          tender,
          scannable,
-         opts,
          node_filter,
          runtime,
+         policy,
          tracker,
          node_requests,
          acc \\ []
        ) do
-    task_timeout = Keyword.get(opts, :task_timeout, :infinity)
-    max_concurrency = max_concurrency(opts, length(node_requests))
+    task_timeout = policy.task_timeout
+    max_concurrency = max_concurrency(policy, length(node_requests))
 
     case run_page_jobs(
            runtime,
@@ -265,8 +270,7 @@ defmodule Aerospike.ScanOps.PageRunner do
            tracker,
            node_requests,
            task_timeout,
-           max_concurrency,
-           opts
+           max_concurrency
          ) do
       {:ok, tracker, node_partitions_list, page_records} ->
         tracker = %{tracker | node_partitions_list: node_partitions_list}
@@ -283,9 +287,9 @@ defmodule Aerospike.ScanOps.PageRunner do
             continue_tracker_page(
               tender,
               scannable,
-              opts,
               node_filter,
               runtime,
+              policy,
               tracker2,
               all_records
             )
@@ -299,34 +303,34 @@ defmodule Aerospike.ScanOps.PageRunner do
     end
   end
 
-  defp prepare_iteration(tender, scannable, opts, tracker, _node_filter) do
+  defp prepare_iteration(tender, scannable, tracker, %Policy.ScanQueryRuntime{} = policy) do
     with {:ok, partition_map} <- partition_map(%{tables: Tender.tables(tender)}, scannable),
          {:ok, tracker, node_partitions_list} <-
            PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
       tracker =
         activate_record_budget(%{tracker | node_partitions_list: node_partitions_list}, scannable)
 
-      {:ok, tracker, build_node_requests(node_partitions_list, scannable, opts)}
+      {:ok, tracker, build_node_requests(node_partitions_list, scannable, policy)}
     end
   end
 
   defp continue_tracker_page(
          tender,
          scannable,
-         opts,
          node_filter,
          runtime,
+         policy,
          tracker,
          all_records
        ) do
-    case prepare_iteration(tender, scannable, opts, tracker, node_filter) do
+    case prepare_iteration(tender, scannable, tracker, policy) do
       {:ok, next_tracker, next_node_requests} ->
         run_tracker_page(
           tender,
           scannable,
-          opts,
           node_filter,
           runtime,
+          policy,
           next_tracker,
           next_node_requests,
           all_records
@@ -343,12 +347,11 @@ defmodule Aerospike.ScanOps.PageRunner do
          tracker,
          node_requests,
          task_timeout,
-         max_concurrency,
-         opts
+         max_concurrency
        ) do
     node_requests
     |> Task.async_stream(
-      fn node_request -> run_node_request(runtime, scannable, node_request, opts) end,
+      fn node_request -> run_node_request(runtime, scannable, node_request) end,
       ordered: true,
       max_concurrency: max_concurrency,
       timeout: task_timeout,
@@ -388,11 +391,11 @@ defmodule Aerospike.ScanOps.PageRunner do
     end
   end
 
-  defp run_node_request(runtime, scannable, %{node_name: node_name} = node_request, opts) do
+  defp run_node_request(runtime, scannable, %{node_name: node_name} = node_request) do
     case Tender.node_handle(runtime.tender, node_name) do
       {:ok, handle} ->
         case CircuitBreaker.allow?(handle.counters, handle.breaker) do
-          :ok -> connect_and_stream(runtime, scannable, node_request, handle, opts)
+          :ok -> connect_and_stream(runtime, scannable, node_request, handle)
           {:error, %Error{} = err} -> {:error, err}
         end
 
@@ -401,12 +404,12 @@ defmodule Aerospike.ScanOps.PageRunner do
     end
   end
 
-  defp connect_and_stream(runtime, scannable, node_request, handle, opts) do
+  defp connect_and_stream(runtime, scannable, node_request, handle) do
     transport = runtime.transport
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    timeout = node_request.policy.timeout
     node_opts = [use_compression: handle.use_compression, attempt: 0]
 
-    request = build_wire(scannable, node_request.node_partitions, node_request.request_opts)
+    request = build_wire(scannable, node_request.node_partitions, node_request.policy)
 
     case transport.connect(handle.host, handle.port, handle.connect_opts) do
       {:ok, conn} ->
@@ -590,12 +593,12 @@ defmodule Aerospike.ScanOps.PageRunner do
   defp set(%Scan{set: set}), do: set
   defp set(%Query{set: set}), do: set
 
-  defp build_wire(%Scan{} = scan, node_partitions, opts) do
-    ScanQuery.build_scan(scan, request_partitions(node_partitions), opts)
+  defp build_wire(%Scan{} = scan, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
+    ScanQuery.build_scan(scan, request_partitions(node_partitions), policy)
   end
 
-  defp build_wire(%Query{} = query, node_partitions, opts) do
-    ScanQuery.build_query(query, request_partitions(node_partitions), opts)
+  defp build_wire(%Query{} = query, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
+    ScanQuery.build_query(query, request_partitions(node_partitions), policy)
   end
 
   defp request_partitions(%NodePartitions{
@@ -618,11 +621,11 @@ defmodule Aerospike.ScanOps.PageRunner do
     }
   end
 
-  defp max_concurrency(opts, fallback) do
-    case Keyword.get(opts, :max_concurrent_nodes, fallback) do
-      n when is_integer(n) and n > 0 -> min(n, fallback)
-      _ -> fallback
-    end
+  defp max_concurrency(%Policy.ScanQueryRuntime{max_concurrent_nodes: 0}, fallback), do: fallback
+
+  defp max_concurrency(%Policy.ScanQueryRuntime{max_concurrent_nodes: n}, fallback)
+       when is_integer(n) and n > 0 do
+    min(n, fallback)
   end
 
   defp unknown_node(node_name) do

@@ -1,24 +1,44 @@
 defmodule Aerospike.Tender do
   @moduledoc """
-  Single-writer cluster-state GenServer.
+  Tend-cycle orchestrator and cluster-state public query surface.
 
-  The Tender is the only process that writes to the cluster's ETS tables
-  (partition owners, per-node partition-generation, meta/ready flag). Every
-  other component reads directly from ETS for a lock-free hot path.
+  Each cycle composes the following stages, one after the other, through a
+  single process so every observable transition is serialised:
 
-  Responsibilities:
+    1. Seed the node set from `:seeds` when the cluster view is empty.
+    2. Refresh every known node's `partition-generation`, `cluster-stable`,
+       and `peers-generation` in one combined info round trip via
+       `Aerospike.Node.refresh/2`.
+    3. Run peer discovery via `Aerospike.Node.refresh_peers/3` only when at
+       least one node's `peers-generation` advanced this cycle (matches the
+       reference C/Go/Java trigger).
+    4. Verify `cluster-stable` agreement across contributing nodes via
+       `Aerospike.PartitionMapMerge.verify_cluster_stable/1`. On
+       disagreement, skip the partition-map refresh for this cycle.
+    5. When the cluster is stable and a node's `partition-generation`
+       advanced past its last applied value, fetch its `replicas` reply via
+       `Aerospike.Node.refresh_partitions/2` and merge the segments via
+       `Aerospike.PartitionMapMerge.apply_segments/4`.
+    6. Recompute the `:ready` meta flag — `true` only when every configured
+       namespace has a complete partition map.
 
-    * Bootstrap the node set from a seed list.
-    * Periodically discover peers from every known node and add any that
-      show up.
-    * Track each node's reported `partition-generation`; refetch the
-      partition map for nodes whose generation advanced.
-    * Apply the regime guard on every partition-map update so a late reply
-      from a lagging node cannot overwrite a newer one.
-    * Count consecutive refresh failures per node; drop a node only when
-      the failure threshold is reached.
-    * Flip the `:ready` meta flag only once every configured namespace has
-      a complete partition map (every partition 0..4095 has a master).
+  Per-node I/O (info-socket probes, login, peer discovery, partition-map
+  fetch) runs through `Aerospike.Node`, which owns the `%Node{}` struct
+  plus the pure (given a transport) operations. The Tender retains the
+  lifecycle state around each node (status, failures, recoveries, pool,
+  counters, histograms) and the cycle orchestration; the Node struct
+  carries only the observables the info socket sees.
+
+  Partition-map accumulation (regime guard, ownership merge, agreement
+  check) lives in `Aerospike.PartitionMapMerge`. The Tender calls it; it
+  never open-codes the merge.
+
+  ETS writes against the cluster-state tables (`owners`, `node_gens`,
+  `meta.:ready`) are routed through `Aerospike.PartitionMapWriter`. The
+  Tender never mutates those tables itself; every per-node `put_node_gen`,
+  `drop_node`, `delete_node_gen`, `apply_segments`, and `recompute_ready`
+  is a synchronous call into the writer so a `tend_now/1` observer sees a
+  fully-committed cycle.
 
   All I/O goes through the `Aerospike.NodeTransport` behaviour module
   supplied via the `:transport` option. Production code uses
@@ -34,12 +54,13 @@ defmodule Aerospike.Tender do
   require Logger
 
   alias Aerospike.Error
+  alias Aerospike.Node, as: ClusterNode
   alias Aerospike.NodeCounters
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionMap
-  alias Aerospike.Protocol.Info, as: InfoParser
-  alias Aerospike.Protocol.PartitionMap, as: PartitionMapParser
-  alias Aerospike.Protocol.Peers
+  alias Aerospike.PartitionMapMerge
+  alias Aerospike.PartitionMapWriter
+  alias Aerospike.Policy
   alias Aerospike.RetryPolicy
   alias Aerospike.TableOwner
   alias Aerospike.Telemetry
@@ -58,7 +79,6 @@ defmodule Aerospike.Tender do
   # through `Aerospike.start_link/1`.
   @default_circuit_open_threshold 10
   @default_max_concurrent_multiplier 10
-  @refresh_node_info_keys ["partition-generation", "cluster-stable"]
 
   @type seed :: {String.t(), :inet.port_number()}
   @type namespace :: String.t()
@@ -154,6 +174,7 @@ defmodule Aerospike.Tender do
           | {:seeds, [seed(), ...]}
           | {:namespaces, [namespace(), ...]}
           | {:tables, TableOwner.tables()}
+          | {:writer, atom() | pid()}
           | {:connect_opts, keyword()}
           | {:failure_threshold, pos_integer()}
           | {:tend_interval_ms, pos_integer()}
@@ -362,10 +383,12 @@ defmodule Aerospike.Tender do
 
   @impl GenServer
   def init(opts) do
+    name = Keyword.fetch!(opts, :name)
     transport = Keyword.fetch!(opts, :transport)
     seeds = Keyword.fetch!(opts, :seeds)
     namespaces = Keyword.fetch!(opts, :namespaces)
     tables = Keyword.fetch!(opts, :tables)
+    writer = Keyword.get(opts, :writer, PartitionMapWriter.via(name))
 
     seeds != [] or raise ArgumentError, "Aerospike.Tender: :seeds must be non-empty"
 
@@ -387,7 +410,7 @@ defmodule Aerospike.Tender do
         )
     }
 
-    retry_opts = RetryPolicy.from_opts(opts)
+    %Policy.ClusterDefaults{retry: retry_opts} = Policy.cluster_defaults(opts)
     RetryPolicy.put(meta_tab, retry_opts)
 
     user = Keyword.get(opts, :user)
@@ -417,7 +440,9 @@ defmodule Aerospike.Tender do
       owners_tab: owners_tab,
       node_gens_tab: node_gens_tab,
       meta_tab: meta_tab,
+      writer: writer,
       nodes: %{},
+      peers_refresh_needed?: false,
       ready?: read_ready(meta_tab)
     }
 
@@ -487,10 +512,7 @@ defmodule Aerospike.Tender do
          status: :active,
          pool_pid: pool,
          counters: counters,
-         features: features,
-         host: host,
-         port: port,
-         session: session
+         node: %ClusterNode{host: host, port: port, session: session, features: features}
        }}
       when is_pid(pool) and not is_nil(counters) ->
         handle = %{
@@ -516,18 +538,18 @@ defmodule Aerospike.Tender do
 
   def handle_call(:nodes_status, _from, state) do
     snapshot =
-      Map.new(state.nodes, fn {name, node} ->
+      Map.new(state.nodes, fn {name, entry} ->
         {name,
          %{
-           status: node.status,
-           failures: node.failures,
-           recoveries: node.recoveries,
-           last_tend_at: node.last_tend_at,
-           last_tend_result: node.last_tend_result,
-           generation_seen: node.generation_seen,
-           counters: node.counters,
-           tend_histogram: node.tend_histogram,
-           features: node.features
+           status: entry.status,
+           failures: entry.failures,
+           recoveries: entry.recoveries,
+           last_tend_at: entry.last_tend_at,
+           last_tend_result: entry.last_tend_result,
+           generation_seen: entry.node.generation_seen,
+           counters: entry.counters,
+           tend_histogram: entry.tend_histogram,
+           features: entry.node.features
          }}
       end)
 
@@ -542,7 +564,10 @@ defmodule Aerospike.Tender do
 
   @impl GenServer
   def terminate(_reason, state) do
-    Enum.each(state.nodes, fn {_, node} -> safe_close(state.transport, node.conn) end)
+    Enum.each(state.nodes, fn {_, entry} ->
+      ClusterNode.close(state.transport, entry.node.conn)
+    end)
+
     :ok
   end
 
@@ -551,16 +576,25 @@ defmodule Aerospike.Tender do
   defp run_tend(state) do
     :telemetry.span(Telemetry.tend_cycle_span(), %{}, fn ->
       new_state =
-        state
+        %{state | peers_refresh_needed?: false}
         |> bootstrap_if_needed()
         |> refresh_nodes()
-        |> discover_peers()
+        |> maybe_discover_peers()
         |> maybe_refresh_partition_maps()
         |> recompute_ready()
 
       {new_state, %{}}
     end)
   end
+
+  # Calls `discover_peers/1` only when any event this cycle flagged that a
+  # peer-list refresh is warranted. Matching the C, Go, and Java clients,
+  # the trigger fires when at least one active node's `peers-generation`
+  # changed this cycle (including the "freshly-seen" sentinel case where
+  # the cached generation is `nil`), or when a new node was registered
+  # mid-cycle from the seed or peer-discovery paths.
+  defp maybe_discover_peers(%{peers_refresh_needed?: false} = state), do: state
+  defp maybe_discover_peers(state), do: discover_peers(state)
 
   # Only fetches `replicas` once every `:active` node that produced a
   # `cluster-stable` hash this cycle agrees on the same hash. Disagreement
@@ -575,7 +609,7 @@ defmodule Aerospike.Tender do
   defp maybe_refresh_partition_maps(state) do
     :telemetry.span(Telemetry.partition_map_refresh_span(), %{}, fn ->
       new_state =
-        case verify_cluster_stable(state) do
+        case PartitionMapMerge.verify_cluster_stable(cluster_stable_contributors(state)) do
           {:ok, _hash_or_empty} ->
             refresh_partition_maps(state)
 
@@ -592,39 +626,27 @@ defmodule Aerospike.Tender do
     end)
   end
 
-  # Returns `{:ok, hash}` if every `:active` node with a `cluster-stable`
-  # value captured this cycle agrees, `{:ok, :empty}` if there is no node
-  # to verify (full outage or all info calls failed this cycle), and
-  # `{:error, :disagreement, per_node_hashes}` otherwise. Inactive nodes
-  # are excluded by construction (they cannot serve traffic), as are
-  # active nodes whose info call failed this cycle (they have nil hash).
-  @spec verify_cluster_stable(map()) ::
-          {:ok, String.t() | :empty}
-          | {:error, :disagreement, %{optional(String.t()) => String.t()}}
-  defp verify_cluster_stable(state) do
-    contributors =
-      state.nodes
-      |> Enum.filter(fn {_, node} ->
-        node.status == :active and is_binary(node.cluster_stable)
-      end)
-      |> Map.new(fn {name, node} -> {name, node.cluster_stable} end)
-
-    case contributors |> Map.values() |> Enum.uniq() do
-      [] -> {:ok, :empty}
-      [hash] -> {:ok, hash}
-      _ -> {:error, :disagreement, contributors}
-    end
+  # Builds the `%{node_name => hash}` map `PartitionMapMerge.verify_cluster_stable/1`
+  # consumes. Inactive nodes are excluded by construction (they cannot serve
+  # traffic), as are active nodes whose info call failed this cycle (they
+  # carry a nil hash after `clear_cluster_stable/1` zeroed it at cycle start).
+  defp cluster_stable_contributors(state) do
+    state.nodes
+    |> Enum.filter(fn {_, entry} ->
+      entry.status == :active and is_binary(entry.node.cluster_stable)
+    end)
+    |> Map.new(fn {name, entry} -> {name, entry.node.cluster_stable} end)
   end
 
   # Re-enters seed bootstrap whenever `state.nodes` is empty. In steady
   # state the map is non-empty and this is a `map_size == 0` check — the
   # same cost as a boolean latch. When every node has been dropped (full
   # outage followed by the grace-cycle drop), the next tend cycle re-runs
-  # `bootstrap_seed/3` against the configured seeds. A seed that is still
-  # dead fails the info probe inside `bootstrap_seed/3` and logs at
-  # `:warning`; no state is written and the next cycle retries. The
-  # `:seeds` option is validated non-empty in `init/1`, so the "no
-  # configured seeds" edge case cannot occur here.
+  # the seed against the configured seeds. A seed that is still dead fails
+  # the info probe inside `bootstrap_seed/3` and logs at `:warning`; no
+  # state is written and the next cycle retries. The `:seeds` option is
+  # validated non-empty in `init/1`, so the "no configured seeds" edge
+  # case cannot occur here.
   defp bootstrap_if_needed(%{nodes: nodes} = state) when map_size(nodes) > 0, do: state
 
   defp bootstrap_if_needed(state) do
@@ -633,91 +655,43 @@ defmodule Aerospike.Tender do
     end)
   end
 
-  # Fetches `node` and `features` in one info round-trip. The seed list is
-  # dialled verbatim from `connect_opts`, so `service-clear-alt` does not
-  # belong here — peer discovery is the only place the alternate-services
-  # toggle takes effect.
+  # Dials `{host, port}` and registers the resulting Node struct, unless
+  # the server reports a node name already present in `state.nodes`. The
+  # seed list is dialled verbatim from `connect_opts`, so
+  # `service-clear-alt` does not belong here — peer discovery is the only
+  # place the alternate-services toggle takes effect.
   defp bootstrap_seed(state, host, port) do
-    with {:ok, conn} <- state.transport.connect(host, port, state.connect_opts),
-         {:ok, session} <- login_info_socket(state, conn),
-         {:ok, %{"node" => node_name} = info} <-
-           state.transport.info(conn, ["node", "features"]) do
-      case Map.fetch(state.nodes, node_name) do
-        {:ok, _existing} ->
-          safe_close(state.transport, conn)
-          state
+    case ClusterNode.seed(
+           state.transport,
+           host,
+           port,
+           state.connect_opts,
+           auth_opts(state)
+         ) do
+      {:ok, node} ->
+        case Map.fetch(state.nodes, node.name) do
+          {:ok, _existing} ->
+            ClusterNode.close(state.transport, node.conn)
+            state
 
-        :error ->
-          features = parse_bootstrap_features(node_name, info)
-          register_new_node(state, node_name, host, port, conn, features, session, :bootstrap)
-      end
-    else
+          :error ->
+            register_new_node(state, node, :bootstrap)
+        end
+
       {:error, %Error{} = err} ->
         Logger.warning("Aerospike.Tender: seed #{host}:#{port} bootstrap failed: #{err.message}")
+
         state
 
-      {:ok, _other} ->
+      {:error, :no_node_info} ->
         Logger.warning("Aerospike.Tender: seed #{host}:#{port} missing 'node' info")
         state
     end
   end
 
-  # Runs the admin-protocol login on a freshly-opened info socket when
-  # cluster-wide `:user`/`:password` credentials are configured. Returns
-  # `{:ok, session}` where `session` is either `nil` (no auth configured or
-  # server has security disabled) or `{token, expires_at | nil}`. Any
-  # login error surfaces as `{:error, %Error{}}` and the caller treats it
-  # the same as a failed `info` probe — seed is skipped this cycle.
-  defp login_info_socket(%{user: nil, password: nil}, _conn), do: {:ok, nil}
+  defp auth_opts(state), do: [user: state.user, password: state.password]
 
-  defp login_info_socket(%{user: user, password: password, transport: transport}, conn)
-       when is_binary(user) and is_binary(password) do
-    case transport.login(conn, user: user, password: password) do
-      {:ok, {:session, token, ttl}} ->
-        {:ok, {token, session_expires_at(ttl)}}
-
-      {:ok, :ok_no_token} ->
-        {:ok, nil}
-
-      {:ok, :security_not_enabled} ->
-        {:ok, nil}
-
-      {:error, %Error{} = err} ->
-        {:error, err}
-    end
-  end
-
-  # `ttl` is in seconds; subtract 60 s so the client drops the token
-  # before the server does (matches Go `login_command.go`).
-  defp session_expires_at(nil), do: nil
-
-  defp session_expires_at(ttl_seconds) when is_integer(ttl_seconds) and ttl_seconds > 0 do
-    skew = min(60, div(ttl_seconds, 2))
-    System.monotonic_time(:millisecond) + (ttl_seconds - skew) * 1_000
-  end
-
-  defp session_expires_at(_), do: nil
-
-  # `features` is best-effort: a node that fails the probe still
-  # registers, but with an empty feature set, which is the safe default
-  # (every optional capability stays off). This matches the Go client's
-  # behaviour — `node.go:refreshFeatures` swallows a missing reply and
-  # leaves the feature set at zero.
-  defp parse_bootstrap_features(node_name, info) do
-    case Map.fetch(info, "features") do
-      {:ok, value} when is_binary(value) ->
-        InfoParser.parse_features(value)
-
-      _ ->
-        Logger.debug(fn ->
-          "Aerospike.Tender: #{node_name} bootstrap features key absent; assuming none"
-        end)
-
-        MapSet.new()
-    end
-  end
-
-  defp register_new_node(state, node_name, host, port, conn, features, session, reason)
+  defp register_new_node(state, %ClusterNode{} = node, reason)
        when reason in [:bootstrap, :peer_discovery] do
     # Allocate counters *before* starting the pool so the pool's
     # callbacks see the reference from the first init_worker call.
@@ -732,33 +706,30 @@ defmodule Aerospike.Tender do
     # sampling call site runs regardless of whether a pool exists).
     tend_histogram = TendHistogram.new()
 
-    case ensure_pool(state, node_name, host, port, counters, features, session) do
+    case ensure_pool(state, node, counters) do
       {:ok, pool_pid} ->
-        node = %{
-          name: node_name,
-          host: host,
-          port: port,
-          conn: conn,
+        entry = %{
+          node: node,
+          status: :active,
           failures: 0,
           recoveries: 0,
-          status: :active,
           last_tend_at: nil,
           last_tend_result: nil,
-          generation_seen: nil,
-          applied_gen: nil,
-          cluster_stable: nil,
           pool_pid: pool_pid,
           counters: counters,
-          features: features,
-          tend_histogram: tend_histogram,
-          session: session
+          tend_histogram: tend_histogram
         }
 
-        emit_transition(node_name, :unknown, :active, reason)
-        %{state | nodes: Map.put(state.nodes, node_name, node)}
+        emit_transition(node.name, :unknown, :active, reason)
+
+        %{
+          state
+          | nodes: Map.put(state.nodes, node.name, entry),
+            peers_refresh_needed?: true
+        }
 
       :error ->
-        safe_close(state.transport, conn)
+        ClusterNode.close(state.transport, node.conn)
         state
     end
   end
@@ -774,7 +745,7 @@ defmodule Aerospike.Tender do
 
     Enum.reduce(state.nodes, state, fn {name, _}, acc ->
       case Map.fetch(acc.nodes, name) do
-        {:ok, node} -> refresh_node(acc, node)
+        {:ok, entry} -> refresh_node(acc, entry)
         :error -> acc
       end
     end)
@@ -782,55 +753,50 @@ defmodule Aerospike.Tender do
 
   defp clear_cluster_stable(state) do
     nodes =
-      Map.new(state.nodes, fn {name, node} ->
-        {name, %{node | cluster_stable: nil}}
+      Map.new(state.nodes, fn {name, entry} ->
+        {name, %{entry | node: ClusterNode.clear_cluster_stable(entry.node)}}
       end)
 
     %{state | nodes: nodes}
   end
 
-  defp refresh_node(state, node) do
-    case state.transport.info(node.conn, @refresh_node_info_keys) do
-      {:ok, info} ->
-        handle_refresh_info(state, node, info)
+  defp refresh_node(state, entry) do
+    case ClusterNode.refresh(entry.node, state.transport) do
+      {:ok, updated_node, %{partition_generation: gen, peers_generation_changed?: peers_changed?}} ->
+        state = put_node_struct(state, updated_node)
+        state = maybe_flag_peers_refresh(state, peers_changed?)
+        store_node_gen_if_changed(state, updated_node.name, gen)
+        register_success(state, updated_node.name)
 
       {:error, %Error{} = err} ->
-        Logger.debug("Aerospike.Tender: #{node.name} refresh-node info failed: #{err.message}")
+        Logger.debug(
+          "Aerospike.Tender: #{entry.node.name} refresh-node info failed: #{err.message}"
+        )
 
-        register_failure(state, node.name)
+        register_failure(state, entry.node.name)
+
+      {:error, :malformed_reply} ->
+        register_failure(state, entry.node.name)
     end
   end
 
-  # Both keys must parse for the cycle to count as a success for this node.
-  # Missing or malformed `partition-generation` is the canonical failure
-  # signal (the rest of the tend cycle hangs off the generation value);
-  # missing or malformed `cluster-stable` is also a failure because the
-  # agreement guard cannot verify a node that did not report a hash.
-  defp handle_refresh_info(state, node, %{
-         "partition-generation" => gen_value,
-         "cluster-stable" => cluster_stable
-       })
-       when is_binary(cluster_stable) and cluster_stable != "" do
-    case PartitionMapParser.parse_partition_generation(gen_value) do
-      {:ok, gen} ->
-        store_node_gen_if_changed(state, node.name, gen)
-        register_success(state, node.name, gen, cluster_stable)
+  defp maybe_flag_peers_refresh(state, true), do: %{state | peers_refresh_needed?: true}
+  defp maybe_flag_peers_refresh(state, false), do: state
 
-      :error ->
-        register_failure(state, node.name)
+  # Replaces the `%ClusterNode{}` embedded in `state.nodes[name]` without
+  # touching any lifecycle field. Used by every stage that calls a Node
+  # function and expects the updated observables to land back in state.
+  defp put_node_struct(state, %ClusterNode{name: name} = node) do
+    case Map.fetch(state.nodes, name) do
+      {:ok, entry} -> %{state | nodes: Map.put(state.nodes, name, %{entry | node: node})}
+      :error -> state
     end
-  end
-
-  defp handle_refresh_info(state, node, _info) do
-    register_failure(state, node.name)
   end
 
   # Records a successful info reply against the node record. Clears the
   # `failures` counter; if the node was `:inactive`, flips it back to
   # `:active` and increments `:recoveries` so the recovery count survives
-  # future transitions. Also stamps `last_tend_at`/`last_tend_result` and
-  # the `cluster-stable` hash captured this cycle (read later by
-  # `verify_cluster_stable/1`).
+  # future transitions. Also stamps `last_tend_at`/`last_tend_result`.
   #
   # Zeroes the per-node `:failed` counter as the tender-side "failure
   # window decay" for the Task 6 circuit breaker. The info socket just
@@ -839,31 +805,29 @@ defmodule Aerospike.Tender do
   # cycle are stale relative to that statement. The breaker in
   # `Aerospike.CircuitBreaker.allow?/2` re-reads `:failed` on every
   # command so the reset is observed immediately by the next caller.
-  defp register_success(state, name, gen, cluster_stable) do
+  defp register_success(state, name) do
     now = monotonic_ms()
 
-    update_node(state, name, fn node ->
+    update_entry(state, name, fn entry ->
       {status, recoveries} =
-        case node.status do
+        case entry.status do
           :active ->
-            {:active, node.recoveries}
+            {:active, entry.recoveries}
 
           :inactive ->
             emit_transition(name, :inactive, :active, :recovery)
-            {:active, node.recoveries + 1}
+            {:active, entry.recoveries + 1}
         end
 
-      reset_failed_counter(node.counters)
+      reset_failed_counter(entry.counters)
 
       %{
-        node
+        entry
         | failures: 0,
           status: status,
           recoveries: recoveries,
           last_tend_at: now,
-          last_tend_result: :ok,
-          generation_seen: gen,
-          cluster_stable: cluster_stable
+          last_tend_result: :ok
       }
     end)
   end
@@ -874,19 +838,19 @@ defmodule Aerospike.Tender do
   defp register_peers_success(state, name) do
     now = monotonic_ms()
 
-    update_node(state, name, fn node ->
+    update_entry(state, name, fn entry ->
       {status, recoveries} =
-        case node.status do
+        case entry.status do
           :active ->
-            {:active, node.recoveries}
+            {:active, entry.recoveries}
 
           :inactive ->
             emit_transition(name, :inactive, :active, :recovery)
-            {:active, node.recoveries + 1}
+            {:active, entry.recoveries + 1}
         end
 
       %{
-        node
+        entry
         | failures: 0,
           status: status,
           recoveries: recoveries,
@@ -899,15 +863,15 @@ defmodule Aerospike.Tender do
   defp register_replicas_success(state, name) do
     now = monotonic_ms()
 
-    update_node(state, name, fn node ->
-      %{node | failures: 0, last_tend_at: now, last_tend_result: :ok}
+    update_entry(state, name, fn entry ->
+      %{entry | failures: 0, last_tend_at: now, last_tend_result: :ok}
     end)
   end
 
   defp store_node_gen_if_changed(state, name, gen) do
     case PartitionMap.get_node_gen(state.node_gens_tab, name) do
       {:ok, ^gen} -> :ok
-      _ -> PartitionMap.put_node_gen(state.node_gens_tab, name, gen)
+      _ -> PartitionMapWriter.put_node_gen(state.writer, name, gen)
     end
   end
 
@@ -933,10 +897,10 @@ defmodule Aerospike.Tender do
     now = monotonic_ms()
 
     state =
-      update_node(state, name, fn node ->
+      update_entry(state, name, fn entry ->
         %{
-          node
-          | failures: node.failures + 1,
+          entry
+          | failures: entry.failures + 1,
             last_tend_at: now,
             last_tend_result: :error
         }
@@ -961,25 +925,31 @@ defmodule Aerospike.Tender do
   # recover or fall through to a full drop, and drops the node's
   # counters / tend-histogram references — the pool is gone, the breaker
   # cannot sensibly read stale slots, and a fresh recovery will allocate
-  # new references via `register_new_node/8`. The `:atomics` term is
+  # new references via `register_new_node/3`. The `:atomics` term is
   # GC'd once no process retains it.
   defp mark_inactive(state, name) do
     case Map.fetch(state.nodes, name) do
-      {:ok, node} ->
-        drop_pool(state, node)
-        PartitionMap.delete_node_gen(state.node_gens_tab, name)
-        PartitionMap.drop_node(state.owners_tab, name)
+      {:ok, entry} ->
+        drop_pool(state, entry)
+        PartitionMapWriter.delete_node_gen(state.writer, name)
+        PartitionMapWriter.drop_node(state.writer, name)
 
-        updated = %{
-          node
-          | status: :inactive,
-            failures: 0,
-            pool_pid: nil,
+        cleared_node = %ClusterNode{
+          entry.node
+          | session: nil,
             generation_seen: nil,
             applied_gen: nil,
+            peers_generation_seen: nil
+        }
+
+        updated = %{
+          entry
+          | node: cleared_node,
+            status: :inactive,
+            failures: 0,
+            pool_pid: nil,
             counters: nil,
-            tend_histogram: nil,
-            session: nil
+            tend_histogram: nil
         }
 
         emit_transition(name, :active, :inactive, :failure_threshold)
@@ -1001,19 +971,19 @@ defmodule Aerospike.Tender do
       {nil, _} ->
         state
 
-      {node, nodes} ->
-        drop_pool(state, node)
-        safe_close(state.transport, node.conn)
-        PartitionMap.delete_node_gen(state.node_gens_tab, name)
-        PartitionMap.drop_node(state.owners_tab, name)
+      {entry, nodes} ->
+        drop_pool(state, entry)
+        ClusterNode.close(state.transport, entry.node.conn)
+        PartitionMapWriter.delete_node_gen(state.writer, name)
+        PartitionMapWriter.drop_node(state.writer, name)
         emit_transition(name, :inactive, :unknown, :dropped)
         %{state | nodes: nodes}
     end
   end
 
-  defp update_node(state, name, fun) do
+  defp update_entry(state, name, fun) do
     case Map.fetch(state.nodes, name) do
-      {:ok, node} -> %{state | nodes: Map.put(state.nodes, name, fun.(node))}
+      {:ok, entry} -> %{state | nodes: Map.put(state.nodes, name, fun.(entry))}
       :error -> state
     end
   end
@@ -1028,7 +998,7 @@ defmodule Aerospike.Tender do
   # the same cycle are skipped; their grace-cycle recovery probe happens
   # in `refresh_nodes/1` of the *next* cycle.
   defp discover_peers(state) do
-    ordered = state.nodes |> sorted_nodes() |> Enum.filter(&(&1.status == :active))
+    ordered = state.nodes |> sorted_entries() |> Enum.filter(&(&1.status == :active))
 
     {state, peers_by_name} =
       Enum.reduce(ordered, {state, %{}}, &collect_peers/2)
@@ -1038,36 +1008,23 @@ defmodule Aerospike.Tender do
     end)
   end
 
-  # `peers-clear-alt` surfaces the server's alternate-access addresses;
-  # `peers-clear-std` surfaces its primary-access addresses. Go's
-  # `ClientPolicy.UseServicesAlternate` picks between them; the reply
-  # format is identical so `Peers.parse_peers_clear_std/1` handles both.
-  defp peer_info_key(%{use_services_alternate: true}), do: "peers-clear-alt"
-  defp peer_info_key(_state), do: "peers-clear-std"
-
-  defp collect_peers(node, {state, peers_acc}) do
-    key = peer_info_key(state)
-
-    case state.transport.info(node.conn, [key]) do
-      {:ok, %{^key => value}} ->
-        handle_peers_value(state, node, value, peers_acc)
-
-      {:ok, _other} ->
-        {register_failure(state, node.name), peers_acc}
+  defp collect_peers(entry, {state, peers_acc}) do
+    case ClusterNode.refresh_peers(entry.node, state.transport,
+           use_services_alternate: state.use_services_alternate
+         ) do
+      {:ok, _node, peers} ->
+        {register_peers_success(state, entry.node.name), merge_peers(peers_acc, peers)}
 
       {:error, %Error{} = err} ->
-        Logger.debug("Aerospike.Tender: #{node.name} #{key} failed: #{err.message}")
-        {register_failure(state, node.name), peers_acc}
-    end
-  end
+        Logger.debug(fn ->
+          key = ClusterNode.peer_info_key(state.use_services_alternate)
+          "Aerospike.Tender: #{entry.node.name} #{key} failed: #{err.message}"
+        end)
 
-  defp handle_peers_value(state, node, value, peers_acc) do
-    case Peers.parse_peers_clear_std(value) do
-      {:ok, %{peers: peers}} ->
-        {register_peers_success(state, node.name), merge_peers(peers_acc, peers)}
+        {register_failure(state, entry.node.name), peers_acc}
 
-      :error ->
-        {register_failure(state, node.name), peers_acc}
+      {:error, :malformed_reply} ->
+        {register_failure(state, entry.node.name), peers_acc}
     end
   end
 
@@ -1099,48 +1056,38 @@ defmodule Aerospike.Tender do
     end
   end
 
+  # Peers learn their `name` from the parent node's `peers-clear-std` reply
+  # rather than from a fresh `node` info probe, matching Go's
+  # `node.go:dialNode` behaviour. Only the `features` key is fetched here;
+  # `ClusterNode.fetch_features/3` collapses a probe failure to an empty
+  # MapSet so the peer still registers.
   defp login_and_register_peer(state, name, host, port, conn) do
-    case login_info_socket(state, conn) do
+    case ClusterNode.login(state.transport, conn, auth_opts(state)) do
       {:ok, session} ->
-        features = fetch_peer_features(state, name, conn)
+        features = ClusterNode.fetch_features(state.transport, conn, name)
 
-        register_new_node(
-          state,
-          name,
-          host,
-          port,
-          conn,
-          features,
-          session,
-          :peer_discovery
-        )
+        peer_node = %ClusterNode{
+          name: name,
+          host: host,
+          port: port,
+          conn: conn,
+          session: session,
+          features: features,
+          generation_seen: nil,
+          applied_gen: nil,
+          cluster_stable: nil,
+          peers_generation_seen: nil
+        }
+
+        register_new_node(state, peer_node, :peer_discovery)
 
       {:error, %Error{} = err} ->
         Logger.warning(
           "Aerospike.Tender: peer #{name} at #{host}:#{port} login failed: #{err.message}"
         )
 
-        safe_close(state.transport, conn)
+        ClusterNode.close(state.transport, conn)
         state
-    end
-  end
-
-  # Peers are registered with the same best-effort feature handling as
-  # seeds. The peer's `node_name` is already known from the
-  # `peers-clear-std` reply, so only the `features` key is needed here;
-  # an empty MapSet on probe failure keeps capability-gated paths off
-  # for that node until the next time it is discovered.
-  defp fetch_peer_features(state, name, conn) do
-    case state.transport.info(conn, ["features"]) do
-      {:ok, info} ->
-        parse_bootstrap_features(name, info)
-
-      {:error, %Error{} = err} ->
-        Logger.debug(fn ->
-          "Aerospike.Tender: peer #{name} features probe failed: #{err.message}"
-        end)
-
-        MapSet.new()
     end
   end
 
@@ -1148,10 +1095,10 @@ defmodule Aerospike.Tender do
 
   defp refresh_partition_maps(state) do
     state.nodes
-    |> sorted_nodes()
+    |> sorted_entries()
     |> Enum.filter(&(&1.status == :active))
-    |> Enum.reduce(state, fn node, acc ->
-      case Map.fetch(acc.nodes, node.name) do
+    |> Enum.reduce(state, fn entry, acc ->
+      case Map.fetch(acc.nodes, entry.node.name) do
         {:ok, %{status: :active} = current} -> maybe_refresh_partition_map(acc, current)
         _ -> acc
       end
@@ -1164,20 +1111,23 @@ defmodule Aerospike.Tender do
   # (and typically `generation_seen: nil` since its `partition-generation`
   # has not been fetched yet) — both conditions force a fetch so the first
   # cycle always installs the node's ownership entries.
-  defp maybe_refresh_partition_map(state, node) do
-    if partition_map_fetch_needed?(node) do
-      fetch_and_apply_replicas(state, node)
+  defp maybe_refresh_partition_map(state, entry) do
+    if partition_map_fetch_needed?(entry.node) do
+      fetch_and_apply_replicas(state, entry)
     else
       state
     end
   end
 
-  defp partition_map_fetch_needed?(%{generation_seen: nil}), do: true
-  defp partition_map_fetch_needed?(%{applied_gen: nil}), do: true
-  defp partition_map_fetch_needed?(%{generation_seen: same, applied_gen: same}), do: false
-  defp partition_map_fetch_needed?(_node), do: true
+  defp partition_map_fetch_needed?(%ClusterNode{generation_seen: nil}), do: true
+  defp partition_map_fetch_needed?(%ClusterNode{applied_gen: nil}), do: true
 
-  defp fetch_and_apply_replicas(state, node) do
+  defp partition_map_fetch_needed?(%ClusterNode{generation_seen: same, applied_gen: same}),
+    do: false
+
+  defp partition_map_fetch_needed?(%ClusterNode{}), do: true
+
+  defp fetch_and_apply_replicas(state, entry) do
     # Measure the full replicas fetch + apply for this node. Per-node
     # latency is the useful operator signal (a single slow node shows up
     # here before it does in the cluster-wide tend_cycle span), so the
@@ -1186,19 +1136,20 @@ defmodule Aerospike.Tender do
     start_native = System.monotonic_time()
 
     result =
-      case state.transport.info(node.conn, ["replicas"]) do
-        {:ok, %{"replicas" => value}} ->
-          apply_replicas(state, node, value)
-
-        {:ok, _other} ->
-          register_failure(state, node.name)
+      case ClusterNode.refresh_partitions(entry.node, state.transport) do
+        {:ok, _node, segments} ->
+          apply_replicas(state, entry, segments)
 
         {:error, %Error{} = err} ->
-          Logger.debug("Aerospike.Tender: #{node.name} replicas failed: #{err.message}")
-          register_failure(state, node.name)
+          Logger.debug("Aerospike.Tender: #{entry.node.name} replicas failed: #{err.message}")
+
+          register_failure(state, entry.node.name)
+
+        {:error, :malformed_reply} ->
+          register_failure(state, entry.node.name)
       end
 
-    record_tend_sample(node.tend_histogram, System.monotonic_time() - start_native)
+    record_tend_sample(entry.tend_histogram, System.monotonic_time() - start_native)
 
     result
   end
@@ -1210,85 +1161,34 @@ defmodule Aerospike.Tender do
   # segment is accepted by the regime guard. If any segment is rejected as
   # stale the applied generation stays at its prior value so the next tend
   # cycle refetches `replicas` and retries the merge.
-  defp apply_replicas(state, node, value) do
-    segments = PartitionMapParser.parse_replicas_with_regime(value)
-
+  defp apply_replicas(state, entry, segments) do
     applied? =
-      Enum.reduce(segments, true, fn {namespace, regime, ownership}, acc ->
-        apply_ownership(state, node.name, namespace, regime, ownership) and acc
-      end)
+      PartitionMapWriter.apply_segments(
+        state.writer,
+        entry.node.name,
+        segments,
+        state.namespaces
+      )
 
-    state = register_replicas_success(state, node.name)
+    state = register_replicas_success(state, entry.node.name)
 
     if applied? do
-      mark_partition_map_applied(state, node.name, node.generation_seen)
+      mark_partition_map_applied(state, entry.node.name, entry.node.generation_seen)
     else
       state
     end
   end
 
-  defp apply_ownership(state, node_name, namespace, regime, ownership) do
-    if namespace in state.namespaces do
-      Enum.reduce(ownership, true, fn {partition_id, replica_index}, acc ->
-        merge_replica(state.owners_tab, namespace, partition_id, regime, replica_index, node_name) and
-          acc
-      end)
-    else
-      true
-    end
-  end
-
-  defp merge_replica(tab, namespace, partition_id, regime, replica_index, node_name) do
-    replicas =
-      case PartitionMap.owners(tab, namespace, partition_id) do
-        {:ok, %{regime: current_regime, replicas: current}} when current_regime == regime ->
-          place_replica(current, replica_index, node_name)
-
-        {:ok, %{regime: current_regime}} when current_regime > regime ->
-          :stale
-
-        _ ->
-          place_replica([], replica_index, node_name)
-      end
-
-    case replicas do
-      :stale ->
-        false
-
-      replicas ->
-        PartitionMap.update(tab, namespace, partition_id, regime, replicas)
-        true
-    end
-  end
-
   defp mark_partition_map_applied(state, name, gen) do
-    update_node(state, name, fn node -> %{node | applied_gen: gen} end)
-  end
-
-  defp place_replica(replicas, replica_index, node_name) do
-    padded = pad_replicas(replicas, replica_index)
-    List.replace_at(padded, replica_index, node_name)
-  end
-
-  defp pad_replicas(replicas, replica_index) do
-    needed = replica_index + 1 - length(replicas)
-
-    if needed > 0 do
-      replicas ++ List.duplicate(nil, needed)
-    else
-      replicas
-    end
+    update_entry(state, name, fn entry ->
+      %{entry | node: ClusterNode.mark_partition_map_applied(entry.node, gen)}
+    end)
   end
 
   ## Ready flag
 
   defp recompute_ready(state) do
-    ready? =
-      Enum.all?(state.namespaces, fn namespace ->
-        PartitionMap.complete?(state.owners_tab, namespace)
-      end)
-
-    :ets.insert(state.meta_tab, {:ready, ready?})
+    ready? = PartitionMapWriter.recompute_ready(state.writer, state.namespaces)
     %{state | ready?: ready?}
   end
 
@@ -1306,28 +1206,19 @@ defmodule Aerospike.Tender do
   defp allocate_counters(%{node_supervisor: nil}), do: nil
   defp allocate_counters(_state), do: NodeCounters.new()
 
-  defp ensure_pool(
-         %{node_supervisor: nil},
-         _node_name,
-         _host,
-         _port,
-         _counters,
-         _features,
-         _session
-       ),
-       do: {:ok, nil}
+  defp ensure_pool(%{node_supervisor: nil}, _node, _counters), do: {:ok, nil}
 
-  defp ensure_pool(state, node_name, host, port, counters, features, session) do
+  defp ensure_pool(state, %ClusterNode{} = node, counters) do
     opts =
       [
-        node_name: node_name,
+        node_name: node.name,
         transport: state.transport,
-        host: host,
-        port: port,
-        connect_opts: pool_connect_opts(state, session),
+        host: node.host,
+        port: node.port,
+        connect_opts: pool_connect_opts(state, node.session),
         pool_size: state.pool_size,
         counters: counters,
-        features: features
+        features: node.features
       ]
       |> maybe_put_pool_opt(:idle_timeout_ms, state.idle_timeout_ms)
       |> maybe_put_pool_opt(:max_idle_pings, state.max_idle_pings)
@@ -1338,7 +1229,7 @@ defmodule Aerospike.Tender do
 
       {:error, reason} ->
         Logger.warning(
-          "Aerospike.Tender: could not start pool for #{node_name} at #{host}:#{port}: " <>
+          "Aerospike.Tender: could not start pool for #{node.name} at #{node.host}:#{node.port}: " <>
             "#{inspect(reason)}"
         )
 
@@ -1373,14 +1264,14 @@ defmodule Aerospike.Tender do
     |> Keyword.put(:session_token, token)
   end
 
-  # Stops the pool for `node`. Absence of a pool (no supervisor or a nil
+  # Stops the pool for `entry`. Absence of a pool (no supervisor or a nil
   # pool_pid) is a no-op. `{:error, :not_found}` from the NodeSupervisor
   # is logged at `:debug` — a pool that already exited is an acceptable
   # terminal state.
-  defp drop_pool(%{node_supervisor: nil}, _node), do: :ok
+  defp drop_pool(%{node_supervisor: nil}, _entry), do: :ok
   defp drop_pool(_state, %{pool_pid: nil}), do: :ok
 
-  defp drop_pool(state, %{name: name, pool_pid: pool_pid}) do
+  defp drop_pool(state, %{node: %ClusterNode{name: name}, pool_pid: pool_pid}) do
     case NodeSupervisor.stop_pool(state.node_supervisor, pool_pid) do
       :ok ->
         :ok
@@ -1427,10 +1318,10 @@ defmodule Aerospike.Tender do
 
   ## Helpers
 
-  defp sorted_nodes(nodes) do
+  defp sorted_entries(nodes) do
     nodes
     |> Map.values()
-    |> Enum.sort_by(& &1.name)
+    |> Enum.sort_by(& &1.node.name)
   end
 
   defp maybe_schedule_tend(%{tend_trigger: :manual} = state), do: state
@@ -1438,14 +1329,6 @@ defmodule Aerospike.Tender do
   defp maybe_schedule_tend(state) do
     Process.send_after(self(), :tend, state.tend_interval_ms)
     state
-  end
-
-  defp safe_close(transport, conn) do
-    transport.close(conn)
-  rescue
-    _ -> :ok
-  catch
-    _, _ -> :ok
   end
 
   defp read_ready(meta_tab) do

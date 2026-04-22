@@ -4,6 +4,7 @@ defmodule Aerospike.ExecuteTaskTest do
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
   alias Aerospike.NodeSupervisor
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.TableOwner
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
@@ -19,6 +20,7 @@ defmodule Aerospike.ExecuteTaskTest do
     {:ok, fake} = Fake.start_link(nodes: [{"A1", host, port}])
     {:ok, owner} = TableOwner.start_link(name: name)
     tables = TableOwner.tables(owner)
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
     {:ok, node_sup} = NodeSupervisor.start_link(name: name)
 
     {:ok, tender} =
@@ -40,6 +42,7 @@ defmodule Aerospike.ExecuteTaskTest do
     on_exit(fn ->
       stop_quietly(tender)
       stop_quietly(node_sup)
+      stop_quietly(writer)
       stop_quietly(owner)
       stop_quietly(fake)
     end)
@@ -155,10 +158,16 @@ defmodule Aerospike.ExecuteTaskTest do
   defp script_single_node_cluster(fake) do
     Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
 
-    Fake.script_info(fake, "A1", ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => "1",
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      "A1",
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 

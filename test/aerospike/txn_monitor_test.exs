@@ -126,10 +126,16 @@ defmodule Aerospike.TxnMonitorTest do
   defp script_single_node_cluster(fake) do
     Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
 
-    Fake.script_info(fake, "A1", ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => "1",
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      "A1",
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 

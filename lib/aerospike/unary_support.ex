@@ -3,30 +3,62 @@ defmodule Aerospike.UnarySupport do
 
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Policy
   alias Aerospike.Protocol.Response
   alias Aerospike.RetryPolicy
   alias Aerospike.Tender
   alias Aerospike.UnaryCommand
   alias Aerospike.UnaryExecutor
 
+  @type unary_policy :: Policy.UnaryRead.t() | Policy.UnaryWrite.t()
+
   @spec run_command(
           GenServer.server(),
           Key.t(),
-          keyword(),
+          unary_policy(),
           UnaryCommand.t(),
           UnaryCommand.hook_input()
         ) :: term()
-  def run_command(tender, %Key{} = route_key, opts, %UnaryCommand{} = command, command_input)
-      when is_list(opts) do
+  def run_command(
+        tender,
+        %Key{} = route_key,
+        %_{} = policy,
+        %UnaryCommand{} = command,
+        command_input
+      ) do
     runtime = runtime_ctx(tender)
 
-    UnaryExecutor.run_command(executor(runtime, opts), command, %{
+    UnaryExecutor.run_command(executor(runtime, policy), command, %{
       tender: runtime.tender,
       tables: runtime.tables,
       transport: runtime.transport,
       route_key: route_key,
       command_input: command_input
     })
+  end
+
+  @spec read_policy(GenServer.server(), keyword()) ::
+          {:ok, Policy.UnaryRead.t()} | {:error, Error.t()}
+  def read_policy(tender, opts) when is_list(opts) do
+    tender
+    |> base_retry()
+    |> Policy.unary_read(opts)
+  end
+
+  @spec write_policy(GenServer.server(), keyword()) ::
+          {:ok, Policy.UnaryWrite.t()} | {:error, Error.t()}
+  def write_policy(tender, opts) when is_list(opts) do
+    tender
+    |> base_retry()
+    |> Policy.unary_write(opts)
+  end
+
+  @spec operate_policy(GenServer.server(), keyword()) ::
+          {:ok, Policy.UnaryWrite.t()} | {:error, Error.t()}
+  def operate_policy(tender, opts) when is_list(opts) do
+    tender
+    |> base_retry()
+    |> Policy.unary_operate(opts)
   end
 
   @spec parse_as_msg(binary(), (term() -> {:ok, term()} | {:error, Error.t()} | Error.t())) ::
@@ -49,12 +81,19 @@ defmodule Aerospike.UnarySupport do
     }
   end
 
-  defp executor(runtime, opts) do
+  defp executor(runtime, policy) do
     UnaryExecutor.new!(
-      base_policy: RetryPolicy.load(runtime.tables.meta),
-      command_opts: opts,
+      policy: policy,
       on_rebalance: fn -> trigger_tend_async(runtime.tender) end
     )
+  end
+
+  defp base_retry(tender) do
+    tender
+    |> runtime_ctx()
+    |> Map.fetch!(:tables)
+    |> Map.fetch!(:meta)
+    |> RetryPolicy.load()
   end
 
   # Rebalance recovery is best-effort and must not take down the caller.

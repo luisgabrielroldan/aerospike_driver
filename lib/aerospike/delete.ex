@@ -8,6 +8,7 @@ defmodule Aerospike.Delete do
 
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
@@ -29,15 +30,15 @@ defmodule Aerospike.Delete do
   @spec execute(GenServer.server(), Key.t(), [option()]) :: result()
   def execute(tender, %Key{} = key, opts \\ []) when is_list(opts) do
     with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
-         {:ok, generation} <- generation_from_opts(opts),
+         {:ok, policy} <- UnarySupport.write_policy(tender, opts),
          :ok <- TxnSupport.prepare_txn_write(tender, txn, key, opts) do
       result =
         UnarySupport.run_command(
           tender,
           key,
-          opts,
+          policy,
           command(),
-          %{key: key, conn: tender, txn: txn, opts: opts, generation: generation}
+          command_input(tender, key, txn, opts, policy)
         )
 
       case result do
@@ -60,18 +61,14 @@ defmodule Aerospike.Delete do
     )
   end
 
-  defp generation_from_opts(opts) do
-    case Keyword.get(opts, :generation, 0) do
-      value when is_integer(value) and value >= 0 -> {:ok, value}
-      value -> invalid_generation(value)
-    end
-  end
-
-  defp invalid_generation(value) do
-    {:error,
-     Error.from_result_code(:invalid_argument,
-       message: "generation must be a non-negative integer, got: #{inspect(value)}"
-     )}
+  defp command_input(conn, key, txn, opts, %Policy.UnaryWrite{} = policy) do
+    %{
+      key: key,
+      conn: conn,
+      txn: txn,
+      opts: opts,
+      generation: policy.generation
+    }
   end
 
   defp encode_delete(%{key: %Key{} = key, conn: conn, opts: opts, generation: generation}) do

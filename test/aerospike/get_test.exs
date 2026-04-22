@@ -17,6 +17,7 @@ defmodule Aerospike.GetTest do
   alias Aerospike.Key
   alias Aerospike.NodeCounters
   alias Aerospike.NodeSupervisor
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.TableOwner
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
@@ -28,10 +29,12 @@ defmodule Aerospike.GetTest do
     {:ok, fake} = Fake.start_link(nodes: [{"A1", "10.0.0.1", 3000}])
     {:ok, owner} = TableOwner.start_link(name: name)
     tables = TableOwner.tables(owner)
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
     {:ok, node_sup} = NodeSupervisor.start_link(name: name)
 
     on_exit(fn ->
       stop_quietly(node_sup)
+      stop_quietly(writer)
       stop_quietly(owner)
       stop_quietly(fake)
     end)
@@ -243,10 +246,16 @@ defmodule Aerospike.GetTest do
   end
 
   defp script_cycle(fake, node_name, opts) do
-    Fake.script_info(fake, node_name, ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => Integer.to_string(Keyword.fetch!(opts, :gen)),
-      "cluster-stable" => Keyword.get(opts, :cluster_stable, "deadbeef")
-    })
+    Fake.script_info(
+      fake,
+      node_name,
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => Integer.to_string(Keyword.fetch!(opts, :gen)),
+        "cluster-stable" => Keyword.get(opts, :cluster_stable, "deadbeef"),
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, node_name, ["peers-clear-std"], %{
       "peers-clear-std" => Keyword.fetch!(opts, :peers)

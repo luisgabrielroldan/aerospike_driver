@@ -10,6 +10,7 @@ defmodule Aerospike.Protocol.ScanQuery do
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.MessagePack
+  alias Aerospike.Policy
   alias Aerospike.Query
   alias Aerospike.Scan
 
@@ -27,10 +28,10 @@ defmodule Aerospike.Protocol.ScanQuery do
           optional(:bval) => integer() | nil
         }
 
-  @spec build_scan(Scan.t(), node_partitions(), keyword()) :: iodata()
-  def build_scan(%Scan{} = scan, node_partitions, opts \\ []) when is_list(opts) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
-    query_id = task_id_u64(opts)
+  @spec build_scan(Scan.t(), node_partitions(), Policy.ScanQueryRuntime.t()) :: iodata()
+  def build_scan(%Scan{} = scan, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
+    timeout = policy.timeout
+    query_id = policy.task_id
 
     %AsmMsg{
       info1: scan_info1(scan),
@@ -52,10 +53,10 @@ defmodule Aerospike.Protocol.ScanQuery do
     |> Message.encode_as_msg_iodata()
   end
 
-  @spec build_query(Query.t(), node_partitions(), keyword()) :: iodata()
-  def build_query(%Query{} = query, node_partitions, opts \\ []) when is_list(opts) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
-    query_id = task_id_u64(opts)
+  @spec build_query(Query.t(), node_partitions(), Policy.ScanQueryRuntime.t()) :: iodata()
+  def build_query(%Query{} = query, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
+    timeout = policy.timeout
+    query_id = policy.task_id
 
     filter =
       query.index_filter ||
@@ -87,17 +88,41 @@ defmodule Aerospike.Protocol.ScanQuery do
     |> Message.encode_as_msg_iodata()
   end
 
-  @spec build_query_execute(Query.t(), node_partitions(), [Operation.t()], keyword()) :: iodata()
-  def build_query_execute(%Query{} = query, node_partitions, operations, opts \\ [])
-      when is_list(operations) and is_list(opts) do
-    build_background_query(query, node_partitions, opts, operations: operations)
+  @spec build_query_execute(
+          Query.t(),
+          node_partitions(),
+          [Operation.t()],
+          Policy.ScanQueryRuntime.t()
+        ) ::
+          iodata()
+  def build_query_execute(
+        %Query{} = query,
+        node_partitions,
+        operations,
+        %Policy.ScanQueryRuntime{} = policy
+      )
+      when is_list(operations) do
+    build_background_query(query, node_partitions, policy, operations: operations)
   end
 
-  @spec build_query_udf(Query.t(), node_partitions(), String.t(), String.t(), list(), keyword()) ::
-          iodata()
-  def build_query_udf(%Query{} = query, node_partitions, package, function, args, opts \\ [])
-      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
-    build_background_query(query, node_partitions, opts, udf: {2, package, function, args})
+  @spec build_query_udf(
+          Query.t(),
+          node_partitions(),
+          String.t(),
+          String.t(),
+          list(),
+          Policy.ScanQueryRuntime.t()
+        ) :: iodata()
+  def build_query_udf(
+        %Query{} = query,
+        node_partitions,
+        package,
+        function,
+        args,
+        %Policy.ScanQueryRuntime{} = policy
+      )
+      when is_binary(package) and is_binary(function) and is_list(args) do
+    build_background_query(query, node_partitions, policy, udf: {2, package, function, args})
   end
 
   @spec build_query_aggregate(
@@ -106,7 +131,7 @@ defmodule Aerospike.Protocol.ScanQuery do
           String.t(),
           String.t(),
           list(),
-          keyword()
+          Policy.ScanQueryRuntime.t()
         ) :: iodata()
   def build_query_aggregate(
         %Query{} = query,
@@ -114,29 +139,18 @@ defmodule Aerospike.Protocol.ScanQuery do
         package,
         function,
         args,
-        opts \\ []
+        %Policy.ScanQueryRuntime{} = policy
       )
-      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+      when is_binary(package) and is_binary(function) and is_list(args) do
     case query.index_filter do
       nil ->
         raise ArgumentError,
               "build_query_aggregate/6 requires query.index_filter set via Query.where/2"
 
       %Filter{} = index_filter ->
-        build_query_with_filter(query, node_partitions, opts, index_filter,
+        build_query_with_filter(query, node_partitions, policy, index_filter,
           udf: {1, package, function, args}
         )
-    end
-  end
-
-  defp task_id_u64(opts) do
-    case Keyword.get(opts, :task_id) do
-      id when is_integer(id) and id >= 0 ->
-        id
-
-      _ ->
-        <<id::64-unsigned-big>> = :crypto.strong_rand_bytes(8)
-        id
     end
   end
 
@@ -174,19 +188,36 @@ defmodule Aerospike.Protocol.ScanQuery do
     Enum.map(bins, &Operation.read/1)
   end
 
-  defp build_background_query(query, node_partitions, opts, background) when is_list(opts) do
+  defp build_background_query(
+         query,
+         node_partitions,
+         %Policy.ScanQueryRuntime{} = policy,
+         background
+       ) do
     case query.index_filter do
       nil ->
         raise ArgumentError, "background query requires query.index_filter set via Query.where/2"
 
       %Filter{} = index_filter ->
-        build_background_query_with_filter(query, node_partitions, opts, index_filter, background)
+        build_background_query_with_filter(
+          query,
+          node_partitions,
+          policy,
+          index_filter,
+          background
+        )
     end
   end
 
-  defp build_query_with_filter(query, node_partitions, opts, %Filter{} = index_filter, background) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
-    query_id = task_id_u64(opts)
+  defp build_query_with_filter(
+         query,
+         node_partitions,
+         %Policy.ScanQueryRuntime{} = policy,
+         %Filter{} = index_filter,
+         background
+       ) do
+    timeout = policy.timeout
+    query_id = policy.task_id
 
     fields =
       [
@@ -221,12 +252,12 @@ defmodule Aerospike.Protocol.ScanQuery do
   defp build_background_query_with_filter(
          query,
          node_partitions,
-         opts,
+         %Policy.ScanQueryRuntime{} = policy,
          %Filter{} = index_filter,
          background
        ) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
-    query_id = task_id_u64(opts)
+    timeout = policy.timeout
+    query_id = policy.task_id
 
     fields =
       [

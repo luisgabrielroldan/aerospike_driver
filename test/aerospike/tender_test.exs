@@ -4,6 +4,7 @@ defmodule Aerospike.TenderTest do
   alias Aerospike.Error
   alias Aerospike.NodeCounters
   alias Aerospike.PartitionMap
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.TableOwner
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
@@ -22,12 +23,15 @@ defmodule Aerospike.TenderTest do
     {:ok, owner} = TableOwner.start_link(name: name)
     tables = TableOwner.tables(owner)
 
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
+
     on_exit(fn ->
       stop_fake(fake)
+      stop_process(writer)
       stop_process(owner)
     end)
 
-    %{name: name, fake: fake, owner: owner, tables: tables}
+    %{name: name, fake: fake, owner: owner, writer: writer, tables: tables}
   end
 
   describe "single-seed bootstrap" do
@@ -177,21 +181,24 @@ defmodule Aerospike.TenderTest do
 
   describe "failure threshold: node stays present until N+1 consecutive failures" do
     test "node flips to :inactive only once failures reach the threshold", ctx do
-      # Threshold = 3. Each fully-failing cycle contributes 2 failure events:
-      # one for refresh-node info and one for peers-clear-std. The replicas
-      # fetch is skipped by the Task 3 short-circuit when the generation
-      # does not advance (and the cycle's info call failed, so generation_seen
-      # stays put). Cycle 1 is healthy (failures = 0). Cycle 2 fails every
-      # reachable call (failures = 2, still below the threshold). Cycle 3's
-      # first failure lifts the counter to 3 and flips the node to :inactive
+      # Threshold = 3. Each fully-failing refresh cycle contributes one
+      # failure event: the peers-clear-std call is gated on a
+      # peers-generation change, and a failed refresh cannot advance the
+      # generation. Cycle 1 is healthy (failures = 0). Cycles 2 and 3
+      # fail (failures = 1 then 2, still below the threshold). Cycle 4's
+      # failure lifts the counter to 3 and flips the node to :inactive
       # mid-cycle; owners are cleared and `ready?` drops back to false.
       script_bootstrap_node(ctx.fake, "A1", 2, ReplicasFixture.all_master("test", 2))
 
       err = %Error{code: :network_error, message: "injected"}
 
-      Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+      Enum.each(1..3, fn _ ->
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
       end)
 
       {:ok, pid} = start_tender(ctx, "test", failure_threshold: 3)
@@ -202,14 +209,15 @@ defmodule Aerospike.TenderTest do
       %{owners: owners, node_gens: node_gens} = Tender.tables(pid)
       assert {:ok, _} = PartitionMap.get_node_gen(node_gens, "A1")
 
-      # Cycle 2 — failures climb to 2 but stay below threshold.
+      # Cycles 2 and 3 — failures climb to 2 but stay below threshold.
+      :ok = Tender.tend_now(pid)
       :ok = Tender.tend_now(pid)
 
       assert {:ok, _} = PartitionMap.get_node_gen(node_gens, "A1")
       {:ok, po} = PartitionMap.owners(owners, "test", 0)
       assert "A1" in po.replicas
 
-      # Cycle 3 — threshold reached mid-cycle; node flips to :inactive and
+      # Cycle 4 — threshold reached mid-cycle; node flips to :inactive and
       # its ETS rows are cleared.
       :ok = Tender.tend_now(pid)
 
@@ -227,10 +235,16 @@ defmodule Aerospike.TenderTest do
       script_bootstrap_info(ctx.fake, "A1")
 
       Enum.each([5, 4], fn regime ->
-        Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-          "partition-generation" => Integer.to_string(regime),
-          "cluster-stable" => "deadbeef"
-        })
+        Fake.script_info(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          %{
+            "partition-generation" => Integer.to_string(regime),
+            "cluster-stable" => "deadbeef",
+            "peers-generation" => "1"
+          }
+        )
 
         Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{
           "peers-clear-std" => "0,3000,[]"
@@ -265,10 +279,16 @@ defmodule Aerospike.TenderTest do
 
       script_bootstrap_info(ctx.fake, "A1")
 
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "1",
-        "cluster-stable" => "deadbeef"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{
         "peers-clear-std" => "0,3000,[]"
@@ -318,10 +338,13 @@ defmodule Aerospike.TenderTest do
       script_cycle(ctx.fake, "B1", gen: 1, peers: "0,3000,[]", replicas: empty_replicas())
 
       # Cycle 2 — A1 still reports empty peers; B1 now advertises C1.
+      # Bump B1's peers-generation so the tend cycle's peer-refresh
+      # trigger fires against both active nodes.
       script_cycle(ctx.fake, "A1", gen: 1, peers: "0,3000,[]", replicas: a1_replicas)
 
       script_cycle(ctx.fake, "B1",
         gen: 1,
+        peers_generation: "2",
         peers: "1,3000,[[C1,,[10.0.0.3:3000]]]",
         replicas: empty_replicas()
       )
@@ -383,10 +406,16 @@ defmodule Aerospike.TenderTest do
       # half of the ring are re-applied at the new regime. The invariant
       # is that A1's mid-cycle error cannot corrupt B1's owners nor erase
       # A1's previously written entries.
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "2",
-        "cluster-stable" => "deadbeef"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "2",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 
@@ -430,30 +459,35 @@ defmodule Aerospike.TenderTest do
 
   describe "node lifecycle: active → inactive on threshold breach" do
     test "threshold breach flips status, stops the pool, and clears ETS rows", ctx do
-      # Threshold = 2 — one failing cycle is enough to breach it. The node
-      # is flipped to `:inactive`, its pool is stopped, and its owners /
-      # node_gens rows are cleared, but the node stays in the Tender's
-      # in-memory map so a later cycle can probe it back to `:active`.
+      # Threshold = 1 — one failing refresh cycle is enough to breach it.
+      # The node is flipped to `:inactive`, its pool is stopped, and its
+      # owners / node_gens rows are cleared, but the node stays in the
+      # Tender's in-memory map so a later cycle can probe it back to
+      # `:active`.
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
 
       Enum.each(1..3, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["replicas"], err)
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
       end)
 
-      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
 
       # Cycle 1 — bootstrap + healthy. Status :active.
       :ok = Tender.tend_now(pid)
       assert Tender.ready?(pid)
       assert %{"A1" => %{status: :active}} = Tender.nodes_status(pid)
 
-      # Cycle 2 — first failing cycle. Refresh-node info + peers = failures
-      # = 2 which hits the threshold; node flips to :inactive mid-cycle;
-      # replicas stage is skipped for inactive nodes.
+      # Cycle 2 — first failing cycle. The single refresh failure hits
+      # threshold=1; node flips to :inactive mid-cycle; peers-clear-std
+      # is skipped (peers-generation did not advance) and replicas is
+      # skipped (inactive nodes bypass the partition-map refresh).
       :ok = Tender.tend_now(pid)
 
       %{owners: owners, node_gens: node_gens} = Tender.tables(pid)
@@ -482,14 +516,17 @@ defmodule Aerospike.TenderTest do
       err = %Error{code: :network_error, message: "injected"}
 
       Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["replicas"], err)
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
       end)
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          failure_threshold: 2,
+          failure_threshold: 1,
           node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
@@ -499,7 +536,7 @@ defmodule Aerospike.TenderTest do
       assert {:ok, pool_pid} = Tender.pool_pid(pid, "A1")
       assert Process.alive?(pool_pid)
 
-      # One failing cycle breaches threshold=2 and flips A1 to :inactive.
+      # One failing cycle breaches threshold=1 and flips A1 to :inactive.
       :ok = Tender.tend_now(pid)
 
       assert %{"A1" => %{status: :inactive}} = Tender.nodes_status(pid)
@@ -509,26 +546,33 @@ defmodule Aerospike.TenderTest do
     end
 
     test "inactive → active on successful partition-generation before drop", ctx do
-      # Threshold = 2 — one failing cycle flips to :inactive, then a
-      # healthy cycle flips back to :active with `:recoveries` bumped.
+      # Threshold = 1 — one failing refresh cycle flips to :inactive, then
+      # a healthy cycle flips back to :active with `:recoveries` bumped.
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
-      # Cycle 2: refresh-node info + peers fail to lift `failures`
-      # to the threshold=2 breach. `refresh_partition_maps` is skipped
-      # for `:inactive` nodes within the same cycle, so no `replicas`
-      # script is consumed.
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+      # Cycle 2: the single refresh failure hits threshold=1 and flips A1
+      # to :inactive. peers-clear-std is skipped (peers-generation did not
+      # advance), and `refresh_partition_maps` is skipped for :inactive
+      # nodes within the same cycle, so no extra scripts are consumed.
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
 
-      # Cycle 3: healthy → :active, recoveries = 1.
+      # Cycle 3: healthy → :active, recoveries = 1. Use a bumped
+      # peers-generation so the recovery cycle re-runs peer discovery;
+      # otherwise the cached value on the struct was cleared at
+      # mark_inactive so it would be triggered by the nil-sentinel anyway.
       script_cycle(ctx.fake, "A1",
         gen: 2,
         peers: "0,3000,[]",
         replicas: ReplicasFixture.all_master("test", 2)
       )
 
-      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
 
       :ok = Tender.tend_now(pid)
       assert Tender.ready?(pid)
@@ -558,15 +602,19 @@ defmodule Aerospike.TenderTest do
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
-      # Two failing cycles back-to-back. First flips to :inactive; second
-      # drops the node outright.
+      # Two failing refresh cycles back-to-back. With threshold=1 the
+      # first flips the node to :inactive; the second removes it because
+      # any failure while already :inactive drops the node outright.
       Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["replicas"], err)
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
       end)
 
-      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
 
       :ok = Tender.tend_now(pid)
       assert Tender.ready?(pid)
@@ -591,10 +639,16 @@ defmodule Aerospike.TenderTest do
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       Enum.each(1..4, fn _ ->
-        Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-          "partition-generation" => "1",
-          "cluster-stable" => "deadbeef"
-        })
+        Fake.script_info(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          %{
+            "partition-generation" => "1",
+            "cluster-stable" => "deadbeef",
+            "peers-generation" => "1"
+          }
+        )
 
         Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{
           "peers-clear-std" => "0,3000,[]"
@@ -611,11 +665,12 @@ defmodule Aerospike.TenderTest do
 
     test "re-dials seeds after every node has been dropped", ctx do
       # Cycle 1 bootstraps A1 successfully. Cycle 2 fails the refresh-node
-      # info call and the peers probe, driving A1's failures to the
-      # threshold and flipping it to :inactive (the replicas fetch is
-      # skipped because the :inactive filter in `refresh_partition_maps/1`
-      # sees A1 after the flip). Cycle 3 probes A1's pg/cluster-stable
-      # through `refresh_nodes/1` and fails again — because A1 is already
+      # info call, which at threshold=1 flips A1 to :inactive (the
+      # replicas fetch is skipped because the :inactive filter in
+      # `refresh_partition_maps/1` sees A1 after the flip, and
+      # peers-clear-std is skipped because peers-generation did not
+      # advance). Cycle 3 probes A1's pg/cluster-stable through
+      # `refresh_nodes/1` and fails again — because A1 is already
       # :inactive, that single failure removes the node entirely. At that
       # point `state.nodes == %{}` and the next tend cycle must re-run
       # `bootstrap_seed/3` against the configured seeds. `connect_count`
@@ -625,19 +680,27 @@ defmodule Aerospike.TenderTest do
 
       err = %Error{code: :network_error, message: "injected"}
 
-      # Cycle 2 — fails pg/cluster-stable and peers; mark_inactive flips
-      # A1 to :inactive before the replicas stage runs, so no replicas
-      # script is consumed.
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+      # Cycle 2 — refresh fails; mark_inactive flips A1 to :inactive
+      # before the replicas stage runs.
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
 
       # Cycle 3 — A1 is :inactive; only `refresh_nodes/1` probes it.
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
 
       # Recovery cycle 4 — re-bootstrap + full healthy round.
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
-      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
 
       :ok = Tender.tend_now(pid)
       assert Tender.ready?(pid)
@@ -674,12 +737,21 @@ defmodule Aerospike.TenderTest do
 
       err = %Error{code: :network_error, message: "injected"}
 
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
 
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
 
-      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
 
       :ok = Tender.tend_now(pid)
       :ok = Tender.tend_now(pid)
@@ -787,17 +859,29 @@ defmodule Aerospike.TenderTest do
       # the partition-map refresh: no `replicas` script for either node is
       # consumed (the stage is skipped entirely). Even at higher
       # generations the prior partition entries must survive untouched.
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "2",
-        "cluster-stable" => "stable-2-A"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "2",
+          "cluster-stable" => "stable-2-A",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 
-      Fake.script_info(ctx.fake, "B1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "2",
-        "cluster-stable" => "stable-2-B"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "B1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "2",
+          "cluster-stable" => "stable-2-B",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "B1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 
@@ -873,17 +957,29 @@ defmodule Aerospike.TenderTest do
       )
 
       # Cycle 2 — disagree; refresh skipped.
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "2",
-        "cluster-stable" => "v2-A"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "2",
+          "cluster-stable" => "v2-A",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 
-      Fake.script_info(ctx.fake, "B1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "2",
-        "cluster-stable" => "v2-B"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "B1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "2",
+          "cluster-stable" => "v2-B",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "B1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 
@@ -957,7 +1053,14 @@ defmodule Aerospike.TenderTest do
       # partition-map refresh proceeds for B1. A1 is below the failure
       # threshold so it remains :active.
       err = %Error{code: :network_error, message: "injected"}
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
+
       Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
 
       script_cycle(ctx.fake, "B1",
@@ -1047,10 +1150,16 @@ defmodule Aerospike.TenderTest do
       # counter; we assert it stays at zero.
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "1",
-        "cluster-stable" => "deadbeef"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 
@@ -1156,8 +1265,13 @@ defmodule Aerospike.TenderTest do
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
 
       # Cycle 3 scripted replicas — must be consumed for the recovery path.
       script_cycle(ctx.fake, "A1",
@@ -1166,7 +1280,7 @@ defmodule Aerospike.TenderTest do
         replicas: ReplicasFixture.all_master("test", 2)
       )
 
-      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 2)
+      {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
 
       :ok = Tender.tend_now(pid)
       :ok = Tender.tend_now(pid)
@@ -1219,14 +1333,17 @@ defmodule Aerospike.TenderTest do
       err = %Error{code: :network_error, message: "injected"}
 
       Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["replicas"], err)
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
       end)
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          failure_threshold: 2,
+          failure_threshold: 1,
           node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
@@ -1273,13 +1390,18 @@ defmodule Aerospike.TenderTest do
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-      Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
 
       # Cycle 3 succeeds against the info socket (mark_inactive keeps
       # node.conn intact so the probe succeeds), but replicas is never
       # fetched without a pool — refresh_partition_maps skips inactive,
-      # and after recovery the Task 3 short-circuit sees applied_gen = nil
+      # and after recovery the generation-guard sees applied_gen = nil
       # and will try to fetch.
       script_cycle(ctx.fake, "A1",
         gen: 2,
@@ -1289,7 +1411,7 @@ defmodule Aerospike.TenderTest do
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          failure_threshold: 2,
+          failure_threshold: 1,
           node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
@@ -1379,14 +1501,17 @@ defmodule Aerospike.TenderTest do
       err = %Error{code: :network_error, message: "injected"}
 
       Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["replicas"], err)
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
       end)
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          failure_threshold: 2,
+          failure_threshold: 1,
           node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
@@ -1546,10 +1671,16 @@ defmodule Aerospike.TenderTest do
       # usual. Only the peers probe diverges.
       script_bootstrap_info(ctx.fake, "A1")
 
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "1",
-        "cluster-stable" => "deadbeef"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-alt"], %{
         "peers-clear-alt" => "0,3000,[]"
@@ -1575,10 +1706,16 @@ defmodule Aerospike.TenderTest do
       # evidence that the configured toggle selected the alternate key.
       script_bootstrap_info(ctx.fake, "A1")
 
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "1",
-        "cluster-stable" => "deadbeef"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-std"], %{
         "peers-clear-std" => "0,3000,[]"
@@ -1605,10 +1742,16 @@ defmodule Aerospike.TenderTest do
       script_bootstrap_info(ctx.fake, "A1")
       script_bootstrap_info(ctx.fake, "B1")
 
-      Fake.script_info(ctx.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "1",
-        "cluster-stable" => "deadbeef"
-      })
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx.fake, "A1", ["peers-clear-alt"], %{
         "peers-clear-alt" => "1,3000,[[B1,,[10.0.0.2:3000]]]"
@@ -1642,20 +1785,28 @@ defmodule Aerospike.TenderTest do
       ctx2 = %{ctx | fake: fake2, name: :"#{ctx.name}_std"}
       {:ok, owner2} = TableOwner.start_link(name: ctx2.name)
       tables2 = TableOwner.tables(owner2)
-      ctx2 = %{ctx2 | owner: owner2, tables: tables2}
+      {:ok, writer2} = PartitionMapWriter.start_link(name: ctx2.name, tables: tables2)
+      ctx2 = %{ctx2 | owner: owner2, writer: writer2, tables: tables2}
 
       on_exit(fn ->
         stop_fake(fake2)
+        stop_process(writer2)
         stop_process(owner2)
       end)
 
       script_bootstrap_info(ctx2.fake, "A1")
       script_bootstrap_info(ctx2.fake, "B1")
 
-      Fake.script_info(ctx2.fake, "A1", ["partition-generation", "cluster-stable"], %{
-        "partition-generation" => "1",
-        "cluster-stable" => "deadbeef"
-      })
+      Fake.script_info(
+        ctx2.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
 
       Fake.script_info(ctx2.fake, "A1", ["peers-clear-std"], %{
         "peers-clear-std" => "1,3000,[[B1,,[10.0.0.2:3000]]]"
@@ -1730,7 +1881,14 @@ defmodule Aerospike.TenderTest do
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
+
       Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
 
       {:ok, pid} =
@@ -1845,7 +2003,13 @@ defmodule Aerospike.TenderTest do
 
       err = %Error{code: :network_error, message: "injected"}
 
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
+
       Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
 
       {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
@@ -1939,7 +2103,13 @@ defmodule Aerospike.TenderTest do
 
       err = %Error{code: :network_error, message: "injected"}
 
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
+
       Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
 
       {:ok, pid} = start_tender(ctx, "test", failure_threshold: 1)
@@ -1970,7 +2140,13 @@ defmodule Aerospike.TenderTest do
       err = %Error{code: :network_error, message: "injected"}
 
       # Cycle 2 — fails and flips to inactive.
-      Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+      Fake.script_info_error(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        err
+      )
+
       Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
 
       # Cycle 3 — healthy again.
@@ -2012,7 +2188,13 @@ defmodule Aerospike.TenderTest do
 
       # Two failing cycles — first flips to inactive, second drops the node.
       Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
+
         Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
       end)
 
@@ -2133,10 +2315,16 @@ defmodule Aerospike.TenderTest do
   end
 
   defp script_cycle(fake, node_name, opts) do
-    Fake.script_info(fake, node_name, ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => Integer.to_string(Keyword.fetch!(opts, :gen)),
-      "cluster-stable" => Keyword.get(opts, :cluster_stable, "deadbeef")
-    })
+    Fake.script_info(
+      fake,
+      node_name,
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => Integer.to_string(Keyword.fetch!(opts, :gen)),
+        "cluster-stable" => Keyword.get(opts, :cluster_stable, "deadbeef"),
+        "peers-generation" => Keyword.get(opts, :peers_generation, "1")
+      }
+    )
 
     Fake.script_info(fake, node_name, ["peers-clear-std"], %{
       "peers-clear-std" => Keyword.fetch!(opts, :peers)

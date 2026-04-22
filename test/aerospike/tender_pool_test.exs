@@ -3,6 +3,7 @@ defmodule Aerospike.TenderPoolTest do
 
   alias Aerospike.Error
   alias Aerospike.NodeSupervisor
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.TableOwner
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
@@ -22,10 +23,12 @@ defmodule Aerospike.TenderPoolTest do
     {:ok, owner} = TableOwner.start_link(name: name)
     tables = TableOwner.tables(owner)
 
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
     {:ok, node_sup} = NodeSupervisor.start_link(name: name)
 
     on_exit(fn ->
       stop_if_alive(node_sup)
+      stop_if_alive(writer)
       stop_if_alive(owner)
       stop_if_alive(fake)
     end)
@@ -67,22 +70,26 @@ defmodule Aerospike.TenderPoolTest do
 
   describe "failure threshold + pool lifecycle" do
     test "flipping a node to :inactive terminates its pool and forgets its pid", ctx do
-      # Threshold = 3. Each failing cycle contributes 2 failure events
-      # (refresh-node info + peers-clear-std); the Task 3 short-circuit
-      # skips the replicas fetch because the generation cannot advance
-      # when the refresh-node info call fails. Cycle 2 pushes the counter
-      # to 2, cycle 3's first failure lifts it to 3 and flips the node to
+      # Threshold = 2. Each failing refresh cycle contributes one failure
+      # event: peers-clear-std is skipped when peers-generation cannot
+      # advance (the info call failed), and replicas is skipped because
+      # the generation-guard sees no generation advance. Cycle 2 takes
+      # the counter to 1, cycle 3 hits threshold=2 and flips the node to
       # :inactive, stopping the pool along the way.
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
 
       Enum.each(1..2, fn _ ->
-        Fake.script_info_error(ctx.fake, "A1", ["partition-generation", "cluster-stable"], err)
-        Fake.script_info_error(ctx.fake, "A1", ["peers-clear-std"], err)
+        Fake.script_info_error(
+          ctx.fake,
+          "A1",
+          ["partition-generation", "cluster-stable", "peers-generation"],
+          err
+        )
       end)
 
-      {:ok, pid} = start_tender(ctx, failure_threshold: 3)
+      {:ok, pid} = start_tender(ctx, failure_threshold: 2)
 
       :ok = Tender.tend_now(pid)
       {:ok, pool_pid} = Tender.pool_pid(pid, "A1")
@@ -217,10 +224,16 @@ defmodule Aerospike.TenderPoolTest do
       "features" => ""
     })
 
-    Fake.script_info(fake, node_name, ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => Integer.to_string(partition_gen),
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      node_name,
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => Integer.to_string(partition_gen),
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, node_name, ["peers-clear-std"], %{
       "peers-clear-std" => "0,3000,[]"

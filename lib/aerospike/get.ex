@@ -59,11 +59,12 @@ defmodule Aerospike.Get do
 
   def execute(tender, %Key{} = key, :all, opts) do
     with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
+         {:ok, policy} <- UnarySupport.read_policy(tender, opts),
          :ok <- TxnSupport.prepare_txn_read(tender, txn, key) do
       UnarySupport.run_command(
         tender,
         key,
-        opts,
+        policy,
         command(),
         %{key: key, conn: tender, txn: txn, opts: opts}
       )

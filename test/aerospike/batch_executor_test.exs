@@ -6,6 +6,7 @@ defmodule Aerospike.BatchExecutorTest do
   alias Aerospike.BatchCommand.NodeRequest
   alias Aerospike.BatchExecutor
   alias Aerospike.Error
+  alias Aerospike.Policy
 
   describe "run_command/5" do
     test "hands grouped node requests to a bounded runner and merges by caller order" do
@@ -229,10 +230,13 @@ defmodule Aerospike.BatchExecutorTest do
     {on_rebalance, opts} = Keyword.pop(opts, :on_rebalance, fn -> :ok end)
 
     BatchExecutor.new!(
-      base_policy: %{
-        max_retries: Keyword.get(opts, :max_retries, 0),
-        sleep_between_retries_ms: 0,
-        replica_policy: :sequence
+      policy: %Policy.BatchRead{
+        timeout: Keyword.get(opts, :timeout, 5_000),
+        retry: %{
+          max_retries: Keyword.get(opts, :max_retries, 0),
+          sleep_between_retries_ms: 0,
+          replica_policy: :sequence
+        }
       },
       max_concurrency: max_concurrency,
       on_rebalance: on_rebalance

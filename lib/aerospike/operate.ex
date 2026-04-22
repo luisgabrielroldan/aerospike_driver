@@ -22,6 +22,7 @@ defmodule Aerospike.Operate do
 
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
@@ -58,20 +59,27 @@ defmodule Aerospike.Operate do
   def execute(tender, %Key{} = key, operations, opts \\ []) when is_list(opts) do
     with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
          {:ok, built_operations} <- build_operations(operations),
-         {:ok, ttl} <- non_negative_opt(opts, :ttl),
-         {:ok, generation} <- non_negative_opt(opts, :generation) do
+         {:ok, policy} <- UnarySupport.operate_policy(tender, opts) do
       flags = OperateFlags.scan_ops(built_operations)
-      input = command_input(key, tender, txn, opts, built_operations, flags, ttl, generation)
+      input = command_input(key, tender, txn, opts, built_operations, flags, policy)
 
       with :ok <- TxnSupport.prepare_txn_for_operate(tender, txn, key, flags.has_write?, opts) do
         tender
-        |> UnarySupport.run_command(key, opts, command(flags), input)
+        |> UnarySupport.run_command(key, policy, command(flags), input)
         |> maybe_track_txn_in_doubt(flags, tender, txn, key)
       end
     end
   end
 
-  defp command_input(key, tender, txn, opts, built_operations, flags, ttl, generation) do
+  defp command_input(
+         key,
+         tender,
+         txn,
+         opts,
+         built_operations,
+         flags,
+         %Policy.UnaryWrite{} = policy
+       ) do
     %{
       key: key,
       conn: tender,
@@ -80,8 +88,8 @@ defmodule Aerospike.Operate do
       kind: if(flags.has_write?, do: :write, else: :read),
       operations: built_operations,
       flags: flags,
-      ttl: ttl,
-      generation: generation
+      ttl: policy.ttl,
+      generation: policy.generation
     }
   end
 
@@ -193,20 +201,6 @@ defmodule Aerospike.Operate do
 
   defp normalize_bin_name(bin_name) when is_atom(bin_name), do: Atom.to_string(bin_name)
   defp normalize_bin_name(bin_name), do: bin_name
-
-  defp non_negative_opt(opts, key) do
-    case Keyword.get(opts, key, 0) do
-      value when is_integer(value) and value >= 0 -> {:ok, value}
-      value -> invalid_non_negative_opt(key, value)
-    end
-  end
-
-  defp invalid_non_negative_opt(key, value) do
-    {:error,
-     Error.from_result_code(:invalid_argument,
-       message: "#{key} must be a non-negative integer, got: #{inspect(value)}"
-     )}
-  end
 
   defp encode_operate(%{
          key: %Key{} = key,

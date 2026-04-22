@@ -8,6 +8,7 @@ defmodule Aerospike.Touch do
 
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
@@ -32,16 +33,15 @@ defmodule Aerospike.Touch do
   @spec execute(GenServer.server(), Key.t(), [option()]) :: result()
   def execute(tender, %Key{} = key, opts \\ []) when is_list(opts) do
     with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
-         {:ok, ttl} <- non_negative_opt(opts, :ttl),
-         {:ok, generation} <- non_negative_opt(opts, :generation),
+         {:ok, policy} <- UnarySupport.write_policy(tender, opts),
          :ok <- TxnSupport.prepare_txn_write(tender, txn, key, opts) do
       result =
         UnarySupport.run_command(
           tender,
           key,
-          opts,
+          policy,
           command(),
-          %{key: key, conn: tender, txn: txn, opts: opts, ttl: ttl, generation: generation}
+          command_input(tender, key, txn, opts, policy)
         )
 
       case result do
@@ -64,18 +64,15 @@ defmodule Aerospike.Touch do
     )
   end
 
-  defp non_negative_opt(opts, key) do
-    case Keyword.get(opts, key, 0) do
-      value when is_integer(value) and value >= 0 -> {:ok, value}
-      value -> invalid_non_negative_opt(key, value)
-    end
-  end
-
-  defp invalid_non_negative_opt(key, value) do
-    {:error,
-     Error.from_result_code(:invalid_argument,
-       message: "#{key} must be a non-negative integer, got: #{inspect(value)}"
-     )}
+  defp command_input(conn, key, txn, opts, %Policy.UnaryWrite{} = policy) do
+    %{
+      key: key,
+      conn: conn,
+      txn: txn,
+      opts: opts,
+      ttl: policy.ttl,
+      generation: policy.generation
+    }
   end
 
   defp encode_touch(%{

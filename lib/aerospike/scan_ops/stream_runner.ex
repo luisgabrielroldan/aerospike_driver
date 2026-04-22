@@ -5,6 +5,7 @@ defmodule Aerospike.ScanOps.StreamRunner do
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
   alias Aerospike.NodePool
+  alias Aerospike.Policy
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ScanQuery
@@ -14,7 +15,6 @@ defmodule Aerospike.ScanOps.StreamRunner do
   alias Aerospike.ScanOps.PageRunner
   alias Aerospike.Tender
 
-  @default_timeout 5_000
   @spec stream(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream(tender, scannable, opts) when is_list(opts) do
@@ -118,16 +118,17 @@ defmodule Aerospike.ScanOps.StreamRunner do
 
   defp stream_internal(tender, scannable, opts, node_filter, wire_builder, parser) do
     with {:ok, runtime} <- PageRunner.runtime(tender, scannable),
+         {:ok, policy} <- Policy.scan_query_runtime(opts),
          {:ok, _tracker, node_requests} <-
-           PageRunner.prepare_node_requests(runtime, scannable, node_filter, opts) do
-      task_timeout = Keyword.get(opts, :task_timeout, :infinity)
-      max_concurrency = max_concurrency(opts, length(node_requests))
+           PageRunner.prepare_node_requests(runtime, scannable, node_filter, policy) do
+      task_timeout = policy.task_timeout
+      max_concurrency = max_concurrency(policy, length(node_requests))
 
       stream =
         node_requests
         |> Task.async_stream(
           fn node_request ->
-            run_node_request(runtime, scannable, node_request, opts, wire_builder, parser)
+            run_node_request(runtime, scannable, node_request, wire_builder, parser)
           end,
           ordered: true,
           max_concurrency: max_concurrency,
@@ -141,20 +142,18 @@ defmodule Aerospike.ScanOps.StreamRunner do
   end
 
   defp run_background_query(tender, query, opts, node_filter, wire_builder, kind) do
-    task_id = Keyword.get(opts, :task_id, System.unique_integer([:positive]))
-    opts = Keyword.put_new(opts, :task_id, task_id)
-
     with {:ok, runtime} <- PageRunner.runtime(tender, query),
+         {:ok, policy} <- Policy.scan_query_runtime(opts),
          {:ok, _tracker, node_requests} <-
-           PageRunner.prepare_node_requests(runtime, query, node_filter, opts) do
-      task_timeout = Keyword.get(opts, :task_timeout, :infinity)
-      max_concurrency = max_concurrency(opts, length(node_requests))
+           PageRunner.prepare_node_requests(runtime, query, node_filter, policy) do
+      task_timeout = policy.task_timeout
+      max_concurrency = max_concurrency(policy, length(node_requests))
 
       results =
         node_requests
         |> Task.async_stream(
           fn node_request ->
-            run_background_node_request(runtime, query, node_request, opts, wire_builder)
+            run_background_node_request(runtime, query, node_request, wire_builder)
           end,
           ordered: true,
           max_concurrency: max_concurrency,
@@ -170,7 +169,7 @@ defmodule Aerospike.ScanOps.StreamRunner do
              conn: tender,
              namespace: query.namespace,
              set: query.set,
-             task_id: task_id,
+             task_id: policy.task_id,
              kind: kind,
              node_name: node_filter
            }}
@@ -185,7 +184,6 @@ defmodule Aerospike.ScanOps.StreamRunner do
          runtime,
          scannable,
          %{node_name: node_name} = node_request,
-         opts,
          wire_builder,
          parser
        ) do
@@ -198,7 +196,6 @@ defmodule Aerospike.ScanOps.StreamRunner do
               scannable,
               node_request,
               handle,
-              opts,
               wire_builder,
               parser
             )
@@ -212,13 +209,13 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp connect_and_stream(runtime, scannable, node_request, handle, opts, wire_builder, parser) do
+  defp connect_and_stream(runtime, scannable, node_request, handle, wire_builder, parser) do
     transport = runtime.transport
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    timeout = node_request.policy.timeout
     node_opts = [use_compression: handle.use_compression, attempt: 0]
 
     request =
-      build_wire(scannable, node_request.node_partitions, node_request.request_opts, wire_builder)
+      build_wire(scannable, node_request.node_partitions, node_request.policy, wire_builder)
 
     case transport.connect(handle.host, handle.port, handle.connect_opts) do
       {:ok, conn} ->
@@ -278,24 +275,29 @@ defmodule Aerospike.ScanOps.StreamRunner do
     }
   end
 
-  defp build_wire(%Scan{} = scan, node_partitions, opts) do
-    ScanQuery.build_scan(scan, request_partitions(node_partitions), opts)
+  defp build_wire(%Scan{} = scan, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
+    ScanQuery.build_scan(scan, request_partitions(node_partitions), policy)
   end
 
-  defp build_wire(%Query{} = query, node_partitions, opts) do
-    ScanQuery.build_query(query, request_partitions(node_partitions), opts)
+  defp build_wire(%Query{} = query, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
+    ScanQuery.build_query(query, request_partitions(node_partitions), policy)
   end
 
-  defp build_wire(%Query{} = query, node_partitions, opts, wire_builder)
+  defp build_wire(
+         %Query{} = query,
+         node_partitions,
+         %Policy.ScanQueryRuntime{} = policy,
+         wire_builder
+       )
        when is_function(wire_builder, 3) do
-    wire_builder.(query, request_partitions(node_partitions), opts)
+    wire_builder.(query, request_partitions(node_partitions), policy)
   end
 
-  defp build_wire(%Scan{} = scan, node_partitions, opts, nil),
-    do: build_wire(scan, node_partitions, opts)
+  defp build_wire(%Scan{} = scan, node_partitions, %Policy.ScanQueryRuntime{} = policy, nil),
+    do: build_wire(scan, node_partitions, policy)
 
-  defp build_wire(%Query{} = query, node_partitions, opts, nil),
-    do: build_wire(query, node_partitions, opts)
+  defp build_wire(%Query{} = query, node_partitions, %Policy.ScanQueryRuntime{} = policy, nil),
+    do: build_wire(query, node_partitions, policy)
 
   defp namespace(%Scan{namespace: namespace}), do: namespace
   defp namespace(%Query{namespace: namespace}), do: namespace
@@ -345,14 +347,13 @@ defmodule Aerospike.ScanOps.StreamRunner do
          runtime,
          query,
          %{node_name: node_name} = node_request,
-         opts,
          wire_builder
        ) do
     case Tender.node_handle(runtime.tender, node_name) do
       {:ok, handle} ->
         case CircuitBreaker.allow?(handle.counters, handle.breaker) do
           :ok ->
-            connect_and_run_background(runtime, query, node_request, handle, opts, wire_builder)
+            connect_and_run_background(runtime, query, node_request, handle, wire_builder)
 
           {:error, %Error{} = err} ->
             {:error, err}
@@ -363,13 +364,13 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp connect_and_run_background(runtime, query, node_request, handle, opts, wire_builder) do
+  defp connect_and_run_background(runtime, query, node_request, handle, wire_builder) do
     transport = runtime.transport
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    timeout = node_request.policy.timeout
     node_opts = [use_compression: handle.use_compression, attempt: 0]
 
     request =
-      build_wire(query, node_request.node_partitions, node_request.request_opts, wire_builder)
+      build_wire(query, node_request.node_partitions, node_request.policy, wire_builder)
 
     NodePool.checkout!(
       node_request.node_name,
@@ -416,11 +417,11 @@ defmodule Aerospike.ScanOps.StreamRunner do
     end
   end
 
-  defp max_concurrency(opts, fallback) do
-    case Keyword.get(opts, :max_concurrent_nodes, fallback) do
-      n when is_integer(n) and n > 0 -> min(n, fallback)
-      _ -> fallback
-    end
+  defp max_concurrency(%Policy.ScanQueryRuntime{max_concurrent_nodes: 0}, fallback), do: fallback
+
+  defp max_concurrency(%Policy.ScanQueryRuntime{max_concurrent_nodes: n}, fallback)
+       when is_integer(n) and n > 0 do
+    min(n, fallback)
   end
 
   defp unknown_node(node_name) do

@@ -2,7 +2,7 @@ defmodule Aerospike.Supervisor do
   @moduledoc """
   Top-level supervisor for one named Aerospike cluster.
 
-  Starts three children under `rest_for_one` so the blast radius of a
+  Starts four children under `rest_for_one` so the blast radius of a
   crash matches which process owns what state:
 
     1. `Aerospike.TableOwner` — creates and owns the ETS tables backing
@@ -12,17 +12,23 @@ defmodule Aerospike.Supervisor do
        `NimblePool` children. Lives independently of the Tender so the
        Tender can restart without losing already-started pools; the
        Tender's restart path sweeps orphans to reconcile.
-    3. `Aerospike.Tender` — the single-writer cluster-state GenServer.
-       Started last so its `init/1` can read the TableOwner's tables
-       and reference the NodeSupervisor by name.
+    3. `Aerospike.PartitionMapWriter` — sole writer for the partition-map
+       ETS tables. Promotes the single-writer invariant from convention
+       to a process boundary: every mutation of `owners`, `node_gens`,
+       and `meta.:ready` runs inside this PID.
+    4. `Aerospike.Tender` — the tend-cycle orchestrator. Started last so
+       its `init/1` can read the TableOwner's tables and reference the
+       NodeSupervisor and Writer by name.
 
   Crash semantics under `rest_for_one`:
 
     * Tender crash → only the Tender restarts. ETS tables survive, the
-      NodeSupervisor survives, and the restarted Tender rehydrates its
-      `:ready` flag from the `:meta` table.
-    * NodeSupervisor crash → Tender also restarts (it is after
-      NodeSupervisor in the list). TableOwner survives.
+      NodeSupervisor and Writer survive, and the restarted Tender
+      rehydrates its `:ready` flag from the `:meta` table.
+    * Writer crash → Tender also restarts (it is after the Writer). The
+      next tend-cycle write would target a dead writer anyway; taking
+      the Tender with it keeps the cycle honest.
+    * NodeSupervisor crash → Writer and Tender also restart.
     * TableOwner crash → the whole subtree restarts with fresh tables.
 
   This module only supervises. It does not start pools, does not run
@@ -30,6 +36,8 @@ defmodule Aerospike.Supervisor do
   """
 
   alias Aerospike.NodeSupervisor
+  alias Aerospike.PartitionMapWriter
+  alias Aerospike.Policy
   alias Aerospike.TableOwner
   alias Aerospike.Tender
 
@@ -107,12 +115,20 @@ defmodule Aerospike.Supervisor do
 
     tender_opts =
       validated
-      |> Keyword.drop([:tables, :node_supervisor])
+      |> Keyword.drop([:tables, :node_supervisor, :writer])
       |> Keyword.put(:node_supervisor, NodeSupervisor.sup_name(name))
+      |> Keyword.put(:writer, PartitionMapWriter.via(name))
 
     children = [
       {TableOwner, name: name},
       {NodeSupervisor, name: name},
+      %{
+        id: {PartitionMapWriter, name},
+        start: {__MODULE__, :start_writer, [name]},
+        type: :worker,
+        restart: :permanent,
+        shutdown: 5_000
+      },
       %{
         id: {Tender, name},
         start: {__MODULE__, :start_tender, [name, tender_opts]},
@@ -123,6 +139,18 @@ defmodule Aerospike.Supervisor do
     ]
 
     Supervisor.start_link(children, strategy: :rest_for_one, name: sup_name(name))
+  end
+
+  @doc false
+  # Starts the PartitionMapWriter after resolving the TableOwner's tables at
+  # supervisor init time. TableOwner is already up at this point (first
+  # child under `rest_for_one`), so `tables/1` is a synchronous call on a
+  # live process.
+  @spec start_writer(atom()) :: GenServer.on_start()
+  def start_writer(name) do
+    tables = TableOwner.tables(TableOwner.via(name))
+
+    PartitionMapWriter.start_link(name: name, tables: tables)
   end
 
   @doc false
@@ -188,14 +216,11 @@ defmodule Aerospike.Supervisor do
     validate_non_neg_integer!(opts, :failure_threshold)
     validate_non_neg_integer!(opts, :circuit_open_threshold)
     validate_pos_integer!(opts, :max_concurrent_ops_per_node)
-    validate_non_neg_integer!(opts, :max_retries)
-    validate_non_neg_integer!(opts, :sleep_between_retries_ms)
-
     validate_auth_opts!(opts)
     validate_top_level_bool!(opts, :use_compression)
     validate_top_level_bool!(opts, :use_services_alternate)
     validate_tend_trigger!(opts)
-    validate_replica_policy!(opts)
+    validate_cluster_policy!(opts)
     validate_connect_opts!(opts)
 
     opts
@@ -307,19 +332,9 @@ defmodule Aerospike.Supervisor do
     end
   end
 
-  defp validate_replica_policy!(opts) do
-    case Keyword.fetch(opts, :replica_policy) do
-      :error ->
-        :ok
-
-      {:ok, value} when value in [:master, :sequence] ->
-        :ok
-
-      {:ok, value} ->
-        raise ArgumentError,
-              "Aerospike.Supervisor: :replica_policy must be :master or :sequence, " <>
-                "got #{inspect(value)}"
-    end
+  defp validate_cluster_policy!(opts) do
+    _ = Policy.cluster_defaults(opts)
+    :ok
   end
 
   # Rejects the two fat-fingers an operator is most likely to hit inside

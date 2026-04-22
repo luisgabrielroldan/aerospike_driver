@@ -97,7 +97,9 @@ defmodule Aerospike.TxnMonitor do
   end
 
   defp run_monitor_command(conn_name, route_key, opts, input) do
-    UnarySupport.run_command(conn_name, route_key, opts, monitor_command(), input)
+    with {:ok, policy} <- UnarySupport.write_policy(conn_name, opts) do
+      UnarySupport.run_command(conn_name, route_key, policy, monitor_command(), input)
+    end
   end
 
   defp monitor_command do

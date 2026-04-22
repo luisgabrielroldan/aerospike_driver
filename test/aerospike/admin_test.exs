@@ -1,8 +1,10 @@
 defmodule Aerospike.AdminTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Error
   alias Aerospike.IndexTask
   alias Aerospike.NodeSupervisor
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.TableOwner
   alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
@@ -18,6 +20,7 @@ defmodule Aerospike.AdminTest do
     {:ok, fake} = Fake.start_link(nodes: [{"A1", host, port}])
     {:ok, owner} = TableOwner.start_link(name: name)
     tables = TableOwner.tables(owner)
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
     {:ok, node_sup} = NodeSupervisor.start_link(name: name)
 
     {:ok, tender} =
@@ -39,6 +42,7 @@ defmodule Aerospike.AdminTest do
     on_exit(fn ->
       stop_quietly(tender)
       stop_quietly(node_sup)
+      stop_quietly(writer)
       stop_quietly(owner)
       stop_quietly(fake)
     end)
@@ -97,13 +101,33 @@ defmodule Aerospike.AdminTest do
     assert :ok = Aerospike.drop_index(conn, @namespace, index_name)
   end
 
+  test "admin helpers reject invalid checkout policy values before issuing info commands", %{
+    conn: conn
+  } do
+    assert {:error, %Error{code: :invalid_argument, message: message}} =
+             Aerospike.create_index(conn, @namespace, "users",
+               bin: "age",
+               name: "age_idx",
+               type: :numeric,
+               pool_checkout_timeout: -1
+             )
+
+    assert message =~ "pool_checkout_timeout must be a non-negative integer"
+  end
+
   defp script_single_node_cluster(fake) do
     Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
 
-    Fake.script_info(fake, "A1", ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => "1",
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      "A1",
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
 

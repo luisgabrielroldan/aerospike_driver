@@ -63,6 +63,11 @@ defmodule Aerospike do
 
   Broader batch semantics, the remaining expression surface, and the
   wider policy surface remain out of scope until later work proves them.
+
+  Caller-facing policy validation and default materialization now lives
+  under `Aerospike.Policy`. Public command functions still accept
+  keyword opts, but command paths no longer merge or validate those
+  policy families ad hoc.
   """
 
   alias Aerospike.Admin

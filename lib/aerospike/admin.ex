@@ -4,20 +4,21 @@ defmodule Aerospike.Admin do
   alias Aerospike.Error
   alias Aerospike.IndexTask
   alias Aerospike.NodePool
+  alias Aerospike.Policy
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Tender
 
-  @default_checkout_timeout 5_000
   @sindex_modern_min {8, 1, 0, 0}
 
   @spec create_index(GenServer.server(), String.t(), String.t(), keyword()) ::
           {:ok, IndexTask.t()} | {:error, Error.t()}
   def create_index(tender, namespace, set, opts)
       when is_binary(namespace) and is_binary(set) and is_list(opts) do
-    with {:ok, node_name, handle, transport} <- pick_node(tender),
-         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, opts),
+    with {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(tender),
+         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
          {:ok, command} <- build_create_index_command(server_version, namespace, set, opts),
-         {:ok, response} <- checkout_info(node_name, handle, transport, [command], opts) do
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
       parse_create_index_response(
         response,
         command,
@@ -32,10 +33,11 @@ defmodule Aerospike.Admin do
           {:ok, String.t()} | {:error, Error.t()}
   def index_status(tender, namespace, index_name, opts)
       when is_binary(namespace) and is_binary(index_name) and is_list(opts) do
-    with {:ok, node_name, handle, transport} <- pick_node(tender),
-         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, opts),
+    with {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(tender),
+         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
          command <- build_index_status_command(server_version, namespace, index_name),
-         {:ok, response} <- checkout_info(node_name, handle, transport, [command], opts) do
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
       {:ok, Map.get(response, command, "")}
     end
   end
@@ -44,10 +46,11 @@ defmodule Aerospike.Admin do
           :ok | {:error, Error.t()}
   def drop_index(tender, namespace, index_name, opts)
       when is_binary(namespace) and is_binary(index_name) and is_list(opts) do
-    with {:ok, node_name, handle, transport} <- pick_node(tender),
-         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, opts),
+    with {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(tender),
+         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
          command <- build_drop_index_command(server_version, namespace, index_name),
-         {:ok, response} <- checkout_info(node_name, handle, transport, [command], opts) do
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
       parse_drop_index_response(response, command)
     end
   end
@@ -70,21 +73,19 @@ defmodule Aerospike.Admin do
     end
   end
 
-  defp checkout_info(node_name, handle, transport, commands, opts) do
-    checkout_timeout = Keyword.get(opts, :pool_checkout_timeout, @default_checkout_timeout)
-
+  defp checkout_info(node_name, handle, transport, commands, %Policy.AdminInfo{} = policy) do
     NodePool.checkout!(
       node_name,
       handle.pool,
       fn conn ->
         {transport.info(conn, commands), conn}
       end,
-      checkout_timeout
+      Policy.admin_checkout_timeout(policy)
     )
   end
 
-  defp fetch_server_version(node_name, handle, transport, opts) do
-    with {:ok, response} <- checkout_info(node_name, handle, transport, ["build"], opts) do
+  defp fetch_server_version(node_name, handle, transport, %Policy.AdminInfo{} = policy) do
+    with {:ok, response} <- checkout_info(node_name, handle, transport, ["build"], policy) do
       parse_server_version(Map.get(response, "build", ""))
     end
   end

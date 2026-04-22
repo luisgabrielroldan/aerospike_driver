@@ -6,6 +6,7 @@ defmodule Aerospike.PublicApiTest do
   alias Aerospike.Filter
   alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionFilter
+  alias Aerospike.PartitionMapWriter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
@@ -27,6 +28,7 @@ defmodule Aerospike.PublicApiTest do
     {:ok, fake} = Fake.start_link(nodes: [{"A1", "10.0.0.1", 3000}, {"B1", "10.0.0.2", 3000}])
     {:ok, owner} = TableOwner.start_link(name: name)
     tables = TableOwner.tables(owner)
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
     {:ok, node_sup} = NodeSupervisor.start_link(name: name)
 
     {:ok, tender} =
@@ -48,6 +50,7 @@ defmodule Aerospike.PublicApiTest do
     on_exit(fn ->
       stop_quietly(tender)
       stop_quietly(node_sup)
+      stop_quietly(writer)
       stop_quietly(owner)
       stop_quietly(fake)
     end)
@@ -220,15 +223,27 @@ defmodule Aerospike.PublicApiTest do
     Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
     Fake.script_info(fake, "B1", ["node", "features"], %{"node" => "B1", "features" => ""})
 
-    Fake.script_info(fake, "A1", ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => "1",
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      "A1",
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
-    Fake.script_info(fake, "B1", ["partition-generation", "cluster-stable"], %{
-      "partition-generation" => "1",
-      "cluster-stable" => "deadbeef"
-    })
+    Fake.script_info(
+      fake,
+      "B1",
+      ["partition-generation", "cluster-stable", "peers-generation"],
+      %{
+        "partition-generation" => "1",
+        "cluster-stable" => "deadbeef",
+        "peers-generation" => "1"
+      }
+    )
 
     Fake.script_info(fake, "A1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})
     Fake.script_info(fake, "B1", ["peers-clear-std"], %{"peers-clear-std" => "0,3000,[]"})

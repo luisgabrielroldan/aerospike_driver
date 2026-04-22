@@ -13,10 +13,10 @@ defmodule Aerospike.BatchExecutor do
   alias Aerospike.CircuitBreaker
   alias Aerospike.Error
   alias Aerospike.NodePool
+  alias Aerospike.Policy
   alias Aerospike.RetryPolicy
   alias Aerospike.Tender
 
-  @default_timeout 5_000
   @default_max_concurrency max(System.schedulers_online(), 1)
 
   @type reroute_kind :: :rebalance | :transport
@@ -43,7 +43,7 @@ defmodule Aerospike.BatchExecutor do
         }
 
   @type t :: %__MODULE__{
-          policy: RetryPolicy.t(),
+          policy: Policy.BatchRead.t(),
           deadline: integer(),
           max_concurrency: pos_integer(),
           on_rebalance: on_rebalance_fun()
@@ -57,15 +57,13 @@ defmodule Aerospike.BatchExecutor do
   """
   @spec new!(keyword()) :: t()
   def new!(opts) when is_list(opts) do
-    base_policy = Keyword.fetch!(opts, :base_policy)
-    command_opts = Keyword.get(opts, :command_opts, [])
-    timeout = Keyword.get(command_opts, :timeout, @default_timeout)
+    policy = Keyword.fetch!(opts, :policy)
     max_concurrency = Keyword.get(opts, :max_concurrency, @default_max_concurrency)
     on_rebalance = Keyword.get(opts, :on_rebalance, fn -> :ok end)
 
     %__MODULE__{
-      policy: RetryPolicy.merge(base_policy, command_opts),
-      deadline: monotonic_now() + timeout,
+      policy: policy,
+      deadline: monotonic_now() + policy.timeout,
       max_concurrency: validate_max_concurrency!(max_concurrency),
       on_rebalance: on_rebalance
     }
@@ -141,7 +139,7 @@ defmodule Aerospike.BatchExecutor do
   end
 
   defp attempt_loop(executor, _command, _ctx, %NodeRequest{} = node_request, attempt, last_error)
-       when attempt > executor.policy.max_retries do
+       when attempt > executor.policy.retry.max_retries do
     %NodeResult{
       request: node_request,
       result: exhausted(last_error, :max_retries),
@@ -237,7 +235,7 @@ defmodule Aerospike.BatchExecutor do
   end
 
   defp retry_after_error(executor, command, ctx, reroute_kind, node_request, attempt, result) do
-    maybe_sleep(executor.policy)
+    maybe_sleep(executor.policy.retry)
 
     case reroute_request(ctx, reroute_kind, node_request, attempt + 1) do
       {:ok, %NodeRequest{} = next_request} ->
