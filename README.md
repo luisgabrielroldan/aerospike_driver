@@ -19,12 +19,11 @@ The library currently proves these command families through the public
 - Unary operate: `operate/4` with the currently admitted write/read subset plus
   `Aerospike.Op`, `Aerospike.Op.List`, and `Aerospike.Op.Map`
 - Batch reads: `batch_get/4`
-- Scans: `stream!/3`, `all/3`, `count/3`, and the `*_node` variants
+- Scans: `stream!/3`, `all/3`, `count/3`
 - Secondary-index queries: `query_stream!/3`, `query_all/3`, `query_count/3`,
-  `query_page/3`, and the `*_node` variants
+  `query_page/3`
 - Query admin/runtime helpers: `create_index/4`, `drop_index/4`,
-  `query_aggregate/6`, `query_execute/4`, `query_execute_node/5`,
-  `query_udf/6`, `query_udf_node/7`
+  `query_aggregate/6`, `query_execute/4`, `query_udf/6`
 - Transactions: `transaction/2`, `transaction/3`, `commit/2`, `abort/2`,
   `txn_status/2`
 
@@ -109,8 +108,9 @@ This library is not yet claiming full Aerospike feature parity.
   policy surface remain deferred
 - scan/query streams are lazy at the outer `Enumerable` boundary only; the
   current runtime still buffers each node before yielding that node's records
-- `query_all/3`, `query_all_node/4`, `query_page/3`, and `query_page_node/4`
-  require `query.max_records`
+- `query_all/3` and `query_page/3` require `query.max_records`
+- scan/query helpers that support node targeting take `node: node_name` in
+  `opts` instead of separate `_node` function families
 - query cursors resume partition progress; they are not snapshot tokens
 - `%Aerospike.Txn{}` is an immutable handle backed by ETS tracking in the
   started cluster, not a transaction owner process

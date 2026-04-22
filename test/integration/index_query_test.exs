@@ -85,11 +85,12 @@ defmodule Aerospike.Integration.IndexQueryTest do
         |> Query.where(Filter.range("age", 20, 24))
         |> Query.max_records(2)
 
-      assert {:ok, %Page{} = page1} = Aerospike.query_page_node(cluster, node_name, paged_query)
+      assert {:ok, %Page{} = page1} = Aerospike.query_page(cluster, paged_query, node: node_name)
       assert page1.cursor != nil
 
       assert {:ok, %Page{} = page2} =
-               Aerospike.query_page_node(cluster, node_name, paged_query,
+               Aerospike.query_page(cluster, paged_query,
+                 node: node_name,
                  cursor: Cursor.encode(page1.cursor)
                )
 

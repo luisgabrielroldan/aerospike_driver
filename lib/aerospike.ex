@@ -26,14 +26,13 @@ defmodule Aerospike do
       `query_aggregate/6` run secondary-index queries through the same
       node-preparation pipeline, with lazy outer streams but
       node-buffered record delivery
-    * `query_execute/4`, `query_execute_node/5`, `query_udf/6`, and
-      `query_udf_node/7` run background query jobs on that same setup
-      path and return pollable task handles
+    * `query_execute/4` and `query_udf/6` run background query jobs on
+      that same setup path and return pollable task handles
     * `stream!/3`, `all/3`, and `count/3` run scan fan-out across the
       same scan/runtime setup, again with lazy outer streams and
       node-buffered record delivery
-    * `scan_stream_node!/4`, `scan_all_node/4`, and `scan_count_node/4`
-      target one named node for the same scan surface
+    * scan/query helpers that already support node targeting accept
+      `node: node_name` in `opts`
 
   Quick-start shape:
 
@@ -94,8 +93,6 @@ defmodule Aerospike do
   (pid or registered name).
   """
   @type cluster :: GenServer.server()
-  @type node_name :: String.t()
-
   @doc """
   Starts a supervised cluster under `Aerospike.Supervisor`.
 
@@ -273,31 +270,6 @@ defmodule Aerospike do
   end
 
   @doc """
-  Returns a lazy `Stream` of query records from one named node.
-
-  Node targeting narrows the source node only; it does not change the
-  current node-buffered delivery semantics.
-  """
-  @spec query_stream_node(cluster(), node_name(), Query.t(), keyword()) ::
-          {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
-  def query_stream_node(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    ScanOps.query_stream_node(cluster, node_name, query, opts)
-  end
-
-  @doc """
-  Same as `query_stream_node/4` but raises on error.
-  """
-  @spec query_stream_node!(cluster(), node_name(), Query.t(), keyword()) :: Enumerable.t()
-  def query_stream_node!(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    case query_stream_node(cluster, node_name, query, opts) do
-      {:ok, stream} -> stream
-      {:error, %Aerospike.Error{} = err} -> raise err
-    end
-  end
-
-  @doc """
   Eagerly collects scan records into a list.
   """
   @spec all(cluster(), Scan.t(), keyword()) ::
@@ -324,31 +296,6 @@ defmodule Aerospike do
   @spec query_all!(cluster(), Query.t(), keyword()) :: [Aerospike.Record.t()]
   def query_all!(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     case query_all(cluster, query, opts) do
-      {:ok, records} -> records
-      {:error, %Aerospike.Error{} = err} -> raise err
-    end
-  end
-
-  @doc """
-  Eagerly collects query records from one named node.
-
-  `query.max_records` must be set because this helper advances through
-  the query in repeated page-sized steps until the cursor is exhausted.
-  """
-  @spec query_all_node(cluster(), node_name(), Query.t(), keyword()) ::
-          {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
-  def query_all_node(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    ScanOps.query_all_node(cluster, node_name, query, opts)
-  end
-
-  @doc """
-  Same as `query_all_node/4` but returns the list or raises `Aerospike.Error`.
-  """
-  @spec query_all_node!(cluster(), node_name(), Query.t(), keyword()) :: [Aerospike.Record.t()]
-  def query_all_node!(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    case query_all_node(cluster, node_name, query, opts) do
       {:ok, records} -> records
       {:error, %Aerospike.Error{} = err} -> raise err
     end
@@ -392,31 +339,6 @@ defmodule Aerospike do
   @spec query_count!(cluster(), Query.t(), keyword()) :: non_neg_integer()
   def query_count!(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     case query_count(cluster, query, opts) do
-      {:ok, count} -> count
-      {:error, %Aerospike.Error{} = err} -> raise err
-    end
-  end
-
-  @doc """
-  Counts query matches on one named node.
-
-  This still walks the query stream and counts client-side. It is not a
-  separate server-side count primitive.
-  """
-  @spec query_count_node(cluster(), node_name(), Query.t(), keyword()) ::
-          {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
-  def query_count_node(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    ScanOps.query_count_node(cluster, node_name, query, opts)
-  end
-
-  @doc """
-  Same as `query_count_node/4` but returns the count or raises `Aerospike.Error`.
-  """
-  @spec query_count_node!(cluster(), node_name(), Query.t(), keyword()) :: non_neg_integer()
-  def query_count_node!(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    case query_count_node(cluster, node_name, query, opts) do
       {:ok, count} -> count
       {:error, %Aerospike.Error{} = err} -> raise err
     end
@@ -471,32 +393,6 @@ defmodule Aerospike do
   end
 
   @doc """
-  Returns one collected query page from one named node.
-
-  `query.max_records` is required because it seeds the partition-tracker
-  budget for the page walk. The cursor resumes partition progress from
-  the prior page; it is not a stable snapshot token.
-  """
-  @spec query_page_node(cluster(), node_name(), Query.t(), keyword()) ::
-          {:ok, Page.t()} | {:error, Aerospike.Error.t()}
-  def query_page_node(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    ScanOps.query_page_node(cluster, node_name, query, opts)
-  end
-
-  @doc """
-  Same as `query_page_node/4` but returns the page or raises `Aerospike.Error`.
-  """
-  @spec query_page_node!(cluster(), node_name(), Query.t(), keyword()) :: Page.t()
-  def query_page_node!(cluster, node_name, %Query{} = query, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    case query_page_node(cluster, node_name, query, opts) do
-      {:ok, page} -> page
-      {:error, %Aerospike.Error{} = err} -> raise err
-    end
-  end
-
-  @doc """
   Streams aggregate query values over the same node-buffered query
   runtime used by `query_stream/3`.
   """
@@ -520,18 +416,6 @@ defmodule Aerospike do
   end
 
   @doc """
-  Starts a background query write job on one named node.
-
-  This returns a pollable task handle, not a resumable record stream.
-  """
-  @spec query_execute_node(cluster(), node_name(), Query.t(), list(), keyword()) ::
-          {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
-  def query_execute_node(cluster, node_name, %Query{} = query, ops, opts \\ [])
-      when is_binary(node_name) and is_list(ops) and is_list(opts) do
-    ScanOps.query_execute_node(cluster, node_name, query, ops, opts)
-  end
-
-  @doc """
   Starts a background query UDF job.
 
   This returns a pollable task handle, not a resumable record stream.
@@ -541,26 +425,6 @@ defmodule Aerospike do
   def query_udf(cluster, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
     ScanOps.query_udf(cluster, query, package, function, args, opts)
-  end
-
-  @doc """
-  Starts a background query UDF job on one named node.
-
-  This returns a pollable task handle, not a resumable record stream.
-  """
-  @spec query_udf_node(
-          cluster(),
-          node_name(),
-          Query.t(),
-          String.t(),
-          String.t(),
-          list(),
-          keyword()
-        ) :: {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
-  def query_udf_node(cluster, node_name, %Query{} = query, package, function, args, opts \\ [])
-      when is_binary(node_name) and is_binary(package) and is_binary(function) and is_list(args) and
-             is_list(opts) do
-    ScanOps.query_udf_node(cluster, node_name, query, package, function, args, opts)
   end
 
   @doc """
@@ -642,65 +506,6 @@ defmodule Aerospike do
   @spec count!(cluster(), Scan.t(), keyword()) :: non_neg_integer()
   def count!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     case count(cluster, scan, opts) do
-      {:ok, count} -> count
-      {:error, %Aerospike.Error{} = err} -> raise err
-    end
-  end
-
-  @doc """
-  Returns a lazy `Stream` of scan records from one named node.
-
-  Node targeting narrows the source node only; it does not change the
-  current node-buffered delivery semantics.
-  """
-  @spec scan_stream_node!(cluster(), node_name(), Scan.t(), keyword()) :: Enumerable.t()
-  def scan_stream_node!(cluster, node_name, %Scan{} = scan, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    case ScanOps.stream_node(cluster, node_name, scan, opts) do
-      {:ok, stream} -> stream
-      {:error, %Aerospike.Error{} = err} -> raise err
-    end
-  end
-
-  @doc """
-  Eagerly collects scan records from one named node.
-  """
-  @spec scan_all_node(cluster(), node_name(), Scan.t(), keyword()) ::
-          {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
-  def scan_all_node(cluster, node_name, %Scan{} = scan, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    ScanOps.all_node(cluster, node_name, scan, opts)
-  end
-
-  @doc """
-  Same as `scan_all_node/4` but returns the list or raises `Aerospike.Error`.
-  """
-  @spec scan_all_node!(cluster(), node_name(), Scan.t(), keyword()) :: [Aerospike.Record.t()]
-  def scan_all_node!(cluster, node_name, %Scan{} = scan, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    case scan_all_node(cluster, node_name, scan, opts) do
-      {:ok, records} -> records
-      {:error, %Aerospike.Error{} = err} -> raise err
-    end
-  end
-
-  @doc """
-  Counts scan matches on one named node.
-  """
-  @spec scan_count_node(cluster(), node_name(), Scan.t(), keyword()) ::
-          {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
-  def scan_count_node(cluster, node_name, %Scan{} = scan, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    ScanOps.count_node(cluster, node_name, scan, opts)
-  end
-
-  @doc """
-  Same as `scan_count_node/4` but returns the count or raises `Aerospike.Error`.
-  """
-  @spec scan_count_node!(cluster(), node_name(), Scan.t(), keyword()) :: non_neg_integer()
-  def scan_count_node!(cluster, node_name, %Scan{} = scan, opts \\ [])
-      when is_binary(node_name) and is_list(opts) do
-    case scan_count_node(cluster, node_name, scan, opts) do
       {:ok, count} -> count
       {:error, %Aerospike.Error{} = err} -> raise err
     end

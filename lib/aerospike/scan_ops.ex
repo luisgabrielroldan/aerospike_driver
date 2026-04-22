@@ -14,14 +14,18 @@ defmodule Aerospike.ScanOps do
   @spec stream(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream(tender, scannable, opts \\ []) when is_list(opts) do
-    StreamRunner.stream(tender, scannable, opts)
+    with {:ok, node_name, opts2} <- normalize_node_opt(opts) do
+      stream_with_node(tender, scannable, node_name, opts2)
+    end
   end
 
   @spec stream_node(GenServer.server(), String.t(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream_node(tender, node_name, scannable, opts \\ [])
       when is_binary(node_name) and is_list(opts) do
-    StreamRunner.stream_node(tender, node_name, scannable, opts)
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      stream(tender, scannable, opts2)
+    end
   end
 
   @spec all(GenServer.server(), Scan.t(), keyword()) ::
@@ -34,7 +38,9 @@ defmodule Aerospike.ScanOps do
           {:ok, [Aerospike.Record.t()]} | {:error, Error.t()}
   def all_node(tender, node_name, %Scan{} = scan, opts \\ [])
       when is_binary(node_name) and is_list(opts) do
-    collect_node(tender, node_name, scan, opts, &Enum.to_list/1)
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      all(tender, scan, opts2)
+    end
   end
 
   @spec count(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
@@ -47,7 +53,9 @@ defmodule Aerospike.ScanOps do
           {:ok, non_neg_integer()} | {:error, Error.t()}
   def count_node(tender, node_name, scannable, opts \\ [])
       when is_binary(node_name) and is_list(opts) do
-    collect_node(tender, node_name, scannable, opts, &Enum.count/1)
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      count(tender, scannable, opts2)
+    end
   end
 
   @spec query_stream(GenServer.server(), Query.t(), keyword()) ::
@@ -74,21 +82,27 @@ defmodule Aerospike.ScanOps do
           {:ok, ExecuteTask.t()} | {:error, Error.t()}
   def query_execute(tender, %Query{} = query, ops, opts \\ [])
       when is_list(ops) and is_list(opts) do
-    StreamRunner.query_execute(tender, query, ops, opts)
+    with {:ok, node_name, opts2} <- normalize_node_opt(opts) do
+      query_execute_with_node(tender, query, ops, node_name, opts2)
+    end
   end
 
   @spec query_execute_node(GenServer.server(), String.t(), Query.t(), list(), keyword()) ::
           {:ok, ExecuteTask.t()} | {:error, Error.t()}
   def query_execute_node(tender, node_name, %Query{} = query, ops, opts \\ [])
       when is_binary(node_name) and is_list(ops) and is_list(opts) do
-    StreamRunner.query_execute_node(tender, node_name, query, ops, opts)
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      query_execute(tender, query, ops, opts2)
+    end
   end
 
   @spec query_udf(GenServer.server(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, ExecuteTask.t()} | {:error, Error.t()}
   def query_udf(tender, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
-    StreamRunner.query_udf(tender, query, package, function, args, opts)
+    with {:ok, node_name, opts2} <- normalize_node_opt(opts) do
+      query_udf_with_node(tender, query, package, function, args, node_name, opts2)
+    end
   end
 
   @spec query_udf_node(
@@ -103,14 +117,17 @@ defmodule Aerospike.ScanOps do
   def query_udf_node(tender, node_name, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(node_name) and is_binary(package) and is_binary(function) and is_list(args) and
              is_list(opts) do
-    StreamRunner.query_udf_node(tender, node_name, query, package, function, args, opts)
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      query_udf(tender, query, package, function, args, opts2)
+    end
   end
 
   @spec query_all(GenServer.server(), Query.t(), keyword()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Error.t()}
   def query_all(tender, %Query{} = query, opts \\ []) when is_list(opts) do
-    with :ok <- require_max_records(query) do
-      PageRunner.all(tender, query, opts)
+    with :ok <- require_max_records(query),
+         {:ok, node_name, opts2} <- normalize_node_opt(opts) do
+      query_all_with_node(tender, query, node_name, opts2)
     end
   end
 
@@ -118,8 +135,8 @@ defmodule Aerospike.ScanOps do
           {:ok, [Aerospike.Record.t()]} | {:error, Error.t()}
   def query_all_node(tender, node_name, %Query{} = query, opts \\ [])
       when is_binary(node_name) and is_list(opts) do
-    with :ok <- require_max_records(query) do
-      PageRunner.all_node(tender, node_name, query, opts)
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      query_all(tender, query, opts2)
     end
   end
 
@@ -139,11 +156,13 @@ defmodule Aerospike.ScanOps do
   @spec query_page(GenServer.server(), Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Error.t()}
   def query_page(tender, %Query{} = query, opts \\ []) when is_list(opts) do
-    {cursor, opts2} = Keyword.pop(opts, :cursor)
+    with {:ok, node_name, opts2} <- normalize_node_opt(opts) do
+      {cursor, opts3} = Keyword.pop(opts2, :cursor)
 
-    with {:ok, query2} <- apply_optional_cursor(query, cursor),
-         :ok <- require_max_records(query2) do
-      PageRunner.page(tender, query2, opts2)
+      with {:ok, query2} <- apply_optional_cursor(query, cursor),
+           :ok <- require_max_records(query2) do
+        query_page_with_node(tender, query2, node_name, opts3)
+      end
     end
   end
 
@@ -151,39 +170,77 @@ defmodule Aerospike.ScanOps do
           {:ok, Page.t()} | {:error, Error.t()}
   def query_page_node(tender, node_name, %Query{} = query, opts \\ [])
       when is_binary(node_name) and is_list(opts) do
-    {cursor, opts2} = Keyword.pop(opts, :cursor)
-
-    with {:ok, query2} <- apply_optional_cursor(query, cursor),
-         :ok <- require_max_records(query2) do
-      PageRunner.page_node(tender, node_name, query2, opts2)
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      query_page(tender, query, opts2)
     end
   end
 
   defp collect(tender, scannable, opts, fun) do
-    case stream(tender, scannable, opts) do
-      {:ok, stream} ->
-        try do
-          {:ok, fun.(stream)}
-        rescue
-          err in Aerospike.Error -> {:error, err}
-        end
-
-      {:error, %Error{} = err} ->
-        {:error, err}
+    with {:ok, node_name, opts2} <- normalize_node_opt(opts),
+         {:ok, stream} <- stream_with_node(tender, scannable, node_name, opts2) do
+      try do
+        {:ok, fun.(stream)}
+      rescue
+        err in Aerospike.Error -> {:error, err}
+      end
     end
   end
 
-  defp collect_node(tender, node_name, scannable, opts, fun) do
-    case stream_node(tender, node_name, scannable, opts) do
-      {:ok, stream} ->
-        try do
-          {:ok, fun.(stream)}
-        rescue
-          err in Aerospike.Error -> {:error, err}
-        end
+  defp query_all_with_node(tender, query, nil, opts), do: PageRunner.all(tender, query, opts)
 
-      {:error, %Error{} = err} ->
-        {:error, err}
+  defp query_all_with_node(tender, query, node_name, opts),
+    do: PageRunner.all_node(tender, node_name, query, opts)
+
+  defp query_page_with_node(tender, query, nil, opts), do: PageRunner.page(tender, query, opts)
+
+  defp query_page_with_node(tender, query, node_name, opts),
+    do: PageRunner.page_node(tender, node_name, query, opts)
+
+  defp stream_with_node(tender, scannable, nil, opts),
+    do: StreamRunner.stream(tender, scannable, opts)
+
+  defp stream_with_node(tender, scannable, node_name, opts),
+    do: StreamRunner.stream_node(tender, node_name, scannable, opts)
+
+  defp query_execute_with_node(tender, query, ops, nil, opts),
+    do: StreamRunner.query_execute(tender, query, ops, opts)
+
+  defp query_execute_with_node(tender, query, ops, node_name, opts),
+    do: StreamRunner.query_execute_node(tender, node_name, query, ops, opts)
+
+  defp query_udf_with_node(tender, query, package, function, args, nil, opts),
+    do: StreamRunner.query_udf(tender, query, package, function, args, opts)
+
+  defp query_udf_with_node(tender, query, package, function, args, node_name, opts),
+    do: StreamRunner.query_udf_node(tender, node_name, query, package, function, args, opts)
+
+  defp normalize_node_opt(opts) when is_list(opts) do
+    case Keyword.pop(opts, :node) do
+      {nil, opts2} ->
+        {:ok, nil, opts2}
+
+      {node_name, opts2} when is_binary(node_name) ->
+        {:ok, node_name, opts2}
+
+      {other, _opts2} ->
+        {:error,
+         Error.from_result_code(:parameter_error,
+           message: "invalid node option: #{inspect(other)}"
+         )}
+    end
+  end
+
+  defp put_target_node_opt(opts, node_name) when is_list(opts) and is_binary(node_name) do
+    case Keyword.has_key?(opts, :node) do
+      true ->
+        {:error,
+         Error.from_result_code(
+           :parameter_error,
+           message: "node option conflicts with the positional node argument"
+         )}
+
+      false ->
+        {:ok, Keyword.put(opts, :node, node_name)}
     end
   end
 

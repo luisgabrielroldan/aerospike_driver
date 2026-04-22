@@ -76,10 +76,10 @@ defmodule Aerospike.PublicApiTest do
     assert 3 = Aerospike.count!(conn, scan)
 
     Fake.script_stream(fake, "A1", {:ok, [frame("node-A1"), last_frame()]})
-    assert [%{bins: %{"payload" => "node-A1"}}] = Aerospike.scan_all_node!(conn, "A1", scan)
+    assert [%{bins: %{"payload" => "node-A1"}}] = Aerospike.all!(conn, scan, node: "A1")
 
     Fake.script_stream(fake, "A1", {:ok, [frame("node-count"), last_frame()]})
-    assert 1 = Aerospike.scan_count_node!(conn, "A1", scan)
+    assert 1 = Aerospike.count!(conn, scan, node: "A1")
 
     query =
       Query.new(@namespace, "scan_ops")
@@ -112,20 +112,20 @@ defmodule Aerospike.PublicApiTest do
     node_query = Query.partition_filter(query, PartitionFilter.by_id(0))
 
     assert %{records: [%{bins: %{"payload" => "page-node-1"}}], done?: false, cursor: %Cursor{}} =
-             Aerospike.query_page_node!(conn, "A1", node_query)
+             Aerospike.query_page!(conn, node_query, node: "A1")
 
     Fake.script_stream(fake, "A1", {:ok, [frame("page-node-count"), last_frame()]})
-    assert 1 = Aerospike.query_count_node!(conn, "A1", node_query)
+    assert 1 = Aerospike.query_count!(conn, node_query, node: "A1")
 
     Fake.script_command(fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
 
     assert {:ok, %ExecuteTask{kind: :query_execute}} =
-             Aerospike.query_execute_node(conn, "A1", query, [])
+             Aerospike.query_execute(conn, query, [], node: "A1")
 
     Fake.script_command(fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
 
     assert {:ok, %ExecuteTask{kind: :query_udf}} =
-             Aerospike.query_udf_node(conn, "A1", query, "pkg", "fun", [])
+             Aerospike.query_udf(conn, query, "pkg", "fun", [], node: "A1")
   end
 
   test "bang wrappers raise the underlying public errors", %{conn: conn} do
@@ -133,7 +133,7 @@ defmodule Aerospike.PublicApiTest do
     query = Query.new(@namespace, "scan_ops") |> Query.where(Filter.range("payload", 0, 9))
 
     assert_raise Aerospike.Error, fn ->
-      Aerospike.scan_stream_node!(conn, "missing", scan) |> Enum.to_list()
+      Aerospike.stream!(conn, scan, node: "missing") |> Enum.to_list()
     end
 
     assert_raise Aerospike.Error, ~r/max_records_required/i, fn ->
@@ -158,7 +158,7 @@ defmodule Aerospike.PublicApiTest do
 
     assert [%{bins: %{"payload" => "stream-node"}}] =
              conn
-             |> Aerospike.query_stream_node!("A1", query)
+             |> Aerospike.query_stream!(query, node: "A1")
              |> Enum.to_list()
 
     Fake.script_stream(
@@ -194,6 +194,33 @@ defmodule Aerospike.PublicApiTest do
 
     assert {:ok, %ExecuteTask{kind: :query_udf, node_name: nil}} =
              Aerospike.query_udf(conn, query, "pkg", "fun", [])
+  end
+
+  test "short-form node-targeted helpers cover scan and query bang paths", %{
+    conn: conn,
+    fake: fake
+  } do
+    scan = Scan.new(@namespace, "scan_ops")
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("node-scan"), last_frame()]})
+    assert [%{bins: %{"payload" => "node-scan"}}] = Aerospike.all!(conn, scan, node: "A1")
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("node-query"), last_frame()]})
+
+    assert [%{bins: %{"payload" => "node-query"}}] =
+             conn
+             |> Aerospike.query_stream!(query, node: "A1")
+             |> Enum.to_list()
+
+    Fake.script_command(fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
+
+    assert {:ok, %ExecuteTask{kind: :query_execute, node_name: "A1"}} =
+             Aerospike.query_execute(conn, query, [], node: "A1")
   end
 
   test "transaction wrappers initialize tracking, abort on explicit errors, and reject reused handles",

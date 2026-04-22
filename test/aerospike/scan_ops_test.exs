@@ -61,7 +61,7 @@ defmodule Aerospike.ScanOpsTest do
     assert stream_payloads == ["A1-1", "A1-2", "B1-1"]
   end
 
-  test "node-targeted scan helpers stay scoped to the requested node", ctx do
+  test "short-form scan helpers accept node targeting through opts", ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
     :ok = Tender.tend_now(tender)
@@ -70,7 +70,7 @@ defmodule Aerospike.ScanOpsTest do
 
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("A1-only"), last_frame()]})
 
-    assert {:ok, [record]} = Aerospike.scan_all_node(tender, "A1", scan)
+    assert {:ok, [record]} = Aerospike.all(tender, scan, node: "A1")
     assert record.bins["payload"] == "A1-only"
   end
 
@@ -111,7 +111,7 @@ defmodule Aerospike.ScanOpsTest do
       {:ok, [frame("page-3"), partition_done_frame("page-3"), last_frame()]}
     )
 
-    assert {:ok, page1} = Aerospike.query_page_node(tender, "A1", paged_query)
+    assert {:ok, page1} = Aerospike.query_page(tender, paged_query, node: "A1")
     assert [%{bins: %{"payload" => "page-1"}}] = page1.records
     assert page1.done? == false
     assert %Cursor{} = page1.cursor
@@ -119,7 +119,7 @@ defmodule Aerospike.ScanOpsTest do
     encoded_cursor = Cursor.encode(page1.cursor)
 
     assert {:ok, page2} =
-             Aerospike.query_page_node(tender, "A1", paged_query, cursor: encoded_cursor)
+             Aerospike.query_page(tender, paged_query, node: "A1", cursor: encoded_cursor)
 
     assert [%{bins: %{"payload" => "page-3"}}] = page2.records
     assert %Cursor{} = page2.cursor
@@ -141,7 +141,8 @@ defmodule Aerospike.ScanOpsTest do
              Aerospike.query_page(tender, query)
   end
 
-  test "stream, page, and background query helpers share node-targeting validation", ctx do
+  test "stream, page, and background query helpers validate node opts through the short form",
+       ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
     :ok = Tender.tend_now(tender)
@@ -152,13 +153,13 @@ defmodule Aerospike.ScanOpsTest do
       |> Query.max_records(1)
 
     assert {:error, %Aerospike.Error{code: :invalid_node}} =
-             Aerospike.query_stream_node(tender, "missing", query)
+             Aerospike.query_stream(tender, query, node: "missing")
 
     assert {:error, %Aerospike.Error{code: :invalid_node}} =
-             Aerospike.query_page_node(tender, "missing", query)
+             Aerospike.query_page(tender, query, node: "missing")
 
     assert {:error, %Aerospike.Error{code: :invalid_node}} =
-             Aerospike.query_execute_node(tender, "missing", query, [])
+             Aerospike.query_execute(tender, query, [], node: "missing")
   end
 
   test "background query execution reuses the shared node preparation seam", ctx do
