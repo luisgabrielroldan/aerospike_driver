@@ -4,10 +4,39 @@ defmodule Aerospike.BatchCommandTest do
   alias Aerospike.BatchCommand
   alias Aerospike.BatchCommand.Entry
   alias Aerospike.BatchCommand.NodeRequest
+  alias Aerospike.BatchCommand.Result
   alias Aerospike.Error
+  alias Aerospike.Key
+
+  describe "Result" do
+    test "captures stable per-entry outcome metadata for mixed batches" do
+      key = Key.new("test", "users", "user-1")
+
+      assert %Result{
+               index: 4,
+               key: ^key,
+               kind: :delete,
+               status: :error,
+               record: nil,
+               error: :unknown_node,
+               in_doubt: true
+             } = %Result{
+               index: 4,
+               key: key,
+               kind: :delete,
+               status: :error,
+               record: nil,
+               error: :unknown_node,
+               in_doubt: true
+             }
+    end
+  end
 
   describe "run_transport/6" do
     test "builds one request per grouped node request and preserves healthy workers on success" do
+      key_a = Key.new("test", "users", "user-a")
+      key_c = Key.new("test", "users", "user-c")
+
       command =
         BatchCommand.new!(
           name: __MODULE__,
@@ -29,7 +58,22 @@ defmodule Aerospike.BatchCommandTest do
 
       node_request = %NodeRequest{
         node_name: "A1",
-        entries: [%Entry{index: 0, payload: :first}, %Entry{index: 2, payload: :third}]
+        entries: [
+          %Entry{
+            index: 0,
+            key: key_a,
+            kind: :read,
+            dispatch: {:read, :master, 0},
+            payload: :first
+          },
+          %Entry{
+            index: 2,
+            key: key_c,
+            kind: :read,
+            dispatch: {:read, :master, 0},
+            payload: :third
+          }
+        ]
       }
 
       assert {{:ok, {:parsed, "A1", "wire-body"}}, :conn_a1} =
@@ -47,6 +91,8 @@ defmodule Aerospike.BatchCommandTest do
     end
 
     test "closes failed workers on transport-class errors" do
+      key = Key.new("test", "users", "user-a")
+
       command =
         BatchCommand.new!(
           name: __MODULE__,
@@ -58,7 +104,10 @@ defmodule Aerospike.BatchCommandTest do
           merge_results: fn _results, _input -> :ok end
         )
 
-      node_request = %NodeRequest{node_name: "A1", entries: [%Entry{index: 0}]}
+      node_request = %NodeRequest{
+        node_name: "A1",
+        entries: [%Entry{index: 0, key: key, kind: :read, dispatch: {:read, :master, 0}}]
+      }
 
       assert {{:error, %Error{code: :network_error, message: "boom"}}, {:close, :failure}} =
                BatchCommand.run_transport(

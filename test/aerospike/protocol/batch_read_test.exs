@@ -22,9 +22,9 @@ defmodule Aerospike.Protocol.BatchReadTest do
         %NodeRequest{
           node_name: "A1",
           entries: [
-            %Entry{index: 0, key: key1, payload: nil},
-            %Entry{index: 3, key: key2, payload: nil},
-            %Entry{index: 5, key: key3, payload: nil}
+            %Entry{index: 0, key: key1, kind: :read, dispatch: {:read, :master, 0}, payload: nil},
+            %Entry{index: 3, key: key2, kind: :read, dispatch: {:read, :master, 0}, payload: nil},
+            %Entry{index: 5, key: key3, kind: :read, dispatch: {:read, :master, 0}, payload: nil}
           ],
           payload: nil
         }
@@ -79,9 +79,9 @@ defmodule Aerospike.Protocol.BatchReadTest do
         %NodeRequest{
           node_name: "A1",
           entries: [
-            %Entry{index: 1, key: key1, payload: nil},
-            %Entry{index: 4, key: key2, payload: nil},
-            %Entry{index: 7, key: key3, payload: nil}
+            %Entry{index: 1, key: key1, kind: :read, dispatch: {:read, :master, 0}, payload: nil},
+            %Entry{index: 4, key: key2, kind: :read, dispatch: {:read, :master, 0}, payload: nil},
+            %Entry{index: 7, key: key3, kind: :read, dispatch: {:read, :master, 0}, payload: nil}
           ],
           payload: nil
         }
@@ -132,7 +132,15 @@ defmodule Aerospike.Protocol.BatchReadTest do
       request =
         %NodeRequest{
           node_name: "A1",
-          entries: [%Entry{index: 2, key: key, payload: nil}],
+          entries: [
+            %Entry{
+              index: 2,
+              key: key,
+              kind: :read_header,
+              dispatch: {:read, :master, 0},
+              payload: nil
+            }
+          ],
           payload: nil
         }
 
@@ -150,7 +158,15 @@ defmodule Aerospike.Protocol.BatchReadTest do
       request =
         %NodeRequest{
           node_name: "A1",
-          entries: [%Entry{index: 2, key: key, payload: nil}],
+          entries: [
+            %Entry{
+              index: 2,
+              key: key,
+              kind: :read_header,
+              dispatch: {:read, :master, 0},
+              payload: nil
+            }
+          ],
           payload: nil
         }
 

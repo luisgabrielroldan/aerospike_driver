@@ -2,7 +2,7 @@ defmodule Aerospike.Get do
   @moduledoc """
   GET command adapter for the spike.
 
-  `Aerospike.UnaryExecutor` owns the shared unary control flow:
+  `Aerospike.Executor` owns the shared unary control flow:
   routing, node-handle resolution, breaker checks, pool checkout,
   transport dispatch, reply classification, and retry budgeting.
 

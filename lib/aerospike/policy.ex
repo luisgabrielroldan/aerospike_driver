@@ -62,6 +62,18 @@ defmodule Aerospike.Policy do
           }
   end
 
+  defmodule Batch do
+    @moduledoc false
+
+    @enforce_keys [:timeout, :retry]
+    defstruct [:timeout, :retry]
+
+    @type t :: %__MODULE__{
+            timeout: non_neg_integer(),
+            retry: RetryPolicy.t()
+          }
+  end
+
   defmodule AdminInfo do
     @moduledoc false
 
@@ -114,6 +126,11 @@ defmodule Aerospike.Policy do
     batch_read(RetryPolicy.defaults(), opts)
   end
 
+  @spec batch(keyword()) :: {:ok, Batch.t()} | {:error, Error.t()}
+  def batch(opts) when is_list(opts) do
+    batch(RetryPolicy.defaults(), opts)
+  end
+
   @spec unary_read(RetryPolicy.t(), keyword()) :: {:ok, UnaryRead.t()} | {:error, Error.t()}
   def unary_read(%{} = base_retry, opts) when is_list(opts) do
     with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout) do
@@ -143,10 +160,17 @@ defmodule Aerospike.Policy do
 
   @spec batch_read(RetryPolicy.t(), keyword()) :: {:ok, BatchRead.t()} | {:error, Error.t()}
   def batch_read(%{} = base_retry, opts) when is_list(opts) do
+    with {:ok, %Batch{} = policy} <- batch(base_retry, opts) do
+      {:ok, %BatchRead{timeout: policy.timeout, retry: policy.retry}}
+    end
+  end
+
+  @spec batch(RetryPolicy.t(), keyword()) :: {:ok, Batch.t()} | {:error, Error.t()}
+  def batch(%{} = base_retry, opts) when is_list(opts) do
     case Enum.find(opts, &invalid_batch_read_opt?/1) do
       nil ->
         {:ok,
-         %BatchRead{
+         %Batch{
            timeout: Keyword.get(opts, :timeout, @default_timeout),
            retry: disable_retries(base_retry)
          }}

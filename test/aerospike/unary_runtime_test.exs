@@ -1,16 +1,16 @@
-defmodule Aerospike.UnaryExecutorTest do
+defmodule Aerospike.UnaryRuntimeTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.Executor
   alias Aerospike.Policy
   alias Aerospike.Telemetry
   alias Aerospike.UnaryCommand
-  alias Aerospike.UnaryExecutor
 
-  describe "new!/1" do
+  describe "Executor.run/2" do
     test "accepts a validated unary policy struct" do
       executor =
-        UnaryExecutor.new!(
+        Executor.new!(
           policy: %Policy.UnaryRead{
             timeout: 5_000,
             retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
@@ -22,15 +22,13 @@ defmodule Aerospike.UnaryExecutorTest do
                retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
              }
     end
-  end
 
-  describe "run/2" do
     test "returns the most recent error when retries are exhausted" do
       executor = executor_for(max_retries: 1)
       errors = [network_error("first"), timeout_error("second")]
 
       assert {:error, %Error{code: :timeout, message: "second"}} =
-               UnaryExecutor.run(executor, fn _executor, attempt ->
+               Executor.run(executor, fn _executor, attempt ->
                  {"A#{attempt}", {:error, Enum.at(errors, attempt)}}
                end)
     end
@@ -46,7 +44,7 @@ defmodule Aerospike.UnaryExecutorTest do
       parent = self()
 
       assert {:error, %Error{code: :network_error, message: "budget"}} =
-               UnaryExecutor.run(executor, fn _executor, attempt ->
+               Executor.run(executor, fn _executor, attempt ->
                  send(parent, {:attempt, attempt})
                  {"A#{attempt}", {:error, network_error("budget")}}
                end)
@@ -61,7 +59,7 @@ defmodule Aerospike.UnaryExecutorTest do
 
       try do
         assert {:ok, :done} =
-                 UnaryExecutor.run(executor, fn _executor, attempt ->
+                 Executor.run(executor, fn _executor, attempt ->
                    case attempt do
                      0 -> {"A1", {:error, network_error("fake")}}
                      1 -> {"B1", {:ok, :done}}
@@ -94,7 +92,7 @@ defmodule Aerospike.UnaryExecutorTest do
 
       try do
         assert {:ok, :done} =
-                 UnaryExecutor.run(executor, fn _executor, attempt ->
+                 Executor.run(executor, fn _executor, attempt ->
                    case attempt do
                      0 -> {"A1", {:error, Error.from_result_code(:partition_unavailable)}}
                      1 -> {"B1", {:ok, :done}}
@@ -117,7 +115,7 @@ defmodule Aerospike.UnaryExecutorTest do
 
       try do
         assert {:ok, :done} =
-                 UnaryExecutor.run(executor, fn _executor, attempt ->
+                 Executor.run(executor, fn _executor, attempt ->
                    case attempt do
                      0 -> {"A1", {:error, Error.from_result_code(:circuit_open)}}
                      1 -> {"B1", {:ok, :done}}
@@ -133,16 +131,57 @@ defmodule Aerospike.UnaryExecutorTest do
     end
   end
 
-  describe "run_command/3" do
+  describe "UnaryCommand.run/3" do
+    test "keeps the unary fast path to one pick, resolve, breaker, checkout, and transport" do
+      executor = executor_for(max_retries: 1)
+      command = test_command()
+      parent = self()
+      __MODULE__.TransportStub.put_results([{:ok, {:ok, :done}}])
+      __MODULE__.TransportStub.notify(parent)
+      on_exit(fn -> __MODULE__.TransportStub.notify(nil) end)
+
+      assert {:ok, :done} =
+               UnaryCommand.run(command, executor, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :read, :fake_tables, :route_key, :sequence, 0 ->
+                   send(parent, :picked)
+                   {:ok, "A1"}
+                 end,
+                 resolve_handle: fn :fake_tender, "A1" ->
+                   send(parent, :resolved)
+                   {:ok, fake_handle()}
+                 end,
+                 allow_dispatch: fn _counters, _breaker ->
+                   send(parent, :allowed)
+                   :ok
+                 end,
+                 checkout: fn _node_name, _pool, fun, _timeout ->
+                   send(parent, :checked_out)
+                   elem(fun.(:conn), 0)
+                 end
+               })
+
+      assert_receive :picked
+      assert_receive :resolved
+      assert_receive :allowed
+      assert_receive :checked_out
+      assert_receive {:transport, :request, [use_compression: false, attempt: 0]}
+      refute_receive {:transport, _, [use_compression: false, attempt: 1]}
+    end
+
     test "returns breaker refusal without checking out a worker" do
       executor = executor_for(max_retries: 0)
       command = test_command()
 
       assert {:error, %Error{code: :circuit_open}} =
-               UnaryExecutor.run_command(executor, command, %{
+               UnaryCommand.run(command, executor, %{
                  tables: :fake_tables,
                  tender: :fake_tender,
-                 transport: __MODULE__.TransportStub,
+                 transport: TransportStub,
                  route_key: :route_key,
                  command_input: :payload,
                  pick_node: fn :read, :fake_tables, :route_key, :sequence, 0 -> {:ok, "A1"} end,
@@ -156,14 +195,14 @@ defmodule Aerospike.UnaryExecutorTest do
                })
     end
 
-    test "pool checkout failure retries through the extracted dispatch path" do
+    test "pool checkout failure retries through the shared dispatch path" do
       executor = executor_for(max_retries: 1)
       command = test_command()
       parent = self()
       __MODULE__.TransportStub.put_results([{:ok, {:ok, :done}}])
 
       assert {:ok, :done} =
-               UnaryExecutor.run_command(executor, command, %{
+               UnaryCommand.run(command, executor, %{
                  tables: :fake_tables,
                  tender: :fake_tender,
                  transport: __MODULE__.TransportStub,
@@ -203,7 +242,7 @@ defmodule Aerospike.UnaryExecutorTest do
       ])
 
       assert {:error, %Error{code: :network_error, message: "boom"}} =
-               UnaryExecutor.run_command(executor, command, %{
+               UnaryCommand.run(command, executor, %{
                  tables: :fake_tables,
                  tender: :fake_tender,
                  transport: __MODULE__.TransportStub,
@@ -229,7 +268,7 @@ defmodule Aerospike.UnaryExecutorTest do
       ])
 
       assert {:ok, :done} =
-               UnaryExecutor.run_command(executor, command, %{
+               UnaryCommand.run(command, executor, %{
                  tables: :fake_tables,
                  tender: :fake_tender,
                  transport: __MODULE__.TransportStub,
@@ -253,7 +292,7 @@ defmodule Aerospike.UnaryExecutorTest do
       assert_receive {:checkin, "B1", {:conn, "B1"}}
     end
 
-    test "rebalance retry triggers tend hook through the extracted dispatch path" do
+    test "rebalance retry triggers tend hook through the shared dispatch path" do
       parent = self()
 
       executor =
@@ -273,7 +312,7 @@ defmodule Aerospike.UnaryExecutorTest do
       ])
 
       assert {:ok, :done} =
-               UnaryExecutor.run_command(executor, command, %{
+               UnaryCommand.run(command, executor, %{
                  tables: :fake_tables,
                  tender: :fake_tender,
                  transport: __MODULE__.TransportStub,
@@ -301,7 +340,7 @@ defmodule Aerospike.UnaryExecutorTest do
       __MODULE__.TransportStub.put_results([{:ok, {:ok, :done}}])
 
       assert {:ok, :done} =
-               UnaryExecutor.run_command(executor, command, %{
+               UnaryCommand.run(command, executor, %{
                  tables: :fake_tables,
                  tender: :fake_tender,
                  transport: __MODULE__.TransportStub,
@@ -328,7 +367,6 @@ defmodule Aerospike.UnaryExecutorTest do
       assert_receive {:pick_node, 0}
       assert_receive {:checkout, "A1", {:pool, "A1"}, timeout_a}
       assert is_integer(timeout_a)
-
       assert_receive {:pick_node, 1}
       assert_receive {:checkout, "B1", {:pool, "B1"}, timeout_b}
       assert is_integer(timeout_b)
@@ -343,7 +381,7 @@ defmodule Aerospike.UnaryExecutorTest do
   defp executor_for(opts) do
     on_rebalance = Keyword.get(opts, :on_rebalance, fn -> :ok end)
 
-    UnaryExecutor.new!(
+    Executor.new!(
       policy: %Policy.UnaryRead{
         timeout: Keyword.get(opts, :timeout, 5_000),
         retry: %{
@@ -396,9 +434,16 @@ defmodule Aerospike.UnaryExecutorTest do
   defp timeout_error(message), do: Error.from_result_code(:timeout, message: message)
 
   defmodule TransportStub do
-    def put_results(results), do: Process.put({__MODULE__, :results}, results)
+    alias Aerospike.Error
 
-    def command(_conn, _request, _deadline_ms, _command_opts) do
+    def put_results(results), do: Process.put({__MODULE__, :results}, results)
+    def notify(pid), do: Process.put({__MODULE__, :notify}, pid)
+
+    def command(_conn, request, _deadline_ms, command_opts) do
+      if pid = Process.get({__MODULE__, :notify}) do
+        send(pid, {:transport, request, command_opts})
+      end
+
       case Process.get({__MODULE__, :results}, []) do
         [result | rest] ->
           Process.put({__MODULE__, :results}, rest)

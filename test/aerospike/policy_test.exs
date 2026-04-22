@@ -96,6 +96,25 @@ defmodule Aerospike.PolicyTest do
     end
   end
 
+  describe "batch/2" do
+    test "materializes the shared batch runtime policy without widening option support" do
+      base_retry = %{max_retries: 5, sleep_between_retries_ms: 99, replica_policy: :sequence}
+
+      assert {:ok,
+              %Policy.Batch{
+                timeout: 250,
+                retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence}
+              }} = Policy.batch(base_retry, timeout: 250)
+    end
+
+    test "rejects unsupported batch opts" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.batch(RetryPolicy.defaults(), ttl: 10)
+
+      assert message =~ "supports only the :timeout option"
+    end
+  end
+
   describe "admin_info/1" do
     test "defaults the pool checkout timeout" do
       assert {:ok, %Policy.AdminInfo{pool_checkout_timeout: 5_000}} = Policy.admin_info([])

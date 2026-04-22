@@ -1,15 +1,17 @@
-defmodule Aerospike.BatchExecutorTest do
+defmodule Aerospike.BatchRuntimeTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.BatchCommand
   alias Aerospike.BatchCommand.Entry
   alias Aerospike.BatchCommand.NodeRequest
-  alias Aerospike.BatchExecutor
+  alias Aerospike.BatchCommand.Regroup
   alias Aerospike.Error
+  alias Aerospike.Executor
+  alias Aerospike.Key
   alias Aerospike.Policy
   alias Aerospike.Telemetry
 
-  describe "run_command/5" do
+  describe "BatchCommand.run/5" do
     test "hands grouped node requests to a bounded runner and merges by caller order" do
       parent = self()
       responses = start_responses!(%{"A1" => [{:ok, "body-a1"}], "B1" => [{:ok, "body-b1"}]})
@@ -38,12 +40,13 @@ defmodule Aerospike.BatchExecutorTest do
       ]
 
       result =
-        BatchExecutor.run_command(
-          executor_for(max_retries: 0, max_concurrency: 2),
+        BatchCommand.run(
           command,
+          runtime_for(max_retries: 0),
           %{order: [0, 1, 2]},
           node_requests,
           ctx(parent, responses,
+            max_concurrency: 2,
             task_runner: fn requests, node_fun, opts ->
               send(parent, {:task_runner, opts})
               Enum.map(requests, node_fun)
@@ -92,9 +95,9 @@ defmodule Aerospike.BatchExecutorTest do
           end)
 
         result =
-          BatchExecutor.run_command(
-            executor_for(max_retries: 1),
+          BatchCommand.run(
             command,
+            runtime_for(max_retries: 1),
             :batch,
             [node_request(node_a, [0]), node_request(node_c, [1])],
             ctx(parent, responses,
@@ -118,14 +121,17 @@ defmodule Aerospike.BatchExecutorTest do
 
         assert_receive {:transport, ^node_a, request_a, _deadline,
                         [use_compression: false, attempt: 0]}
+
         assert request_a == "batch:#{node_a}:0"
 
         assert_receive {:transport, ^node_b, request_b, _deadline,
                         [use_compression: false, attempt: 1]}
+
         assert request_b == "batch:#{node_b}:0"
 
         assert_receive {:transport, ^node_c, request_c, _deadline,
                         [use_compression: false, attempt: 0]}
+
         assert request_c == "batch:#{node_c}:1"
       after
         :telemetry.detach(handler)
@@ -156,9 +162,9 @@ defmodule Aerospike.BatchExecutorTest do
           end)
 
         result =
-          BatchExecutor.run_command(
-            executor_for(max_retries: 1, on_rebalance: fn -> send(parent, :tend_now) end),
+          BatchCommand.run(
             command,
+            runtime_for(max_retries: 1, on_rebalance: fn -> send(parent, :tend_now) end),
             :batch,
             [node_request(node_a, [0]), node_request(node_c, [1])],
             ctx(parent, responses,
@@ -182,18 +188,90 @@ defmodule Aerospike.BatchExecutorTest do
 
         assert_receive {:transport, ^node_a, request_a, _deadline,
                         [use_compression: false, attempt: 0]}
+
         assert request_a == "batch:#{node_a}:0"
 
         assert_receive {:transport, ^node_b, request_b, _deadline,
                         [use_compression: false, attempt: 1]}
+
         assert request_b == "batch:#{node_b}:0"
 
         assert_receive {:transport, ^node_c, request_c, _deadline,
                         [use_compression: false, attempt: 0]}
+
         assert request_c == "batch:#{node_c}:1"
       after
         :telemetry.detach(handler)
       end
+    end
+
+    test "retry reroute can regroup one failed request into multiple node requests" do
+      parent = self()
+      node_a = unique_node_name("A1")
+      node_b = unique_node_name("B1")
+      node_c = unique_node_name("C1")
+
+      responses =
+        start_responses!(%{
+          node_a => [{:error, Error.from_result_code(:network_error, message: "boom-a1")}],
+          node_b => [{:ok, "body-b1"}],
+          node_c => [{:ok, "body-c1"}]
+        })
+
+      command =
+        command(fn results, _input ->
+          Enum.map(results, fn node_result ->
+            {Enum.map(node_result.request.entries, & &1.index), node_result.request.node_name,
+             node_result.attempt, node_result.result}
+          end)
+        end)
+
+      request = node_request(node_a, [0, 1])
+      [entry_0, entry_1] = request.entries
+
+      result =
+        BatchCommand.run(
+          command,
+          runtime_for(max_retries: 1),
+          :batch,
+          [request],
+          ctx(parent, responses,
+            reroute_request: fn
+              :transport, %NodeRequest{} = failed_request, 1 ->
+                {:ok,
+                 %Regroup{
+                   node_requests: [
+                     %{failed_request | node_name: node_b, entries: [entry_0]},
+                     %{failed_request | node_name: node_c, entries: [entry_1]}
+                   ],
+                   node_results: []
+                 }}
+
+              _kind, %NodeRequest{} = failed_request, _attempt ->
+                {:ok, failed_request}
+            end
+          )
+        )
+
+      assert result == [
+               {[0], node_b, 1, {:ok, "body-b1"}},
+               {[1], node_c, 1, {:ok, "body-c1"}}
+             ]
+
+      assert_receive {:transport, ^node_a, request_a, _deadline,
+                      [use_compression: false, attempt: 0]}
+
+      assert request_a == "batch:#{node_a}:0,1"
+
+      assert_receive {:transport, ^node_b, request_b, _deadline,
+                      [use_compression: false, attempt: 1]}
+
+      assert request_b == "batch:#{node_b}:0"
+
+      assert_receive {:transport, ^node_c, request_c, _deadline,
+                      [use_compression: false, attempt: 1]}
+
+      assert request_c == "batch:#{node_c}:1"
     end
 
     test "unknown-node refusal remains scoped to one grouped request" do
@@ -208,9 +286,9 @@ defmodule Aerospike.BatchExecutorTest do
         end)
 
       result =
-        BatchExecutor.run_command(
-          executor_for(max_retries: 0),
+        BatchCommand.run(
           command,
+          runtime_for(max_retries: 0),
           :batch,
           [node_request("A1", [0]), node_request("MISSING", [1])],
           ctx(parent, responses)
@@ -258,11 +336,10 @@ defmodule Aerospike.BatchExecutorTest do
     )
   end
 
-  defp executor_for(opts) do
-    {max_concurrency, opts} = Keyword.pop(opts, :max_concurrency, 1)
-    {on_rebalance, opts} = Keyword.pop(opts, :on_rebalance, fn -> :ok end)
+  defp runtime_for(opts) do
+    on_rebalance = Keyword.get(opts, :on_rebalance, fn -> :ok end)
 
-    BatchExecutor.new!(
+    Executor.new!(
       policy: %Policy.BatchRead{
         timeout: Keyword.get(opts, :timeout, 5_000),
         retry: %{
@@ -271,7 +348,6 @@ defmodule Aerospike.BatchExecutorTest do
           replica_policy: :sequence
         }
       },
-      max_concurrency: max_concurrency,
       on_rebalance: on_rebalance
     )
   end
@@ -279,7 +355,16 @@ defmodule Aerospike.BatchExecutorTest do
   defp node_request(node_name, indices) do
     %NodeRequest{
       node_name: node_name,
-      entries: Enum.map(indices, &%Entry{index: &1, payload: {:entry, &1}})
+      entries:
+        Enum.map(indices, fn index ->
+          %Entry{
+            index: index,
+            key: Key.new("test", "batch", "#{node_name}-#{index}"),
+            kind: :read,
+            dispatch: {:read, :master, 0},
+            payload: {:entry, index}
+          }
+        end)
     }
   end
 

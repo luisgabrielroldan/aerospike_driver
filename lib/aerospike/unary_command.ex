@@ -20,7 +20,9 @@ defmodule Aerospike.UnaryCommand do
   """
 
   alias Aerospike.Error
+  alias Aerospike.Executor
   alias Aerospike.RetryPolicy
+  alias Aerospike.Router
 
   @enforce_keys [:name, :dispatch, :build_request, :parse_response]
   defstruct [:name, :dispatch, :build_request, :parse_response, retry_transport?: true]
@@ -29,8 +31,29 @@ defmodule Aerospike.UnaryCommand do
   @type dispatch_kind :: :read | :write
   @type command_result :: {:ok, term()} | {:error, Error.t()}
   @type transport_result :: command_result() | {:no_retry, command_result()}
+  @type pick_node_fun ::
+          (dispatch :: dispatch_kind(),
+           tables :: term(),
+           route_key :: term(),
+           RetryPolicy.replica_policy(),
+           non_neg_integer() ->
+             {:ok, String.t()} | {:error, term()})
+  @type resolve_handle_fun :: Executor.resolve_handle_fun()
+  @type allow_dispatch_fun :: Executor.allow_dispatch_fun()
+  @type checkout_fun :: Executor.checkout_fun()
   @type build_request_fun :: (hook_input() -> iodata())
   @type parse_response_fun :: (body :: binary(), hook_input() -> command_result() | Error.t())
+  @type dispatch_ctx :: %{
+          required(:tables) => term(),
+          required(:tender) => GenServer.server(),
+          required(:transport) => module(),
+          required(:route_key) => term(),
+          required(:command_input) => hook_input(),
+          optional(:pick_node) => pick_node_fun(),
+          optional(:resolve_handle) => resolve_handle_fun(),
+          optional(:allow_dispatch) => allow_dispatch_fun(),
+          optional(:checkout) => checkout_fun()
+        }
 
   @type t :: %__MODULE__{
           name: module(),
@@ -61,6 +84,43 @@ defmodule Aerospike.UnaryCommand do
   """
   @spec dispatch_kind(t()) :: dispatch_kind()
   def dispatch_kind(%__MODULE__{dispatch: dispatch}), do: dispatch
+
+  @doc """
+  Runs one unary command through the shared executor runtime.
+  """
+  @spec run(t(), Executor.t(), dispatch_ctx()) :: command_result() | {:error, term()}
+  def run(%__MODULE__{} = command, %Executor{} = executor, ctx) when is_map(ctx) do
+    callbacks = %{
+      route_unit: fn :unary, attempt ->
+        pick_node = Map.get(ctx, :pick_node, &pick_node/5)
+
+        pick_node.(
+          dispatch_kind(command),
+          ctx.tables,
+          ctx.route_key,
+          executor.policy.retry.replica_policy,
+          attempt
+        )
+      end,
+      run_transport: fn :unary, transport, conn, remaining, command_opts ->
+        run_transport(
+          command,
+          transport,
+          conn,
+          ctx.command_input,
+          remaining,
+          command_opts
+        )
+      end,
+      progress_retry: fn _kind, :unary, _next_attempt, _last_result ->
+        {:ok, Executor.progress([:unary])}
+      end
+    }
+
+    case Executor.run_unit(executor, :unary, ctx, callbacks) do
+      [%Executor.Outcome{result: result}] -> normalize_public_result(result)
+    end
+  end
 
   @doc """
   Runs the transport-facing edge for a unary command.
@@ -105,6 +165,10 @@ defmodule Aerospike.UnaryCommand do
   defp normalize_result({:ok, _} = ok), do: ok
   defp normalize_result({:error, %Error{}} = err), do: err
   defp normalize_result(%Error{} = err), do: {:error, err}
+  defp normalize_public_result({:ok, _} = ok), do: ok
+  defp normalize_public_result({:error, %Error{}} = err), do: err
+  defp normalize_public_result({:error, reason}) when is_atom(reason), do: {:error, reason}
+  defp normalize_public_result(reason) when is_atom(reason), do: {:error, reason}
 
   defp validate_dispatch!(dispatch) when dispatch in [:read, :write], do: dispatch
 
@@ -117,6 +181,14 @@ defmodule Aerospike.UnaryCommand do
 
   defp transport_error_result(%Error{} = err, retry_transport?: false),
     do: {:no_retry, {:error, err}}
+
+  defp pick_node(:read, tables, route_key, replica_policy, attempt) do
+    Router.pick_for_read(tables, route_key, replica_policy, attempt)
+  end
+
+  defp pick_node(:write, tables, route_key, _replica_policy, _attempt) do
+    Router.pick_for_write(tables, route_key)
+  end
 
   defp checkin_value(result, conn) do
     case RetryPolicy.classify(result) do

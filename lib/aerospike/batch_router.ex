@@ -35,9 +35,27 @@ defmodule Aerospike.BatchRouter do
           }
   end
 
-  @type dispatch :: :write | {:read, Router.replica_policy(), non_neg_integer()}
   @type payload_fun :: (Key.t(), non_neg_integer() -> term())
   @type reason :: :cluster_not_ready
+
+  @doc """
+  Groups typed batch entries into per-node requests while preserving input
+  indices for later merge ordering.
+  """
+  @spec group_entries(Router.tables(), [Entry.t()]) :: {:ok, Grouping.t()} | {:error, reason()}
+  def group_entries(tables, entries) when is_list(entries) do
+    case reduce_entries(entries, tables) do
+      {:ok, grouped, node_order, routing_failures} ->
+        {:ok,
+         %Grouping{
+           node_requests: build_node_requests(grouped, node_order),
+           routing_failures: Enum.reverse(routing_failures)
+         }}
+
+      {:error, :cluster_not_ready} = err ->
+        err
+    end
+  end
 
   @doc """
   Groups `keys` into per-node batch requests while preserving input indices.
@@ -52,28 +70,28 @@ defmodule Aerospike.BatchRouter do
   def group_keys(tables, keys, opts \\ []) when is_list(keys) and is_list(opts) do
     dispatch = Keyword.get(opts, :dispatch, {:read, :master, 0})
     payload_fun = Keyword.get(opts, :payload_fun, fn _key, _index -> nil end)
+    kind = Keyword.get(opts, :kind, default_kind(dispatch))
 
-    case reduce_keys(keys, tables, dispatch, payload_fun) do
-      {:ok, grouped, node_order, routing_failures} ->
-        {:ok,
-         %Grouping{
-           node_requests: build_node_requests(grouped, node_order),
-           routing_failures: Enum.reverse(routing_failures)
-         }}
+    entries =
+      keys
+      |> Enum.with_index()
+      |> Enum.map(fn {key, index} ->
+        %Entry{
+          index: index,
+          key: key,
+          kind: kind,
+          dispatch: dispatch,
+          payload: payload_fun.(key, index)
+        }
+      end)
 
-      {:error, :cluster_not_ready} = err ->
-        err
-    end
+    group_entries(tables, entries)
   end
 
-  defp reduce_keys(keys, tables, dispatch, payload_fun) do
-    keys
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, %{}, [], []}, fn {key, index},
-                                                {:ok, grouped, node_order, failures} ->
-      entry = %Entry{index: index, key: key, payload: payload_fun.(key, index)}
-
-      case route_key(tables, key, dispatch) do
+  defp reduce_entries(entries, tables) do
+    Enum.reduce_while(entries, {:ok, %{}, [], []}, fn %Entry{} = entry,
+                                                      {:ok, grouped, node_order, failures} ->
+      case route_entry(tables, entry) do
         {:ok, node_name} ->
           {next_grouped, next_node_order} = put_entry(grouped, node_order, node_name, entry)
           {:cont, {:ok, next_grouped, next_node_order, failures}}
@@ -108,9 +126,14 @@ defmodule Aerospike.BatchRouter do
     end)
   end
 
-  defp route_key(tables, %Key{} = key, :write), do: Router.pick_for_write(tables, key)
+  defp route_entry(tables, %Entry{key: %Key{} = key, dispatch: :write}) do
+    Router.pick_for_write(tables, key)
+  end
 
-  defp route_key(tables, %Key{} = key, {:read, replica_policy, attempt}) do
+  defp route_entry(tables, %Entry{key: %Key{} = key, dispatch: {:read, replica_policy, attempt}}) do
     Router.pick_for_read(tables, key, replica_policy, attempt)
   end
+
+  defp default_kind(:write), do: :put
+  defp default_kind({:read, _, _}), do: :read
 end

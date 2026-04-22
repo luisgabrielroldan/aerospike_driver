@@ -6,6 +6,7 @@ defmodule Aerospike.Protocol.Response do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.Batch
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.BatchRead
   alias Aerospike.Protocol.ResultCode
@@ -58,6 +59,15 @@ defmodule Aerospike.Protocol.Response do
       other ->
         error_from_result(other)
     end
+  end
+
+  @doc """
+  Parses a multi-record batch read/header reply into per-record indexed results.
+  """
+  @spec parse_batch_response(binary(), Aerospike.BatchCommand.NodeRequest.t()) ::
+          {:ok, Batch.Reply.t()} | {:error, Error.t()}
+  def parse_batch_response(body, node_request) when is_binary(body) do
+    Batch.parse_response(body, node_request)
   end
 
   @doc """

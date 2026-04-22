@@ -3,12 +3,12 @@ defmodule Aerospike.UnarySupport do
 
   alias Aerospike.Cluster
   alias Aerospike.Error
+  alias Aerospike.Executor
   alias Aerospike.Key
   alias Aerospike.Policy
   alias Aerospike.Protocol.Response
   alias Aerospike.Tender
   alias Aerospike.UnaryCommand
-  alias Aerospike.UnaryExecutor
 
   @type unary_policy :: Policy.UnaryRead.t() | Policy.UnaryWrite.t()
 
@@ -28,7 +28,7 @@ defmodule Aerospike.UnarySupport do
       ) do
     runtime = runtime_ctx(tender)
 
-    UnaryExecutor.run_command(executor(runtime, policy), command, %{
+    UnaryCommand.run(command, executor(runtime, policy), %{
       tender: runtime.tender,
       tables: runtime.tables,
       transport: runtime.transport,
@@ -82,7 +82,7 @@ defmodule Aerospike.UnarySupport do
   end
 
   defp executor(runtime, policy) do
-    UnaryExecutor.new!(
+    Executor.new!(
       policy: policy,
       on_rebalance: fn -> trigger_tend_async(runtime.tender) end
     )

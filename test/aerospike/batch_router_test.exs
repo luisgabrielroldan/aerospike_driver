@@ -2,6 +2,7 @@ defmodule Aerospike.BatchRouterTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.BatchRouter
+  alias Aerospike.BatchCommand.Entry
   alias Aerospike.Key
   alias Aerospike.PartitionMap
 
@@ -100,6 +101,40 @@ defmodule Aerospike.BatchRouterTest do
 
       assert {:error, :cluster_not_ready} =
                BatchRouter.group_keys(tables, [key], dispatch: {:read, :master, 0})
+    end
+  end
+
+  describe "group_entries/2" do
+    test "routes mixed read and write entries independently while preserving caller indices", %{
+      tables: tables
+    } do
+      set_ready(tables, true)
+
+      key_a = key_for_partition("test", "batch", 500, "a")
+      key_b = key_for_partition("test", "batch", 501, "b")
+      key_c = key_for_partition("test", "batch", 500, "c")
+
+      seed_partition(tables, key_a, ["A1", "B1"])
+      seed_partition(tables, key_b, ["B1", "A1"])
+
+      entries = [
+        %Entry{index: 0, key: key_a, kind: :read, dispatch: {:read, :master, 0}, payload: :r0},
+        %Entry{index: 1, key: key_b, kind: :delete, dispatch: :write, payload: :w1},
+        %Entry{index: 2, key: key_c, kind: :exists, dispatch: {:read, :master, 0}, payload: :r2}
+      ]
+
+      assert {:ok, grouping} = BatchRouter.group_entries(tables, entries)
+
+      assert Enum.map(grouping.node_requests, & &1.node_name) == ["A1", "B1"]
+
+      assert Enum.map(grouping.node_requests, fn request ->
+               {request.node_name, Enum.map(request.entries, &{&1.index, &1.kind, &1.dispatch})}
+             end) == [
+               {"A1", [{0, :read, {:read, :master, 0}}, {2, :exists, {:read, :master, 0}}]},
+               {"B1", [{1, :delete, :write}]}
+             ]
+
+      assert grouping.routing_failures == []
     end
   end
 

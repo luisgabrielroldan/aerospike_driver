@@ -4,7 +4,7 @@ defmodule Aerospike.Put do
 
   This module builds a simple unary write from a key plus bin map and
   delegates routing, checkout, retry, and transport flow to
-  `Aerospike.UnaryExecutor`.
+  `Aerospike.Executor`.
   """
 
   alias Aerospike.Error
