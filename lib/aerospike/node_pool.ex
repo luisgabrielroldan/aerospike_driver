@@ -259,7 +259,25 @@ defmodule Aerospike.NodePool do
     # cluster-state-only.
     connect_opts = Keyword.put(connect_opts, :node_name, node_name)
 
-    case transport.connect(host, port, connect_opts) do
+    try do
+      transport.connect(host, port, connect_opts)
+    catch
+      # A transport process (e.g. a test-owned `Transport.Fake`) can die
+      # while its `GenServer.call/3` in `connect/3` is in flight — either
+      # because the test that owned it is shutting down, or because the
+      # whole node supervisor is terminating. Convert the exit into the
+      # same `{:remove, {:connect_failed, _}}` path a real connect error
+      # would take, so NimblePool's own callback-error log stays quiet
+      # and the pool simply retries the worker slot.
+      :exit, reason ->
+        {:error,
+         %Error{
+           code: :network_error,
+           message:
+             "Aerospike.NodePool: connect exited for #{node_name} at #{host}:#{port}: #{inspect(reason)}"
+         }}
+    end
+    |> case do
       {:ok, conn} ->
         Logger.debug(fn ->
           "Aerospike.NodePool: connected worker for #{node_name} at #{host}:#{port}"

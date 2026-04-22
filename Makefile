@@ -1,5 +1,4 @@
 SPIKE_COMPOSE ?= docker compose
-CLUSTER_COMPOSE ?= docker compose -f ../aerospike_driver/docker-compose.yml
 SECURITY_USER ?= admin
 SECURITY_PASSWORD ?= admin
 
@@ -20,10 +19,10 @@ help:
 		'test-live            Run CE + cluster live suites' \
 		'test-all             Run all live suites' \
 		'deps-up              Start spike CE single-node docker dependency' \
-		'deps-cluster-up      Start reference 3-node cluster docker dependency' \
+		'deps-cluster-up      Start spike 3-node cluster docker dependency' \
 		'deps-enterprise-up   Start spike enterprise docker dependency stack' \
 		'deps-all-up          Start all docker dependencies used by the spike test matrix' \
-		'deps-down            Stop both spike and reference docker stacks'
+		'deps-down            Stop all spike docker stacks'
 
 test-unit:
 	mix test.unit
@@ -51,15 +50,15 @@ test-all:
 
 deps-up:
 	@$(SPIKE_COMPOSE) up -d aerospike
-	@$(MAKE) wait-service SERVICE=aerospike-driver EXPECTED_SIZE=1
+	@$(MAKE) wait-service SERVICE=aerospike1 EXPECTED_SIZE=1
 	@echo "Spike CE single-node ready on localhost:3000"
 
 deps-cluster-up:
-	@$(CLUSTER_COMPOSE) --profile cluster up -d aerospike aerospike2 aerospike3
+	@$(SPIKE_COMPOSE) --profile cluster up -d aerospike aerospike2 aerospike3
 	@$(MAKE) wait-service SERVICE=aerospike1 EXPECTED_SIZE=3
 	@$(MAKE) wait-service SERVICE=aerospike2 EXPECTED_SIZE=3
 	@$(MAKE) wait-service SERVICE=aerospike3 EXPECTED_SIZE=3
-	@echo "Reference cluster ready on localhost:3000, :3010, :3020"
+	@echo "Spike cluster ready on localhost:3000, :3010, :3020"
 
 deps-enterprise-up:
 	@$(SPIKE_COMPOSE) --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki aerospike-ee-security aerospike-ee-security-tls
@@ -74,9 +73,8 @@ deps-all-up: deps-up deps-cluster-up deps-enterprise-up
 	@echo "All documented spike test dependencies are ready"
 
 deps-down:
-	@$(SPIKE_COMPOSE) --profile enterprise down
-	@$(CLUSTER_COMPOSE) --profile cluster down
-	@echo "Spike and reference docker stacks stopped"
+	@$(SPIKE_COMPOSE) --profile cluster --profile enterprise down
+	@echo "Spike docker stacks stopped"
 
 wait-service:
 	@echo "Waiting for $(SERVICE) (expected cluster size $(EXPECTED_SIZE))..."
