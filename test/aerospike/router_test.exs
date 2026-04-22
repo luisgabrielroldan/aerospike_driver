@@ -6,7 +6,7 @@ defmodule Aerospike.RouterTest do
   alias Aerospike.Router
 
   setup context do
-    prefix = :"router_#{:erlang.phash2(context.test)}"
+    prefix = :"router_#{:erlang.phash2(context.test)}_#{System.unique_integer([:positive])}"
     {owners, node_gens} = PartitionMap.create_tables(prefix)
     meta = :"#{prefix}_meta"
     :ets.new(meta, [:set, :public, :named_table, read_concurrency: true])
@@ -15,8 +15,8 @@ defmodule Aerospike.RouterTest do
     tables = %{owners: owners, node_gens: node_gens, meta: meta}
 
     on_exit(fn ->
-      for tab <- [owners, node_gens, meta], :ets.info(tab) != :undefined do
-        :ets.delete(tab)
+      for tab <- [owners, node_gens, meta] do
+        delete_if_exists(tab)
       end
     end)
 
@@ -24,6 +24,14 @@ defmodule Aerospike.RouterTest do
   end
 
   defp set_ready(%{meta: meta}, value), do: :ets.insert(meta, {:ready, value})
+
+  defp delete_if_exists(tab) do
+    if :ets.info(tab) != :undefined do
+      :ets.delete(tab)
+    end
+  rescue
+    ArgumentError -> :ok
+  end
 
   defp seed_partition(%{owners: owners}, key, replicas, regime \\ 1) do
     :ok = PartitionMap.update(owners, key.namespace, Key.partition_id(key), regime, replicas)
