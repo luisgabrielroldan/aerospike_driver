@@ -1,24 +1,21 @@
 defmodule Aerospike.PublicApiTest do
   use ExUnit.Case, async: false
 
+  alias Aerospike.Cluster
   alias Aerospike.Cursor
   alias Aerospike.ExecuteTask
   alias Aerospike.Filter
-  alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionFilter
-  alias Aerospike.PartitionMapWriter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
   alias Aerospike.Query
   alias Aerospike.Scan
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
   alias Aerospike.Txn
-  alias Aerospike.TxnOps
+  alias Aerospike.Cluster.Tender
 
   @namespace "test"
 
@@ -26,36 +23,35 @@ defmodule Aerospike.PublicApiTest do
     name = :"aerospike_test_#{:erlang.phash2(context.test)}"
 
     {:ok, fake} = Fake.start_link(nodes: [{"A1", "10.0.0.1", 3000}, {"B1", "10.0.0.2", 3000}])
-    {:ok, owner} = TableOwner.start_link(name: name)
-    tables = TableOwner.tables(owner)
-    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
-    {:ok, node_sup} = NodeSupervisor.start_link(name: name)
 
-    {:ok, tender} =
-      Tender.start_link(
+    {:ok, sup} =
+      Aerospike.start_link(
         name: name,
         transport: Fake,
-        connect_opts: [fake: fake],
-        seeds: [{"10.0.0.1", 3000}, {"10.0.0.2", 3000}],
+        hosts: ["10.0.0.1:3000", "10.0.0.2:3000"],
         namespaces: [@namespace],
-        tables: tables,
+        connect_opts: [fake: fake],
         tend_trigger: :manual,
-        node_supervisor: NodeSupervisor.sup_name(name),
         pool_size: 1
       )
 
     script_two_node_cluster(fake)
-    :ok = Tender.tend_now(tender)
+    :ok = Tender.tend_now(name)
+    assert Cluster.ready?(name)
 
     on_exit(fn ->
-      stop_quietly(tender)
-      stop_quietly(node_sup)
-      stop_quietly(writer)
-      stop_quietly(owner)
+      stop_quietly(sup)
       stop_quietly(fake)
     end)
 
-    {:ok, conn: tender, conn_name: name, fake: fake}
+    {:ok, conn: name, conn_name: name, fake: fake}
+  end
+
+  test "cluster read-side helpers expose readiness and active nodes", %{conn_name: conn_name} do
+    assert Cluster.ready?(conn_name)
+    assert Enum.sort(Cluster.active_nodes(conn_name)) == ["A1", "B1"]
+    assert Cluster.active_node?(conn_name, "A1")
+    refute Cluster.active_node?(conn_name, "missing")
   end
 
   test "public scan and query wrappers return records, counts, pages, and task handles", %{
@@ -241,7 +237,6 @@ defmodule Aerospike.PublicApiTest do
                raise Aerospike.Error.from_result_code(:timeout)
              end)
 
-    assert {:error, :not_found} = TxnOps.get_tracking(conn_name, txn)
     assert {:error, %Aerospike.Error{code: :parameter_error}} = Aerospike.commit(conn_name, txn)
     assert {:error, %Aerospike.Error{code: :parameter_error}} = Aerospike.abort(conn_name, txn)
   end

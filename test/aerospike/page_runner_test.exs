@@ -1,19 +1,19 @@
-defmodule Aerospike.PageRunnerTest do
+defmodule Aerospike.Command.ScanOps.PageRunnerTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.ScanOps.PageRunner
   alias Aerospike.Cursor
   alias Aerospike.Filter
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMapWriter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
   alias Aerospike.Query
   alias Aerospike.Scan
-  alias Aerospike.ScanOps.PageRunner
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

@@ -1,6 +1,6 @@
 defmodule Aerospike.Transport.Tcp do
   @moduledoc """
-  Plaintext `:gen_tcp` implementation of `Aerospike.NodeTransport`.
+  Plaintext `:gen_tcp` implementation of `Aerospike.Cluster.NodeTransport`.
 
   One socket per connection, no pooling, no compression on by default.
   Each call is a single request/response over a passive (`active: false`) socket
@@ -28,7 +28,7 @@ defmodule Aerospike.Transport.Tcp do
 
   The read deadline is supplied per `command/3` call by the caller rather
   than stored on the connection, so a retry layer can budget each attempt
-  independently (see `Aerospike.NodeTransport.command/3`). `info/2` still
+  independently (see `Aerospike.Cluster.NodeTransport.command/3`). `info/2` still
   uses the default connect-time timeout because it is only issued from the
   Tender path, which has no per-call deadline of its own.
 
@@ -98,7 +98,7 @@ defmodule Aerospike.Transport.Tcp do
   (every retry-driver call does) default to `0` in metadata.
   """
 
-  @behaviour Aerospike.NodeTransport
+  @behaviour Aerospike.Cluster.NodeTransport
 
   import Bitwise
 

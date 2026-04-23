@@ -27,9 +27,9 @@ defmodule Aerospike.Integration.AuthTest do
   @moduletag :integration
   @moduletag :enterprise
 
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.Tender
 
   @host "localhost"
   @port 3200

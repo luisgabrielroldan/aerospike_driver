@@ -2,23 +2,23 @@ defmodule Aerospike.Integration.GetPoolTest do
   @moduledoc """
   Pool-path integration tests for `Aerospike.get/3`.
 
-  These tests exercise the `NodePool` checkout path end-to-end against a
+  These tests exercise the `Aerospike.Cluster.NodePool` checkout path end-to-end against a
   real Aerospike server: a serial batch that reuses the same pool, a
   concurrent batch that forces checkout queueing with a small pool size,
   and a smoke test that drives a `pool_size: 10` pool with 100 concurrent
   GETs while asserting eager warm-up via NimblePool's internal resource
   queue.
 
-  A separate test starts an `Aerospike.NodeSupervisor` directly and runs
-  `NodePool.checkout!/3` against the real server with a short
+  A separate test starts an `Aerospike.Cluster.NodeSupervisor` directly and runs
+  `Aerospike.Cluster.NodePool.checkout!/3` against the real server with a short
   `:idle_timeout_ms`, proving end-to-end that an idle socket is closed
   by `handle_ping/2` and that the next checkout re-opens a fresh
-  worker. The Fake-based unit tests in `Aerospike.NodePoolTest` cover
+  worker. The Fake-based unit tests in `Aerospike.Cluster.NodePoolTest` cover
   the mechanics; this test only proves the TCP transport cooperates
   with eviction and re-init.
 
   The deep unit-level assertion that "only one connection is opened for
-  N serial GETs" is covered by `Aerospike.NodePoolTest` against
+  N serial GETs" is covered by `Aerospike.Cluster.NodePoolTest` against
   `Transport.Fake`, which counts `connect/3` invocations directly. These
   integration tests assert only the user-visible outcome (every call
   returns `{:error, :key_not_found}` for a missing key) so that adding
@@ -29,11 +29,11 @@ defmodule Aerospike.Integration.GetPoolTest do
 
   @moduletag :integration
 
+  alias Aerospike.Cluster.NodePool
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.NodePool
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.Tender
   alias Aerospike.Transport.Tcp
 
   @host "localhost"

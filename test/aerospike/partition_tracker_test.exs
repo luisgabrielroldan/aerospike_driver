@@ -1,12 +1,12 @@
-defmodule Aerospike.PartitionTrackerTest do
+defmodule Aerospike.Command.PartitionTrackerTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Command.NodePartitions
+  alias Aerospike.Command.PartitionStatus
+  alias Aerospike.Command.PartitionTracker
   alias Aerospike.Cursor
   alias Aerospike.Error
-  alias Aerospike.NodePartitions
   alias Aerospike.PartitionFilter
-  alias Aerospike.PartitionStatus
-  alias Aerospike.PartitionTracker
 
   describe "new/2" do
     test "builds tracker state from a partition filter and resets runtime fields" do

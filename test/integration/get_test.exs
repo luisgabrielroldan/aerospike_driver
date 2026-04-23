@@ -3,9 +3,9 @@ defmodule Aerospike.Integration.GetTest do
 
   @moduletag :integration
 
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.Tender
 
   @host "localhost"
   @port 3000

@@ -1,16 +1,16 @@
-defmodule Aerospike.OperateTest do
+defmodule Aerospike.Command.OperateTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.Operate
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.NodeSupervisor
   alias Aerospike.Op
-  alias Aerospike.Operate
-  alias Aerospike.PartitionMapWriter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Record
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

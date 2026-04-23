@@ -1,8 +1,8 @@
-defmodule Aerospike.NodeCountersTest do
+defmodule Aerospike.Cluster.NodeCountersTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.NodeCounters
   alias Aerospike.Error
-  alias Aerospike.NodeCounters
 
   describe "new/0" do
     test "returns a counters reference with every slot at zero" do

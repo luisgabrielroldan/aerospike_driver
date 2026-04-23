@@ -45,7 +45,7 @@ defmodule Aerospike.Telemetry do
   Span events (prefix + `:start | :stop | :exception`):
 
     * `[:aerospike, :pool, :checkout]` — wraps every
-      `Aerospike.NodePool.checkout!/3`. Metadata: `:node_name`,
+      `Aerospike.Cluster.NodePool.checkout!/3`. Metadata: `:node_name`,
       `:pool_pid`, `:telemetry_span_context`. Measurements:
       `:system_time` and `:monotonic_time` on start; `:duration` on
       stop.
@@ -65,7 +65,7 @@ defmodule Aerospike.Telemetry do
       `[:login]` for auth). Measurements: `:duration` on stop.
 
     * `[:aerospike, :tender, :tend_cycle]` — wraps one full
-      `Aerospike.Tender` cycle. Cluster-wide (one pair per cycle).
+      `Aerospike.Cluster.Tender` cycle. Cluster-wide (one pair per cycle).
       Metadata: none. Measurements: `:duration` on stop.
 
     * `[:aerospike, :tender, :partition_map_refresh]` — wraps the
@@ -140,7 +140,7 @@ defmodule Aerospike.Telemetry do
   @doc """
   Event prefix for the tend-cycle span.
 
-  Wraps one invocation of `Aerospike.Tender.run_tend/1`. The partition
+  Wraps one invocation of `Aerospike.Cluster.Tender.run_tend/1`. The partition
   map refresh is a nested span — both fire during a normal cycle.
   """
   @spec tend_cycle_span() :: [:aerospike | :tender | :tend_cycle, ...]

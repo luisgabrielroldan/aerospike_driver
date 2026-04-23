@@ -1,4 +1,4 @@
-defmodule Aerospike.TxnMonitorTest do
+defmodule Aerospike.Runtime.TxnMonitorTest do
   use ExUnit.Case, async: false
 
   import Bitwise
@@ -7,13 +7,13 @@ defmodule Aerospike.TxnMonitorTest do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Message
-  alias Aerospike.Supervisor, as: ClusterSupervisor
-  alias Aerospike.Tender
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Runtime.TxnMonitor
+  alias Aerospike.Runtime.TxnOps
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
   alias Aerospike.Txn
-  alias Aerospike.TxnMonitor
-  alias Aerospike.TxnOps
 
   setup do
     name = :"txn_monitor_test_#{System.unique_integer([:positive])}"

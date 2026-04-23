@@ -50,11 +50,8 @@ Then open `iex -S mix` in this repo and start one cluster manually:
     transport: Aerospike.Transport.Tcp,
     hosts: ["127.0.0.1:3000"],
     namespaces: ["test"],
-    tend_trigger: :manual,
     pool_size: 2
   )
-
-:ok = Aerospike.Tender.tend_now(:aerospike)
 
 key = Aerospike.Key.new("test", "demo", "hello")
 
@@ -64,17 +61,19 @@ key = Aerospike.Key.new("test", "demo", "hello")
 
 Required startup options are `:name`, `:transport`, `:hosts`, and
 `:namespaces`. Cluster options such as retry, pool, breaker, and auth settings
-are validated synchronously by `Aerospike.start_link/1` through
-`Aerospike.Supervisor`.
+are validated synchronously by `Aerospike.start_link/1` before the cluster
+runtime boots. Use `Aerospike.Cluster.ready?/1` to observe when the published
+cluster view is ready to route commands.
 
 ## Runtime Model
 
-This client is deliberately OTP-first:
+This client is deliberately OTP-first. These runtime modules are internal
+implementation details, not additional public entry points:
 
-- `Aerospike.Supervisor` owns cluster startup and validation
-- `Aerospike.Tender` is the single writer for mutable cluster topology state
-- `Aerospike.NodeSupervisor` and `Aerospike.NodePool` own per-node transport
-  pools
+- `Aerospike.Cluster.Supervisor` owns cluster startup and validation
+- `Aerospike.Cluster.Tender` is the single writer for mutable cluster topology state
+- `Aerospike.Cluster.NodeSupervisor` and `Aerospike.Cluster.NodePool` own
+  per-node transport pools
 - routing decisions are derived from published cluster state rather than hidden
   mutable command-local state
 
@@ -228,7 +227,7 @@ If `mix test.coverage` fails, the review gate is still open.
 ## Where To Look In Code
 
 - `lib/aerospike.ex` for the public entry point and top-level docs
-- `lib/aerospike/supervisor.ex` for startup validation and cluster ownership
+- `lib/aerospike/cluster/supervisor.ex` for startup validation and cluster ownership
 - `lib/aerospike/telemetry.ex` for the supported telemetry contract
 - `test/integration/write_family_test.exs` for the basic CE proof
 - `test/integration/index_query_test.exs` for the live index-query proof

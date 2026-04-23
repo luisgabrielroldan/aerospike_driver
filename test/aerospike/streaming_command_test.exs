@@ -1,8 +1,8 @@
-defmodule Aerospike.StreamingCommandTest do
+defmodule Aerospike.Command.StreamingCommandTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Command.StreamingCommand
   alias Aerospike.Error
-  alias Aerospike.StreamingCommand
 
   test "exposes the configured hook set" do
     command =

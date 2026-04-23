@@ -1,6 +1,6 @@
 defmodule Aerospike.Transport.Tls do
   @moduledoc """
-  TLS (`:ssl`) implementation of `Aerospike.NodeTransport`.
+  TLS (`:ssl`) implementation of `Aerospike.Cluster.NodeTransport`.
 
   The only real difference between this transport and
   `Aerospike.Transport.Tcp` is how the socket is opened: `connect/3`
@@ -65,7 +65,7 @@ defmodule Aerospike.Transport.Tls do
   OCSP, pinning) pass extra opts through `:tls_opts`.
   """
 
-  @behaviour Aerospike.NodeTransport
+  @behaviour Aerospike.Cluster.NodeTransport
 
   require Logger
 

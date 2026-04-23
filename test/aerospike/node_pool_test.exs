@@ -1,9 +1,9 @@
-defmodule Aerospike.NodePoolTest do
+defmodule Aerospike.Cluster.NodePoolTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.NodeCounters
+  alias Aerospike.Cluster.NodePool
   alias Aerospike.Error
-  alias Aerospike.NodeCounters
-  alias Aerospike.NodePool
   alias Aerospike.Telemetry
   alias Aerospike.Transport.Fake
 

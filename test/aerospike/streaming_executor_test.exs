@@ -1,12 +1,12 @@
-defmodule Aerospike.StreamingExecutorTest do
+defmodule Aerospike.Runtime.StreamingExecutorTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Command.StreamingCommand
   alias Aerospike.Error
   alias Aerospike.Policy
   alias Aerospike.Protocol.Message
   alias Aerospike.Query
-  alias Aerospike.StreamingCommand
-  alias Aerospike.StreamingExecutor
+  alias Aerospike.Runtime.StreamingExecutor
 
   defmodule TransportStub do
     def put_script(script) do

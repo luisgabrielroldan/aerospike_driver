@@ -1,4 +1,4 @@
-defmodule Aerospike.TenderOrchestrationTest do
+defmodule Aerospike.Cluster.TenderOrchestrationTest do
   @moduledoc """
   Orchestration-level seam test. Drives one full tend cycle against a
   scripted `Aerospike.Transport.Fake` and asserts the three observable
@@ -11,10 +11,10 @@ defmodule Aerospike.TenderOrchestrationTest do
 
   use ExUnit.Case, async: true
 
-  alias Aerospike.PartitionMapWriter
-  alias Aerospike.TableOwner
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Telemetry
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

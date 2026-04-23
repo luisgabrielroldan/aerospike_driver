@@ -1,13 +1,15 @@
-defmodule Aerospike.TenderTest do
+defmodule Aerospike.Cluster.TenderTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.NodeCounters
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.TendHistogram
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
-  alias Aerospike.NodeCounters
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionMapWriter
   alias Aerospike.RetryPolicy
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 
@@ -540,7 +542,7 @@ defmodule Aerospike.TenderTest do
       # node to :inactive via a failing cycle. `pool_pid/2` must refuse to
       # hand out the soon-to-be-stopped pool even for the tiny window
       # between the status flip and ETS deletion.
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
@@ -559,7 +561,7 @@ defmodule Aerospike.TenderTest do
       {:ok, pid} =
         start_tender(ctx, "test",
           failure_threshold: 1,
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -1334,14 +1336,14 @@ defmodule Aerospike.TenderTest do
 
   describe "per-node counters lifecycle" do
     test "node_counters/2 returns the same reference nodes_status/1 exposes", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -1357,7 +1359,7 @@ defmodule Aerospike.TenderTest do
     end
 
     test "node_counters/2 is {:error, :unknown_node} for inactive and unknown nodes", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
@@ -1376,7 +1378,7 @@ defmodule Aerospike.TenderTest do
       {:ok, pid} =
         start_tender(ctx, "test",
           failure_threshold: 1,
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -1416,7 +1418,7 @@ defmodule Aerospike.TenderTest do
       # future change that re-introduces pool restart on recovery can
       # update this expectation in one place instead of discovering the
       # contract by accident.
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
@@ -1444,7 +1446,7 @@ defmodule Aerospike.TenderTest do
       {:ok, pid} =
         start_tender(ctx, "test",
           failure_threshold: 1,
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -1472,14 +1474,14 @@ defmodule Aerospike.TenderTest do
 
   describe "node_handle/2" do
     test "returns pool, counters, and breaker opts in one GenServer hop", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 2,
           circuit_open_threshold: 7,
           max_concurrent_ops_per_node: 42
@@ -1504,14 +1506,14 @@ defmodule Aerospike.TenderTest do
     end
 
     test "defaults max_concurrent_ops_per_node to pool_size * 10", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 4
         )
 
@@ -1525,7 +1527,7 @@ defmodule Aerospike.TenderTest do
     end
 
     test "returns {:error, :unknown_node} for inactive and unknown nodes", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
@@ -1544,7 +1546,7 @@ defmodule Aerospike.TenderTest do
       {:ok, pid} =
         start_tender(ctx, "test",
           failure_threshold: 1,
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -1572,7 +1574,7 @@ defmodule Aerospike.TenderTest do
   describe "node_handle/2 :use_compression gating" do
     test "cluster flag off → handle reports compression disabled even if node advertises it",
          ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
@@ -1588,7 +1590,7 @@ defmodule Aerospike.TenderTest do
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1,
           use_compression: false
         )
@@ -1600,7 +1602,7 @@ defmodule Aerospike.TenderTest do
     end
 
     test "cluster flag on + node lacks :compression feature → handle reports disabled", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       # Node advertises pipelining but not compression.
@@ -1617,7 +1619,7 @@ defmodule Aerospike.TenderTest do
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1,
           use_compression: true
         )
@@ -1629,7 +1631,7 @@ defmodule Aerospike.TenderTest do
     end
 
     test "cluster flag on + node advertises :compression → handle reports enabled", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
@@ -1645,7 +1647,7 @@ defmodule Aerospike.TenderTest do
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1,
           use_compression: true
         )
@@ -1657,7 +1659,7 @@ defmodule Aerospike.TenderTest do
     end
 
     test "default cluster flag is false", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       Fake.script_info(ctx.fake, "A1", ["node", "features"], %{
@@ -1673,7 +1675,7 @@ defmodule Aerospike.TenderTest do
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -1872,7 +1874,7 @@ defmodule Aerospike.TenderTest do
 
   describe "`:failed` counter decay on successful tend cycles" do
     test "a successful refresh-node info cycle zeroes the `:failed` slot", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
@@ -1886,7 +1888,7 @@ defmodule Aerospike.TenderTest do
 
       {:ok, pid} =
         start_tender(ctx, "test",
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -1907,7 +1909,7 @@ defmodule Aerospike.TenderTest do
     end
 
     test "a failed refresh-node info cycle does not touch the `:failed` slot", ctx do
-      {:ok, node_sup} = Aerospike.NodeSupervisor.start_link(name: ctx.name)
+      {:ok, node_sup} = NodeSupervisor.start_link(name: ctx.name)
       on_exit(fn -> stop_process(node_sup) end)
 
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
@@ -1928,7 +1930,7 @@ defmodule Aerospike.TenderTest do
           # High threshold so the failing cycle does not trip :inactive;
           # the intent is to observe `:failed` after a partial failure.
           failure_threshold: 10,
-          node_supervisor: Aerospike.NodeSupervisor.sup_name(ctx.name),
+          node_supervisor: NodeSupervisor.sup_name(ctx.name),
           pool_size: 1
         )
 
@@ -2012,8 +2014,8 @@ defmodule Aerospike.TenderTest do
       :ok = Tender.tend_now(pid)
 
       {:ok, ref} = Tender.tend_histogram(pid, "A1")
-      assert Aerospike.TendHistogram.count(ref) == 1
-      assert is_integer(Aerospike.TendHistogram.percentile(ref, 0.5))
+      assert TendHistogram.count(ref) == 1
+      assert is_integer(TendHistogram.percentile(ref, 0.5))
     end
 
     test "nodes_status/1 snapshot exposes the histogram reference", ctx do

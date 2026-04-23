@@ -1,7 +1,7 @@
-defmodule Aerospike.PartitionMapWriterTest do
+defmodule Aerospike.Cluster.PartitionMapWriterTest do
   @moduledoc """
-  Seam tests for `Aerospike.PartitionMapWriter`. Each public call is
-  exercised against a freshly-minted `Aerospike.TableOwner`-backed set of
+  Seam tests for `Aerospike.Cluster.PartitionMapWriter`. Each public call is
+  exercised against a freshly-minted `Aerospike.Cluster.TableOwner`-backed set of
   ETS tables; the tests assert the ETS effect rather than the writer's
   trivial internal state. Crash semantics are verified by placing the
   writer under a dedicated supervisor and asserting restart behaviour.
@@ -9,10 +9,10 @@ defmodule Aerospike.PartitionMapWriterTest do
 
   use ExUnit.Case, async: true
 
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionMapWriter
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
   alias Aerospike.RetryPolicy
-  alias Aerospike.TableOwner
 
   setup context do
     name = :"writer_#{:erlang.phash2(context.test)}"

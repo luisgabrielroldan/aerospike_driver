@@ -42,11 +42,10 @@ defmodule Aerospike do
           transport: Aerospike.Transport.Tcp,
           hosts: ["127.0.0.1:3000"],
           namespaces: ["test"],
-          tend_trigger: :manual,
           pool_size: 2
         )
 
-      :ok = Aerospike.Tender.tend_now(:spike)
+      Aerospike.Cluster.ready?(:spike)
 
   The repo README names the supported validation profiles:
 
@@ -68,38 +67,38 @@ defmodule Aerospike do
   policy families ad hoc.
   """
 
-  alias Aerospike.Admin
-  alias Aerospike.BatchGet
-  alias Aerospike.Delete
+  alias Aerospike.Command.Admin
+  alias Aerospike.Command.BatchGet
+  alias Aerospike.Command.Delete
   alias Aerospike.ExecuteTask
-  alias Aerospike.Exists
-  alias Aerospike.Get
+  alias Aerospike.Command.Exists
+  alias Aerospike.Command.Get
   alias Aerospike.IndexTask
   alias Aerospike.Key
-  alias Aerospike.Operate
+  alias Aerospike.Command.Operate
   alias Aerospike.Page
-  alias Aerospike.Put
+  alias Aerospike.Command.Put
   alias Aerospike.Query
   alias Aerospike.Scan
-  alias Aerospike.ScanOps
-  alias Aerospike.Supervisor, as: ClusterSupervisor
-  alias Aerospike.Touch
+  alias Aerospike.Command.ScanOps
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Command.Touch
   alias Aerospike.Txn
-  alias Aerospike.TxnRoll
+  alias Aerospike.Runtime.TxnRoll
 
   @typedoc """
-  Identifier for a running cluster, i.e. an `Aerospike.Tender` process
-  (pid or registered name).
+  Identifier for a running cluster, i.e. its registered name or a pid
+  registered under that name.
   """
   @type cluster :: GenServer.server()
   @doc """
-  Starts a supervised cluster under `Aerospike.Supervisor`.
+  Starts a supervised cluster.
 
-  Forwards `opts` to `Aerospike.Supervisor.start_link/1`, which brings
-  up `Aerospike.TableOwner`, `Aerospike.NodeSupervisor`, and
-  `Aerospike.Tender` under a `rest_for_one` supervisor. The `:name`
-  option is used both as the supervisor's registered name and as the
-  Tender's identity for `get/3`.
+  Internally this delegates to `Aerospike.Cluster.Supervisor.start_link/1`,
+  which boots the cluster-state owner, per-node pool supervisor, partition-map
+  writer, and tend-cycle process under one `rest_for_one` tree. The `:name`
+  option is the public cluster identity later passed to `get/3`,
+  `Aerospike.Cluster.ready?/1`, and the other facade/read-side helpers.
 
   Required options: `:name`, `:transport`, `:hosts`, `:namespaces`.
 
@@ -114,10 +113,9 @@ defmodule Aerospike do
     * `:tend_interval_ms` — automatic tend period in milliseconds.
       Positive integer.
     * `:failure_threshold` — consecutive tend failures before the
-      Tender demotes a node. Non-negative integer.
+      tend cycle demotes a node. Non-negative integer.
 
-  Pool-level knobs (forwarded to `Aerospike.NodeSupervisor.start_pool/2`
-  on each pool start):
+  Pool-level knobs (forwarded internally on each node-pool start):
 
     * `:pool_size` — workers per node. Positive integer.
     * `:idle_timeout_ms` — milliseconds a worker may sit idle before
@@ -161,8 +159,8 @@ defmodule Aerospike do
     * `:tcp_sndbuf` / `:tcp_rcvbuf` — positive integer kernel buffer
       sizes. Unset lets the kernel pick.
 
-  See `Aerospike.Supervisor` for the full option shape and validation
-  rules.
+  `Aerospike.Cluster.Supervisor` documents the underlying validation and child
+  ownership details.
   """
   @spec start_link([ClusterSupervisor.option()]) :: Supervisor.on_start()
   def start_link(opts) when is_list(opts) do

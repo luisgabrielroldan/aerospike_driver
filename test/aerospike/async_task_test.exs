@@ -1,12 +1,12 @@
-defmodule Aerospike.AsyncTaskTest do
+defmodule Aerospike.Runtime.AsyncTaskTest do
   use ExUnit.Case, async: true
 
   defmodule StubTask do
-    use Aerospike.AsyncTask
+    use Aerospike.Runtime.AsyncTask
 
     defstruct [:name]
 
-    @impl Aerospike.AsyncTask
+    @impl Aerospike.Runtime.AsyncTask
     def status(%__MODULE__{name: name}) do
       key = {:async_task_test_statuses, name}
 

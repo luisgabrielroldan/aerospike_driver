@@ -149,7 +149,7 @@ defmodule Aerospike.Protocol.PartitionMap do
   produced the reply.
 
   Segments using the legacy `replicas-all` format (no regime field) are
-  skipped — regime is the load-bearing input to `Aerospike.PartitionMap`'s
+  skipped — regime is the load-bearing input to `Aerospike.Cluster.PartitionMap`'s
   staleness guard.
   """
   @spec parse_replicas_with_regime(String.t()) ::

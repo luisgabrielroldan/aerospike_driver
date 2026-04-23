@@ -1,7 +1,7 @@
-defmodule Aerospike.NodeSupervisorTest do
+defmodule Aerospike.Cluster.NodeSupervisorTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.NodeSupervisor
+  alias Aerospike.Cluster.NodeSupervisor
   alias Aerospike.Transport.Fake
 
   setup context do

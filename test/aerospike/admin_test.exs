@@ -1,12 +1,12 @@
-defmodule Aerospike.AdminTest do
+defmodule Aerospike.Command.AdminTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.IndexTask
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMapWriter
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

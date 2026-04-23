@@ -4,15 +4,15 @@ defmodule Aerospike.Integration.BatchTest do
   @moduletag :integration
   @moduletag :cluster
 
-  alias Aerospike.Batch
-  alias Aerospike.BatchCommand.Entry
+  alias Aerospike.Cluster.Router
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.Batch
+  alias Aerospike.Command.BatchCommand.Entry
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Record
-  alias Aerospike.Router
-  alias Aerospike.Tender
   alias Aerospike.Transport.Tcp
 
   @seeds [{"localhost", 3000}, {"localhost", 3010}, {"localhost", 3020}]
@@ -32,7 +32,7 @@ defmodule Aerospike.Integration.BatchTest do
       Aerospike.start_link(
         name: name,
         transport: Tcp,
-        hosts: Enum.map(, fn {host, port} -> "#{host}:#{port}" end),
+        hosts: Enum.map(@seeds, fn {host, port} -> "#{host}:#{port}" end),
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 2

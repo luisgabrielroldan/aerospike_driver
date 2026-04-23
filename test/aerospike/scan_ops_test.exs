@@ -1,14 +1,18 @@
-defmodule Aerospike.ScanOpsTest do
+defmodule Aerospike.Command.ScanOpsTest do
   use ExUnit.Case, async: true
 
   alias Aerospike
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.NodePartitions
+  alias Aerospike.Command.PartitionTracker
+  alias Aerospike.Command.ScanOps
   alias Aerospike.Cursor
   alias Aerospike.Filter
   alias Aerospike.Key
-  alias Aerospike.NodePartitions
-  alias Aerospike.NodeSupervisor
   alias Aerospike.PartitionFilter
-  alias Aerospike.PartitionMapWriter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
@@ -16,8 +20,6 @@ defmodule Aerospike.ScanOpsTest do
   alias Aerospike.Query
   alias Aerospike.Record
   alias Aerospike.Scan
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 
@@ -209,7 +211,7 @@ defmodule Aerospike.ScanOpsTest do
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("ok"), {:frame, <<0, 1, 2>>}]})
     Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
 
-    assert {:error, %Aerospike.Error{code: :parse_error}} = Aerospike.ScanOps.count(tender, scan)
+    assert {:error, %Aerospike.Error{code: :parse_error}} = ScanOps.count(tender, scan)
 
     query =
       Query.new(@namespace, "scan_ops")
@@ -217,16 +219,16 @@ defmodule Aerospike.ScanOpsTest do
       |> Query.max_records(1)
 
     assert {:error, %Aerospike.Error{code: :parameter_error, message: message}} =
-             Aerospike.ScanOps.query_page(tender, query, cursor: 123)
+             ScanOps.query_page(tender, query, cursor: 123)
 
     assert message =~ "invalid cursor"
 
     assert {:error, %Aerospike.Error{code: :parse_error}} =
-             Aerospike.ScanOps.query_page(tender, query, cursor: "not-base64")
+             ScanOps.query_page(tender, query, cursor: "not-base64")
   end
 
   test "allow_record_fold enforces the tracker record budget without reordering kept records" do
-    tracker = Aerospike.PartitionTracker.new(PartitionFilter.all(), nodes: ["A1"], max_records: 1)
+    tracker = PartitionTracker.new(PartitionFilter.all(), nodes: ["A1"], max_records: 1)
     tracker = %{tracker | record_count: 0}
     node_partitions = NodePartitions.new("A1")
 
@@ -246,7 +248,7 @@ defmodule Aerospike.ScanOpsTest do
     ]
 
     {tracker2, node_partitions2, kept_records} =
-      Aerospike.ScanOps.allow_record_fold(tracker, node_partitions, records)
+      ScanOps.allow_record_fold(tracker, node_partitions, records)
 
     assert tracker2.record_count == 2
     assert node_partitions2.disallowed_count == 1

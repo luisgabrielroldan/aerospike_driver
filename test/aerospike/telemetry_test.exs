@@ -25,9 +25,9 @@ defmodule Aerospike.TelemetryTest do
 
   @telemetry_doc Path.expand("../../../spike-docs/telemetry.md", __DIR__)
   @doc_emitters [
-    "Aerospike.PoolCheckout",
+    "Aerospike.Runtime.PoolCheckout",
     "Aerospike.Transport.Tcp",
-    "Aerospike.Tender",
+    "Aerospike.Cluster.Tender",
     "Aerospike.Telemetry.emit_retry_attempt/4"
   ]
 

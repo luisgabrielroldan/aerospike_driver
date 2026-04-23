@@ -1,9 +1,9 @@
-defmodule Aerospike.RouterTest do
+defmodule Aerospike.Cluster.RouterTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.Router
   alias Aerospike.Key
-  alias Aerospike.PartitionMap
-  alias Aerospike.Router
 
   setup context do
     prefix = :"router_#{:erlang.phash2(context.test)}_#{System.unique_integer([:positive])}"

@@ -28,9 +28,9 @@ defmodule Aerospike.Integration.NodeKillTest do
 
   @moduletag :integration
 
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.Tender
   alias Aerospike.Transport.Tcp
 
   @container "aerospike-driver"

@@ -1,7 +1,7 @@
-defmodule Aerospike.PartitionMapSingleWriterTest do
+defmodule Aerospike.Cluster.PartitionMapSingleWriterTest do
   @moduledoc """
   Architectural guard: every mutation of the partition-map ETS tables
-  must flow through `Aerospike.PartitionMapWriter`.
+  must flow through `Aerospike.Cluster.PartitionMapWriter`.
 
   `PartitionMap.update/5`, `PartitionMap.put_node_gen/3`,
   `PartitionMap.drop_node/2`, `PartitionMap.delete_node_gen/2`,
@@ -14,9 +14,10 @@ defmodule Aerospike.PartitionMapSingleWriterTest do
   use ExUnit.Case, async: true
 
   @lib_dir Path.expand("../../lib/aerospike", __DIR__)
-  @writer_path Path.join(@lib_dir, "partition_map_writer.ex")
-  @merge_path Path.join(@lib_dir, "partition_map_merge.ex")
-  @table_owner_path Path.join(@lib_dir, "table_owner.ex")
+  @cluster_dir Path.join(@lib_dir, "cluster")
+  @writer_path Path.join(@cluster_dir, "partition_map_writer.ex")
+  @merge_path Path.join(@cluster_dir, "partition_map_merge.ex")
+  @table_owner_path Path.join(@cluster_dir, "table_owner.ex")
 
   # `PartitionMap.update/5` is allowed inside both the merge and the
   # writer; the writer calls merge, not `update` directly, but the merge

@@ -3,9 +3,9 @@ defmodule Aerospike.Protocol.BatchTest do
 
   import Bitwise
 
-  alias Aerospike.BatchCommand
-  alias Aerospike.BatchCommand.Entry
-  alias Aerospike.BatchCommand.NodeRequest
+  alias Aerospike.Command.BatchCommand
+  alias Aerospike.Command.BatchCommand.Entry
+  alias Aerospike.Command.BatchCommand.NodeRequest
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg

@@ -1,8 +1,9 @@
 defmodule Aerospike.Bench.Support.E2EHelpers do
   @moduledoc false
 
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Key
-  alias Aerospike.Tender
 
   def verify_server_available!(host, port) do
     case :gen_tcp.connect(String.to_charlist(host), port, [:binary, active: false], 2_000) do
@@ -55,7 +56,7 @@ defmodule Aerospike.Bench.Support.E2EHelpers do
   end
 
   def stop_client(conn_name) do
-    Supervisor.stop(Aerospike.Supervisor.sup_name(conn_name))
+    Supervisor.stop(ClusterSupervisor.sup_name(conn_name))
   rescue
     _ -> :ok
   catch

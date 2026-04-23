@@ -1,6 +1,6 @@
-defmodule Aerospike.NodeTest do
+defmodule Aerospike.Cluster.NodeTest do
   @moduledoc """
-  Seam tests for `Aerospike.Node`. Exercise the per-node info-socket
+  Seam tests for `Aerospike.Cluster.Node`. Exercise the per-node info-socket
   operations against `Aerospike.Transport.Fake` with scripted replies,
   covering the failure paths the tend cycle relies on: transport errors,
   malformed `partition-generation`, missing `cluster-stable`, empty or
@@ -9,8 +9,8 @@ defmodule Aerospike.NodeTest do
 
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.Node
   alias Aerospike.Error
-  alias Aerospike.Node
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

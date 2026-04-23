@@ -5,8 +5,8 @@ defmodule Aerospike.ExecuteTask do
 
   alias Aerospike.Cluster
   alias Aerospike.Error
-  alias Aerospike.NodePool
-  alias Aerospike.Tender
+  alias Aerospike.Cluster.NodePool
+  alias Aerospike.Cluster.Tender
 
   @type kind :: :query_execute | :query_udf
 
@@ -26,9 +26,9 @@ defmodule Aerospike.ExecuteTask do
           node_name: String.t() | nil
         }
 
-  use Aerospike.AsyncTask
+  use Aerospike.Runtime.AsyncTask
 
-  @impl Aerospike.AsyncTask
+  @impl Aerospike.Runtime.AsyncTask
   def status(%__MODULE__{} = task) do
     case poll_state(task, MapSet.new(), 0) do
       {:ok, status, _observed, _not_found_polls} -> {:ok, status}
@@ -36,7 +36,7 @@ defmodule Aerospike.ExecuteTask do
     end
   end
 
-  @impl Aerospike.AsyncTask
+  @impl Aerospike.Runtime.AsyncTask
   def wait(%__MODULE__{} = task, opts) do
     poll_interval = Keyword.get(opts, :poll_interval, @default_poll_interval)
     timeout_ms = Keyword.get(opts, :timeout, nil)

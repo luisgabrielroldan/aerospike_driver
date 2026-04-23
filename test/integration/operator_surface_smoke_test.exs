@@ -38,10 +38,11 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
   @moduletag :integration
   @moduletag :enterprise
 
+  alias Aerospike.Cluster
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Telemetry
-  alias Aerospike.Tender
 
   @container "aerospike-ee-security-tls"
   @host "localhost"
@@ -110,10 +111,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
     cluster = start_cluster!()
     wait_for_ready!(cluster, @ready_timeout_ms)
 
-    [node_name] =
-      cluster
-      |> Tender.nodes_status()
-      |> Map.keys()
+    [node_name] = Cluster.active_nodes(cluster)
 
     # 100 serial GETs against missing keys exercise the pool-checkout
     # span, command send/recv spans, and keep the tend cycle ticking
@@ -176,7 +174,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
 
     assert_status_transition!(cluster, node_name, :inactive, @inactive_timeout_ms)
     assert_node_dropped!(cluster, node_name, @drop_timeout_ms)
-    refute Tender.ready?(cluster), "ready? must flip to false once all nodes are dropped"
+    refute Cluster.ready?(cluster), "ready? must flip to false once all nodes are dropped"
 
     outage_counts = drain_and_count(ref)
 
@@ -292,7 +290,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
 
   defp do_wait_ready(cluster, deadline) do
     cond do
-      Tender.ready?(cluster) ->
+      Cluster.ready?(cluster) ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
@@ -360,7 +358,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
     status = Tender.nodes_status(cluster)
 
     recovered? =
-      Tender.ready?(cluster) and
+      Cluster.ready?(cluster) and
         map_size(status) > 0 and
         Enum.all?(status, fn {_name, node} ->
           node.status == :active and is_integer(node.generation_seen) and
@@ -374,7 +372,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
       System.monotonic_time(:millisecond) >= deadline ->
         flunk(
           "cluster did not recover within the budget " <>
-            "(last nodes_status=#{inspect(status)}, ready?=#{inspect(Tender.ready?(cluster))})"
+            "(last nodes_status=#{inspect(status)}, ready?=#{inspect(Cluster.ready?(cluster))})"
         )
 
       true ->

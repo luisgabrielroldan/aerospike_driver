@@ -1,18 +1,18 @@
-defmodule Aerospike.WriteFamilyTest do
+defmodule Aerospike.Command.WriteFamilyTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.Delete
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.Delete
+  alias Aerospike.Command.Exists
+  alias Aerospike.Command.Put
+  alias Aerospike.Command.Touch
   alias Aerospike.Error
-  alias Aerospike.Exists
   alias Aerospike.Key
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionMapWriter
-  alias Aerospike.Put
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
-  alias Aerospike.Touch
   alias Aerospike.Transport.Fake
 
   @namespace "test"

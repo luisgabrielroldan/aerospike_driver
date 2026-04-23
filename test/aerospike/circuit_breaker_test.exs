@@ -1,9 +1,9 @@
-defmodule Aerospike.CircuitBreakerTest do
+defmodule Aerospike.Cluster.CircuitBreakerTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.CircuitBreaker
+  alias Aerospike.Cluster.CircuitBreaker
+  alias Aerospike.Cluster.NodeCounters
   alias Aerospike.Error
-  alias Aerospike.NodeCounters
 
   @default_opts %{
     circuit_open_threshold: 3,

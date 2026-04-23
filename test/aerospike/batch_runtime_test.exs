@@ -1,14 +1,14 @@
-defmodule Aerospike.BatchRuntimeTest do
+defmodule Aerospike.Command.BatchRuntimeTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.BatchCommand
-  alias Aerospike.BatchCommand.Entry
-  alias Aerospike.BatchCommand.NodeRequest
-  alias Aerospike.BatchCommand.Regroup
+  alias Aerospike.Command.BatchCommand
+  alias Aerospike.Command.BatchCommand.Entry
+  alias Aerospike.Command.BatchCommand.NodeRequest
+  alias Aerospike.Command.BatchCommand.Regroup
   alias Aerospike.Error
-  alias Aerospike.Executor
   alias Aerospike.Key
   alias Aerospike.Policy
+  alias Aerospike.Runtime.Executor
   alias Aerospike.Telemetry
 
   describe "BatchCommand.run/5" do

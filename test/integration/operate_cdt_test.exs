@@ -3,11 +3,11 @@ defmodule Aerospike.Integration.OperateCdtTest do
 
   @moduletag :integration
 
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Key
   alias Aerospike.Op.List, as: ListOp
   alias Aerospike.Op.Map, as: MapOp
   alias Aerospike.Record
-  alias Aerospike.Tender
 
   @host "localhost"
   @port 3000

@@ -1,11 +1,11 @@
 defmodule Aerospike.UnaryRuntimeTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Command.UnaryCommand
   alias Aerospike.Error
-  alias Aerospike.Executor
   alias Aerospike.Policy
+  alias Aerospike.Runtime.Executor
   alias Aerospike.Telemetry
-  alias Aerospike.UnaryCommand
 
   describe "Executor.run/2" do
     test "accepts a validated unary policy struct" do

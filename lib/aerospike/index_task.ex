@@ -3,7 +3,7 @@ defmodule Aerospike.IndexTask do
   Tracks secondary-index build progress.
   """
 
-  alias Aerospike.Admin
+  alias Aerospike.Command.Admin
   alias Aerospike.Error
 
   @enforce_keys [:conn, :namespace, :index_name]
@@ -15,9 +15,9 @@ defmodule Aerospike.IndexTask do
           index_name: String.t()
         }
 
-  use Aerospike.AsyncTask
+  use Aerospike.Runtime.AsyncTask
 
-  @impl Aerospike.AsyncTask
+  @impl Aerospike.Runtime.AsyncTask
   @spec status(t()) :: {:ok, :complete | :in_progress} | {:error, Error.t()}
   def status(%__MODULE__{conn: conn, namespace: namespace, index_name: index_name}) do
     case Admin.index_status(conn, namespace, index_name, []) do

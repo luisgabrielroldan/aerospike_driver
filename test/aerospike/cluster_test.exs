@@ -2,10 +2,10 @@ defmodule Aerospike.ClusterTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Cluster
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.TableOwner
   alias Aerospike.Key
-  alias Aerospike.PartitionMap
   alias Aerospike.RetryPolicy
-  alias Aerospike.TableOwner
 
   setup context do
     name = :"cluster_#{:erlang.phash2(context.test)}"

@@ -1,15 +1,15 @@
-defmodule Aerospike.TxnSupportTest do
+defmodule Aerospike.Runtime.TxnSupportTest do
   use ExUnit.Case, async: false
 
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
-  alias Aerospike.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Runtime.TxnOps
+  alias Aerospike.Runtime.TxnSupport
   alias Aerospike.Transport.Fake
   alias Aerospike.Txn
-  alias Aerospike.TxnOps
-  alias Aerospike.TxnSupport
 
   setup do
     name = :"txn_support_test_#{System.unique_integer([:positive])}"

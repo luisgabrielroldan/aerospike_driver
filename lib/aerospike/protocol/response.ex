@@ -64,7 +64,7 @@ defmodule Aerospike.Protocol.Response do
   @doc """
   Parses a multi-record batch read/header reply into per-record indexed results.
   """
-  @spec parse_batch_response(binary(), Aerospike.BatchCommand.NodeRequest.t()) ::
+  @spec parse_batch_response(binary(), Aerospike.Command.BatchCommand.NodeRequest.t()) ::
           {:ok, Batch.Reply.t()} | {:error, Error.t()}
   def parse_batch_response(body, node_request) when is_binary(body) do
     Batch.parse_response(body, node_request)
@@ -73,7 +73,11 @@ defmodule Aerospike.Protocol.Response do
   @doc """
   Parses a multi-record batch read/header reply into per-record indexed results.
   """
-  @spec parse_batch_read_response(binary(), Aerospike.BatchCommand.NodeRequest.t(), keyword()) ::
+  @spec parse_batch_read_response(
+          binary(),
+          Aerospike.Command.BatchCommand.NodeRequest.t(),
+          keyword()
+        ) ::
           {:ok, BatchRead.Reply.t()} | {:error, Error.t()}
   def parse_batch_read_response(body, node_request, opts \\ [])
       when is_binary(body) and is_list(opts) do

@@ -6,11 +6,11 @@ defmodule Aerospike.Cluster do
   cluster's ETS tables directly when the caller passes the cluster atom
   or a pid registered under that atom. Operational APIs such as
   transports, pool checkout, and node handles remain on
-  `Aerospike.Tender`.
+  `Aerospike.Cluster.Tender`.
   """
 
   alias Aerospike.Key
-  alias Aerospike.Router
+  alias Aerospike.Cluster.Router
   alias Aerospike.RetryPolicy
 
   @type cluster :: GenServer.server()

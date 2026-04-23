@@ -1,8 +1,8 @@
-defmodule Aerospike.UnaryCommandTest do
+defmodule Aerospike.Command.UnaryCommandTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Command.UnaryCommand
   alias Aerospike.Error
-  alias Aerospike.UnaryCommand
 
   defmodule TestTransport do
     def command(_conn, _request, _deadline_ms, _command_opts) do

@@ -1,8 +1,8 @@
-defmodule Aerospike.PartitionMapTest do
+defmodule Aerospike.Cluster.PartitionMapTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionMap.PartitionOwners
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.PartitionMap.PartitionOwners
 
   setup context do
     # Unique table prefix per test so tables do not collide across async cases.

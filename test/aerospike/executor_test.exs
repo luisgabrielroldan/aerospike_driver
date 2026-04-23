@@ -1,9 +1,9 @@
-defmodule Aerospike.ExecutorTest do
+defmodule Aerospike.Runtime.ExecutorTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
-  alias Aerospike.Executor
   alias Aerospike.Policy
+  alias Aerospike.Runtime.Executor
   alias Aerospike.Telemetry
 
   describe "run/2" do

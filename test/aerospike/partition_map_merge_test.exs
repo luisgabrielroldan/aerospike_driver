@@ -1,6 +1,6 @@
-defmodule Aerospike.PartitionMapMergeTest do
+defmodule Aerospike.Cluster.PartitionMapMergeTest do
   @moduledoc """
-  Seam tests for `Aerospike.PartitionMapMerge`. Exercise the pure
+  Seam tests for `Aerospike.Cluster.PartitionMapMerge`. Exercise the pure
   partition-map accumulation (regime guard, idempotent equal-regime
   overwrite, namespace allow-list) and the cluster-stable agreement check
   directly against an ad-hoc owners table, without starting a Tender or
@@ -9,8 +9,8 @@ defmodule Aerospike.PartitionMapMergeTest do
 
   use ExUnit.Case, async: true
 
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionMapMerge
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.PartitionMapMerge
 
   setup do
     owners = :ets.new(:merge_test_owners, [:set, :public])

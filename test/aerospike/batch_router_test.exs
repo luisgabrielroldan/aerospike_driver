@@ -1,10 +1,10 @@
-defmodule Aerospike.BatchRouterTest do
+defmodule Aerospike.Command.BatchRouterTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.BatchRouter
-  alias Aerospike.BatchCommand.Entry
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Command.BatchCommand.Entry
+  alias Aerospike.Command.BatchRouter
   alias Aerospike.Key
-  alias Aerospike.PartitionMap
 
   setup context do
     prefix = :"batch_router_#{:erlang.phash2(context.test)}"

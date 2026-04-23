@@ -1,13 +1,13 @@
-defmodule Aerospike.SupervisorTest do
+defmodule Aerospike.Cluster.SupervisorTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Cluster
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionMapWriter
-  alias Aerospike.Supervisor, as: ClusterSupervisor
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

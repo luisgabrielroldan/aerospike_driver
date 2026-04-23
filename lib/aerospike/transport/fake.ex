@@ -1,6 +1,6 @@
 defmodule Aerospike.Transport.Fake do
   @moduledoc """
-  Scripted `Aerospike.NodeTransport` implementation for deterministic tests.
+  Scripted `Aerospike.Cluster.NodeTransport` implementation for deterministic tests.
 
   A fake instance is a `GenServer` that holds scripted replies keyed by
   `{node_id, kind}` where `kind` is either an info-command list or the atom
@@ -35,7 +35,7 @@ defmodule Aerospike.Transport.Fake do
   works).
   """
 
-  @behaviour Aerospike.NodeTransport
+  @behaviour Aerospike.Cluster.NodeTransport
 
   use GenServer
 
@@ -263,7 +263,7 @@ defmodule Aerospike.Transport.Fake do
 
   ## NodeTransport callbacks
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def connect(host, port, opts)
       when is_binary(host) and is_integer(port) and is_list(opts) do
     case Keyword.fetch(opts, :fake) do
@@ -272,44 +272,44 @@ defmodule Aerospike.Transport.Fake do
     end
   end
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def close(%__MODULE__{fake: fake, ref: ref}) do
     GenServer.call(fake, {:close, ref})
   end
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def info(%__MODULE__{fake: fake, ref: ref}, commands) when is_list(commands) do
     GenServer.call(fake, {:consume, ref, {:info, commands}})
   end
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def command(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
     GenServer.call(fake, {:consume, ref, {:command, deadline_ms, opts}})
   end
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def command_stream(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
     GenServer.call(fake, {:consume, ref, {:command_stream, deadline_ms, opts}})
   end
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def stream_open(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
     GenServer.call(fake, {:consume, ref, {:stream_open, request, deadline_ms, opts}})
   end
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def stream_read(%Stream{fake: fake, ref: ref}, deadline_ms)
       when is_integer(deadline_ms) and deadline_ms >= 0 do
     GenServer.call(fake, {:stream_read, ref, deadline_ms})
   end
 
-  @impl Aerospike.NodeTransport
+  @impl Aerospike.Cluster.NodeTransport
   def stream_close(%Stream{fake: fake, ref: ref}) do
     GenServer.call(fake, {:stream_close, ref})
   end

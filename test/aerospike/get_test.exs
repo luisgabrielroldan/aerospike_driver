@@ -1,25 +1,25 @@
-defmodule Aerospike.GetTest do
+defmodule Aerospike.Command.GetTest do
   @moduledoc """
-  Unit tests for `Aerospike.Get.execute/4` that cover decisions the
+  Unit tests for `Aerospike.Command.Get.execute/4` that cover decisions the
   command path makes *before* it touches the transport.
 
   Transport-level paths (encode, decode, error classification) are
   covered by integration tests and the per-module protocol tests; this
-  file asserts only that `Aerospike.Get` refuses to check out a pool
+  file asserts only that `Aerospike.Command.Get` refuses to check out a pool
   worker when the breaker refuses.
   """
 
   use ExUnit.Case, async: true
 
   alias Aerospike
+  alias Aerospike.Cluster.NodeCounters
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.Get
   alias Aerospike.Error
-  alias Aerospike.Get
   alias Aerospike.Key
-  alias Aerospike.NodeCounters
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMapWriter
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

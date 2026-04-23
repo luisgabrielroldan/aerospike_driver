@@ -1,9 +1,9 @@
-defmodule Aerospike.TendHistogramTest do
+defmodule Aerospike.Cluster.TendHistogramTest do
   use ExUnit.Case, async: true
 
   import Bitwise, only: [<<<: 2]
 
-  alias Aerospike.TendHistogram
+  alias Aerospike.Cluster.TendHistogram
 
   describe "new/0" do
     test "fresh reference starts at zero count and empty buckets" do

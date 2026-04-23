@@ -21,9 +21,9 @@ defmodule Aerospike.Integration.TlsTest do
   @moduletag :integration
   @moduletag :enterprise
 
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.Tender
 
   @tls_port 4333
   @pki_port 4334

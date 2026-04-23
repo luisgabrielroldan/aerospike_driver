@@ -4,11 +4,11 @@ defmodule Aerospike.Integration.TxnTest do
   @moduletag :integration
   @moduletag :enterprise
 
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.Tender
+  alias Aerospike.Runtime.TxnOps
   alias Aerospike.Txn
-  alias Aerospike.TxnOps
 
   @host System.get_env("AEROSPIKE_EE_HOST", "127.0.0.1")
   @port System.get_env("AEROSPIKE_EE_PORT", "3100") |> String.to_integer()

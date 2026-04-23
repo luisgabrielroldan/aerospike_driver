@@ -1,16 +1,16 @@
-defmodule Aerospike.BatchTest do
+defmodule Aerospike.Command.BatchTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.Batch
-  alias Aerospike.BatchCommand.Entry
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.Batch
+  alias Aerospike.Command.BatchCommand.Entry
   alias Aerospike.Error
   alias Aerospike.Key
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMapWriter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Operation
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

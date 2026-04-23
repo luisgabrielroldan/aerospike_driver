@@ -1,10 +1,10 @@
-defmodule Aerospike.BatchCommandTest do
+defmodule Aerospike.Command.BatchCommandTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.BatchCommand
-  alias Aerospike.BatchCommand.Entry
-  alias Aerospike.BatchCommand.NodeRequest
-  alias Aerospike.BatchCommand.Result
+  alias Aerospike.Command.BatchCommand
+  alias Aerospike.Command.BatchCommand.Entry
+  alias Aerospike.Command.BatchCommand.NodeRequest
+  alias Aerospike.Command.BatchCommand.Result
   alias Aerospike.Error
   alias Aerospike.Key
 

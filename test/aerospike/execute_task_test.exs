@@ -1,12 +1,12 @@
 defmodule Aerospike.ExecuteTaskTest do
   use ExUnit.Case, async: false
 
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMapWriter
-  alias Aerospike.TableOwner
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 

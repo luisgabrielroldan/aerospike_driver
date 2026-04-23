@@ -6,8 +6,8 @@ defmodule Aerospike.Integration.IndexQueryTest do
   alias Aerospike.Key
   alias Aerospike.Page
   alias Aerospike.Query
-  alias Aerospike.Router
-  alias Aerospike.Tender
+  alias Aerospike.Cluster.Router
+  alias Aerospike.Cluster.Tender
 
   @moduletag :integration
 
@@ -29,7 +29,7 @@ defmodule Aerospike.Integration.IndexQueryTest do
         pool_size: 2
       )
 
-    :ok = Aerospike.Tender.tend_now(name)
+    :ok = Tender.tend_now(name)
 
     on_exit(fn ->
       try do

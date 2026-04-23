@@ -1,7 +1,7 @@
 defmodule Aerospike.Protocol.BatchRead do
   @moduledoc false
 
-  alias Aerospike.BatchCommand.NodeRequest
+  alias Aerospike.Command.BatchCommand.NodeRequest
   alias Aerospike.Error
   alias Aerospike.Protocol.Batch
   alias Aerospike.Record

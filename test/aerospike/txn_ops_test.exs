@@ -1,11 +1,11 @@
-defmodule Aerospike.TxnOpsTest do
+defmodule Aerospike.Runtime.TxnOpsTest do
   use ExUnit.Case, async: false
 
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
   alias Aerospike.Key
-  alias Aerospike.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Runtime.TxnOps
   alias Aerospike.Transport.Fake
   alias Aerospike.Txn
-  alias Aerospike.TxnOps
 
   setup do
     name = :"txn_ops_test_#{System.unique_integer([:positive])}"

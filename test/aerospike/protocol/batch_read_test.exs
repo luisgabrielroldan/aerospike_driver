@@ -1,8 +1,8 @@
 defmodule Aerospike.Protocol.BatchReadTest do
   use ExUnit.Case, async: true
 
-  alias Aerospike.BatchCommand.Entry
-  alias Aerospike.BatchCommand.NodeRequest
+  alias Aerospike.Command.BatchCommand.Entry
+  alias Aerospike.Command.BatchCommand.NodeRequest
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg

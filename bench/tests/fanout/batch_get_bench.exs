@@ -5,9 +5,10 @@ defmodule Aerospike.Bench.Fanout.BatchGet do
 
   alias Aerospike.Bench.Support.E2EHelpers
   alias Aerospike.Bench.Support.Runtime
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Key
   alias Aerospike.Record
-  alias Aerospike.Tender
 
   @conn_name :bench_fanout
   @namespace "test"
@@ -120,7 +121,7 @@ defmodule Aerospike.Bench.Fanout.BatchGet do
   end
 
   defp stop_client do
-    Supervisor.stop(Aerospike.Supervisor.sup_name(@conn_name))
+    Supervisor.stop(ClusterSupervisor.sup_name(@conn_name))
   rescue
     _ -> :ok
   catch

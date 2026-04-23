@@ -1,7 +1,7 @@
-defmodule Aerospike.GetRetryTest do
+defmodule Aerospike.Command.GetRetryTest do
   @moduledoc """
   Unit tests for the retry driver exercised through
-  `Aerospike.Get.execute/4`.
+  `Aerospike.Command.Get.execute/4`.
 
   The tests script the Fake transport so the command path consumes one
   scripted AS_MSG reply per attempt and assert the retry loop's
@@ -11,15 +11,16 @@ defmodule Aerospike.GetRetryTest do
 
   use ExUnit.Case, async: false
 
+  alias Aerospike.Cluster.NodeCounters
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.Get
   alias Aerospike.Error
-  alias Aerospike.Get
   alias Aerospike.Key
-  alias Aerospike.NodeSupervisor
-  alias Aerospike.PartitionMap
-  alias Aerospike.PartitionMapWriter
-  alias Aerospike.TableOwner
   alias Aerospike.Telemetry
-  alias Aerospike.Tender
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 
@@ -101,7 +102,7 @@ defmodule Aerospike.GetRetryTest do
 
       # Trip A1's breaker by bumping its failure counter above the threshold.
       {:ok, counters} = Tender.node_counters(tender, "A1")
-      Aerospike.NodeCounters.incr_failed(counters)
+      NodeCounters.incr_failed(counters)
 
       # Attempt 0 against A1 is refused by the breaker before touching the
       # pool; attempt 1 rotates to B1 which returns a success reply.
@@ -302,7 +303,7 @@ defmodule Aerospike.GetRetryTest do
       :ok = Tender.tend_now(tender)
 
       {:ok, counters} = Tender.node_counters(tender, "A1")
-      Aerospike.NodeCounters.incr_failed(counters)
+      NodeCounters.incr_failed(counters)
 
       Fake.script_command(ctx.fake, "B1", {:ok, scripted_ok_body()})
 

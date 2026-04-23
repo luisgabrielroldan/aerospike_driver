@@ -12,7 +12,7 @@ defmodule Aerospike.Integration.CompressionTest do
       `features` reply advertises `compression`, the request that lands on
       the wire is a type-4 (`AS_MSG_COMPRESSED`) frame;
     * the compressed reply the stub returns round-trips through
-      `Aerospike.Get` to a decoded `:key_not_found` result;
+      `Aerospike.Command.Get` to a decoded `:key_not_found` result;
     * when cluster `use_compression: false`, the wire frame is a plain
       type-3 AS_MSG even if the stub still advertises the capability.
 
@@ -29,6 +29,7 @@ defmodule Aerospike.Integration.CompressionTest do
   import Bitwise
 
   alias Aerospike.Error
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Key
   alias Aerospike.Protocol.Message
   alias Aerospike.Test.ReplicasFixture
@@ -74,8 +75,8 @@ defmodule Aerospike.Integration.CompressionTest do
 
     on_exit(fn -> stop_supervisor(sup) end)
 
-    :ok = Aerospike.Tender.tend_now(name)
-    assert Aerospike.Tender.ready?(name)
+    :ok = Tender.tend_now(name)
+    assert Tender.ready?(name)
 
     key = Key.new(@namespace, @long_set, "missing")
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(name, key)
@@ -110,8 +111,8 @@ defmodule Aerospike.Integration.CompressionTest do
 
     on_exit(fn -> stop_supervisor(sup) end)
 
-    :ok = Aerospike.Tender.tend_now(name)
-    assert Aerospike.Tender.ready?(name)
+    :ok = Tender.tend_now(name)
+    assert Tender.ready?(name)
 
     key = Key.new(@namespace, "spike", "missing")
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(name, key)
@@ -144,8 +145,8 @@ defmodule Aerospike.Integration.CompressionTest do
 
     on_exit(fn -> stop_supervisor(sup) end)
 
-    :ok = Aerospike.Tender.tend_now(name)
-    assert Aerospike.Tender.ready?(name)
+    :ok = Tender.tend_now(name)
+    assert Tender.ready?(name)
 
     key = Key.new(@namespace, "spike", "missing")
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(name, key)
