@@ -41,6 +41,7 @@ defmodule Aerospike.Command.BatchGetTest do
       key_a = key_for_partition("test", "batch", 100, "a")
       key_b = key_for_partition("test", "batch", 101, "b")
       key_c = key_for_partition("test", "batch", 100, "c")
+      key_b_tuple = {key_b.namespace, key_b.set, key_b.user_key}
 
       Fake.script_command_stream(
         ctx.fake,
@@ -72,7 +73,8 @@ defmodule Aerospike.Command.BatchGetTest do
          ])}
       )
 
-      assert {:ok, [first, second, third]} = Aerospike.batch_get(tender, [key_a, key_b, key_c])
+      assert {:ok, [first, second, third]} =
+               Aerospike.batch_get(tender, [key_a, key_b_tuple, key_c])
 
       assert {:ok, %{key: ^key_a, bins: %{"name" => "Ada"}, generation: 3, ttl: 120}} = first
       assert {:ok, %{key: ^key_b, bins: %{"count" => 7}, generation: 5, ttl: 240}} = second
@@ -125,6 +127,13 @@ defmodule Aerospike.Command.BatchGetTest do
                Aerospike.batch_get(:unused_tender, [key], :all, max_retries: 1)
 
       assert message =~ "supports only the :timeout option"
+    end
+
+    test "rejects invalid tuple keys at the public boundary" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Aerospike.batch_get(:unused_tender, [{"test", :batch, "k1"}])
+
+      assert message =~ "set must be a string"
     end
   end
 

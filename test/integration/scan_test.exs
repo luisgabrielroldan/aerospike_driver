@@ -55,7 +55,7 @@ defmodule Aerospike.Integration.ScanTest do
 
     scan = Scan.new(@namespace, set)
 
-    records = Aerospike.stream!(cluster, scan) |> Enum.to_list()
+    records = Aerospike.scan_stream!(cluster, scan) |> Enum.to_list()
 
     assert Enum.sort_by(records, & &1.bins["value"]) |> Enum.map(& &1.bins["value"]) == [
              11,
@@ -63,8 +63,8 @@ defmodule Aerospike.Integration.ScanTest do
              33
            ]
 
-    assert {:ok, 3} = Aerospike.count(cluster, scan)
-    assert {:ok, [%Record{}, %Record{}, %Record{}]} = Aerospike.all(cluster, scan)
+    assert {:ok, 3} = Aerospike.scan_count(cluster, scan)
+    assert {:ok, [%Record{}, %Record{}, %Record{}]} = Aerospike.scan_all(cluster, scan)
   end
 
   defp keys_for_distinct_nodes(cluster, set, count) when is_integer(count) and count > 0 do

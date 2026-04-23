@@ -43,6 +43,17 @@ defmodule Aerospike.Key do
           digest: <<_::160>>
         }
 
+  @typedoc "Tuple key form: `{namespace, set, user_key}`."
+  @type key_tuple :: {String.t(), String.t(), String.t() | integer()}
+
+  @typedoc """
+  Accepted key input at public API boundaries.
+
+  Use `%Aerospike.Key{}` directly, or pass `{namespace, set, user_key}` for
+  convenience when you have user-key components.
+  """
+  @type key_input :: t() | key_tuple()
+
   @doc false
   @spec validate_int64!(integer(), String.t()) :: integer()
   def validate_int64!(value, _label)
@@ -123,6 +134,55 @@ defmodule Aerospike.Key do
   def new(_namespace, _set, _user_key) do
     raise ArgumentError,
           "namespace must be a non-empty string, set must be a string, user_key must be string or int64 integer"
+  end
+
+  @doc """
+  Builds a key from an existing 20-byte digest.
+
+  The returned key keeps `user_key` unset because only the server digest is
+  known at this boundary.
+
+  ## Examples
+
+      iex> digest = :crypto.hash(:ripemd160, "digest-only")
+      iex> key = Aerospike.Key.from_digest("ns", "users", digest)
+      iex> {key.user_key, key.digest == digest}
+      {nil, true}
+
+  """
+  @spec from_digest(String.t(), String.t(), <<_::160>>) :: t()
+  def from_digest(namespace, set, digest)
+      when is_binary(namespace) and namespace != "" and is_binary(set) and is_binary(digest) and
+             byte_size(digest) == 20 do
+    %__MODULE__{
+      namespace: namespace,
+      set: set,
+      user_key: nil,
+      digest: digest
+    }
+  end
+
+  def from_digest(_namespace, _set, _digest) do
+    raise ArgumentError,
+          "namespace must be a non-empty string, set must be a string, digest must be a 20-byte binary"
+  end
+
+  @doc """
+  Coerces a public key input into `%Aerospike.Key{}`.
+
+  Passes `%Aerospike.Key{}` through unchanged. For tuple keys, delegates to
+  `new/3`, so tuple validation and int64 checks follow the same rules.
+
+  Raises `ArgumentError` for non-key inputs.
+  """
+  @spec coerce!(key_input()) :: t()
+  def coerce!(%__MODULE__{} = key), do: key
+
+  def coerce!({namespace, set, user_key}), do: new(namespace, set, user_key)
+
+  def coerce!(_key) do
+    raise ArgumentError,
+          "expected %Aerospike.Key{} or {namespace, set, user_key} tuple where user_key is a string or int64 integer"
   end
 
   defp compute_digest_integer(set, user_key) when is_integer(user_key) do

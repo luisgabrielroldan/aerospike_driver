@@ -17,9 +17,12 @@ The library currently proves these command families through the public
 
 - Unary CRUD: `get/3`, `put/4`, `exists/2`, `touch/2`, `delete/2`
 - Unary operate: `operate/4` with the currently admitted write/read subset plus
-  `Aerospike.Op`, `Aerospike.Op.List`, and `Aerospike.Op.Map`
+  `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, and `Aerospike.Ctx`
 - Batch reads: `batch_get/4`
-- Scans: `stream!/3`, `all/3`, `count/3`
+- Root helpers: `start_link/1`, `child_spec/1`, `close/2`, `key/3`,
+  `key_digest/3`
+- Scans: `scan_stream/3`, `scan_stream!/3`, `scan_all/3`, `scan_all!/3`,
+  `scan_count/3`, `scan_count!/3`
 - Secondary-index queries: `query_stream!/3`, `query_all/3`, `query_count/3`,
   `query_page/3`
 - Query admin/runtime helpers: `create_index/4`, `drop_index/4`,
@@ -53,10 +56,11 @@ Then open `iex -S mix` in this repo and start one cluster manually:
     pool_size: 2
   )
 
-key = Aerospike.Key.new("test", "demo", "hello")
+key = Aerospike.key("test", "demo", "hello")
 
 {:ok, _meta} = Aerospike.put(:aerospike, key, %{"count" => 1})
 {:ok, record} = Aerospike.get(:aerospike, key)
+:ok = Aerospike.close(:aerospike)
 ```
 
 Required startup options are `:name`, `:transport`, `:hosts`, and
@@ -110,6 +114,12 @@ This library is not yet claiming full Aerospike feature parity.
 - `query_all/3` and `query_page/3` require `query.max_records`
 - scan/query helpers that support node targeting take `node: node_name` in
   `opts` instead of separate `_node` function families
+- the older bare scan names (`stream!/3`, `all/3`, `all!/3`, `count/3`,
+  `count!/3`) remain as deprecated compatibility aliases for one transition
+  window
+- `close/2`, `transaction/2`, `transaction/3`, `commit/2`, `abort/2`, and
+  `txn_status/2` currently require the cluster's registered atom name because
+  supervisor and transaction-tracking lookups resolve from that name
 - query cursors resume partition progress; they are not snapshot tokens
 - `%Aerospike.Txn{}` is an immutable handle backed by ETS tracking in the
   started cluster, not a transaction owner process

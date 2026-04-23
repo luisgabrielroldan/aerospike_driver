@@ -5,6 +5,7 @@ defmodule Aerospike.PublicApiTest do
   alias Aerospike.Cursor
   alias Aerospike.ExecuteTask
   alias Aerospike.Filter
+  alias Aerospike.Key
   alias Aerospike.PartitionFilter
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
@@ -44,7 +45,7 @@ defmodule Aerospike.PublicApiTest do
       stop_quietly(fake)
     end)
 
-    {:ok, conn: name, conn_name: name, fake: fake}
+    {:ok, conn: name, conn_name: name, fake: fake, sup: sup}
   end
 
   test "cluster read-side helpers expose readiness and active nodes", %{conn_name: conn_name} do
@@ -54,28 +55,73 @@ defmodule Aerospike.PublicApiTest do
     refute Cluster.active_node?(conn_name, "missing")
   end
 
+  test "root lifecycle and key helpers expose the supported public boundary", %{
+    conn_name: conn_name,
+    sup: sup
+  } do
+    assert %{
+             id: {Aerospike.Cluster.Supervisor, ^conn_name},
+             start: {Aerospike.Cluster.Supervisor, :start_link, [[name: ^conn_name]]},
+             type: :supervisor
+           } = Aerospike.child_spec(name: conn_name)
+
+    digest = :crypto.hash(:ripemd160, "digest-only")
+
+    assert %Key{namespace: "test", set: "users", user_key: "user:42"} =
+             Aerospike.key("test", "users", "user:42")
+
+    assert %Key{namespace: "test", set: "users", user_key: nil, digest: ^digest} =
+             Aerospike.key_digest("test", "users", digest)
+
+    ref = Process.monitor(sup)
+
+    assert :ok = Aerospike.close(conn_name)
+
+    assert_receive {:DOWN, ^ref, :process, ^sup, _}, 1_000
+  end
+
+  test "single-record facade helpers normalize tuple keys and reject invalid tuples", %{
+    conn: conn
+  } do
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: bins_message}} =
+             Aerospike.get(conn, {"test", "users", "user:1"}, ["name"])
+
+    assert bins_message =~ "supports only :all bins"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: key_message}} =
+             Aerospike.exists(conn, {"test", :users, "user:1"})
+
+    assert key_message =~ "set must be a string"
+  end
+
   test "public scan and query wrappers return records, counts, pages, and task handles", %{
     conn: conn,
     fake: fake
   } do
     scan = Scan.new(@namespace, "scan_ops")
 
+    Fake.script_stream(fake, "A1", {:ok, [frame("stream-A1"), last_frame()]})
+    Fake.script_stream(fake, "B1", {:ok, [frame("stream-B1"), last_frame()]})
+
+    assert {:ok, stream} = Aerospike.scan_stream(conn, scan)
+    assert Enum.sort(Enum.map(stream, & &1.bins["payload"])) == ["stream-A1", "stream-B1"]
+
     Fake.script_stream(fake, "A1", {:ok, [frame("all-A1"), last_frame()]})
     Fake.script_stream(fake, "B1", {:ok, [frame("all-B1"), last_frame()]})
 
-    assert {:ok, records} = Aerospike.all(conn, scan)
+    assert {:ok, records} = Aerospike.scan_all(conn, scan)
     assert Enum.sort(Enum.map(records, & &1.bins["payload"])) == ["all-A1", "all-B1"]
 
     Fake.script_stream(fake, "A1", {:ok, [frame("count-A1"), frame("count-A2"), last_frame()]})
     Fake.script_stream(fake, "B1", {:ok, [frame("count-B1"), last_frame()]})
 
-    assert 3 = Aerospike.count!(conn, scan)
+    assert 3 = Aerospike.scan_count!(conn, scan)
 
     Fake.script_stream(fake, "A1", {:ok, [frame("node-A1"), last_frame()]})
-    assert [%{bins: %{"payload" => "node-A1"}}] = Aerospike.all!(conn, scan, node: "A1")
+    assert [%{bins: %{"payload" => "node-A1"}}] = Aerospike.scan_all!(conn, scan, node: "A1")
 
     Fake.script_stream(fake, "A1", {:ok, [frame("node-count"), last_frame()]})
-    assert 1 = Aerospike.count!(conn, scan, node: "A1")
+    assert 1 = Aerospike.scan_count!(conn, scan, node: "A1")
 
     query =
       Query.new(@namespace, "scan_ops")
@@ -124,12 +170,52 @@ defmodule Aerospike.PublicApiTest do
              Aerospike.query_udf(conn, query, "pkg", "fun", [], node: "A1")
   end
 
+  test "bare scan aliases stay compatible with the explicit scan helpers", %{
+    conn: conn,
+    fake: fake
+  } do
+    scan = Scan.new(@namespace, "scan_ops")
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("alias-stream"), last_frame()]})
+
+    assert {:ok, stream} = Aerospike.scan_stream(conn, scan, node: "A1")
+    assert ["alias-stream"] = Enum.map(stream, & &1.bins["payload"])
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("alias-stream"), last_frame()]})
+
+    alias_stream =
+      apply(Aerospike, :stream!, [conn, scan, [node: "A1"]])
+      |> Enum.map(& &1.bins["payload"])
+
+    assert ["alias-stream"] = alias_stream
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("alias-all"), last_frame()]})
+
+    assert {:ok, [%{bins: %{"payload" => "alias-all"}}]} =
+             Aerospike.scan_all(conn, scan, node: "A1")
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("alias-all"), last_frame()]})
+
+    assert {:ok, [%{bins: %{"payload" => "alias-all"}}]} =
+             apply(Aerospike, :all, [conn, scan, [node: "A1"]])
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
+    assert 1 = Aerospike.scan_count!(conn, scan, node: "A1")
+
+    Fake.script_stream(fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
+    assert 1 = apply(Aerospike, :count!, [conn, scan, [node: "A1"]])
+  end
+
   test "bang wrappers raise the underlying public errors", %{conn: conn} do
     scan = Scan.new(@namespace, "scan_ops")
     query = Query.new(@namespace, "scan_ops") |> Query.where(Filter.range("payload", 0, 9))
 
     assert_raise Aerospike.Error, fn ->
-      Aerospike.stream!(conn, scan, node: "missing") |> Enum.to_list()
+      Aerospike.scan_stream!(conn, scan, node: "missing") |> Enum.to_list()
+    end
+
+    assert_raise Aerospike.Error, fn ->
+      apply(Aerospike, :stream!, [conn, scan, [node: "missing"]]) |> Enum.to_list()
     end
 
     assert_raise Aerospike.Error, ~r/max_records_required/i, fn ->
@@ -192,7 +278,7 @@ defmodule Aerospike.PublicApiTest do
              Aerospike.query_udf(conn, query, "pkg", "fun", [])
   end
 
-  test "short-form node-targeted helpers cover scan and query bang paths", %{
+  test "explicit node-targeted helpers cover scan and query bang paths", %{
     conn: conn,
     fake: fake
   } do
@@ -204,7 +290,9 @@ defmodule Aerospike.PublicApiTest do
       |> Query.max_records(1)
 
     Fake.script_stream(fake, "A1", {:ok, [frame("node-scan"), last_frame()]})
-    assert [%{bins: %{"payload" => "node-scan"}}] = Aerospike.all!(conn, scan, node: "A1")
+
+    assert [%{bins: %{"payload" => "node-scan"}}] =
+             Aerospike.scan_all!(conn, scan, node: "A1")
 
     Fake.script_stream(fake, "A1", {:ok, [frame("node-query"), last_frame()]})
 

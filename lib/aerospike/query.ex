@@ -8,6 +8,9 @@ defmodule Aerospike.Query do
   Query execution lives in explicit facade calls such as
   `Aerospike.query_stream/3`, `Aerospike.query_aggregate/6`,
   `Aerospike.query_execute/4`, and `Aerospike.query_udf/6`.
+  Node-targeted execution uses `node: node_name` in facade opts where that
+  query helper supports it, and `query_all/3` / `query_page/3` require
+  `query.max_records`.
   """
 
   alias Aerospike.Filter

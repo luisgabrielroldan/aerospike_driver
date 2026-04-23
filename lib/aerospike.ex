@@ -19,18 +19,23 @@ defmodule Aerospike do
     * `exists/2` performs a header-only existence probe
     * `touch/2` updates record metadata
     * `delete/2` removes a record
-    * `operate/4` runs simple and CDT-style unary operation lists
+    * `operate/4` runs simple and CDT-style unary operation lists built
+      with `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, and
+      `Aerospike.Ctx`
     * `batch_get/4` reads multiple keys and returns per-key results in
       caller order
+    * `child_spec/1`, `close/2`, `key/3`, and `key_digest/3` round out
+      the root lifecycle and key-construction boundary
     * `query_stream!/3`, `query_all/3`, `query_count/3`, and
       `query_aggregate/6` run secondary-index queries through the same
       node-preparation pipeline, with lazy outer streams but
       node-buffered record delivery
     * `query_execute/4` and `query_udf/6` run background query jobs on
       that same setup path and return pollable task handles
-    * `stream!/3`, `all/3`, and `count/3` run scan fan-out across the
-      same scan/runtime setup, again with lazy outer streams and
-      node-buffered record delivery
+    * `scan_stream/3`, `scan_stream!/3`, `scan_all/3`, `scan_all!/3`,
+      `scan_count/3`, and `scan_count!/3` run scan fan-out across the same
+      scan/runtime setup, again with lazy outer streams and node-buffered
+      record delivery
     * scan/query helpers that already support node targeting accept
       `node: node_name` in `opts`
 
@@ -70,6 +75,7 @@ defmodule Aerospike do
   alias Aerospike.Command.Admin
   alias Aerospike.Command.BatchGet
   alias Aerospike.Command.Delete
+  alias Aerospike.Error
   alias Aerospike.ExecuteTask
   alias Aerospike.Command.Exists
   alias Aerospike.Command.Get
@@ -87,10 +93,19 @@ defmodule Aerospike do
   alias Aerospike.Runtime.TxnRoll
 
   @typedoc """
-  Identifier for a running cluster, i.e. its registered name or a pid
-  registered under that name.
+  Identifier for a running cluster for the read/write/query/scan facade,
+  i.e. its registered name or a pid registered under that name.
   """
   @type cluster :: GenServer.server()
+
+  @typedoc """
+  Registered atom name for a running cluster.
+
+  Lifecycle and transaction helpers resolve supervisor and ETS resources from
+  this name, so they do not currently accept arbitrary `GenServer.server()`
+  identities.
+  """
+  @type named_cluster :: atom()
   @doc """
   Starts a supervised cluster.
 
@@ -168,6 +183,48 @@ defmodule Aerospike do
   end
 
   @doc """
+  Returns a child specification for one supervised cluster.
+
+  This delegates to `Aerospike.Cluster.Supervisor.child_spec/1`, so the
+  accepted options and validation boundary match `start_link/1`.
+  """
+  @spec child_spec([ClusterSupervisor.option()]) :: Supervisor.child_spec()
+  def child_spec(opts) when is_list(opts) do
+    ClusterSupervisor.child_spec(opts)
+  end
+
+  @doc """
+  Stops the supervised cluster registered under the atom `cluster`.
+
+  This targets the registered cluster supervisor name derived from `cluster`
+  and returns `:ok` when the supervisor exits or is already absent.
+  """
+  @spec close(named_cluster(), timeout :: non_neg_integer()) :: :ok
+  def close(cluster, timeout \\ 15_000)
+      when is_atom(cluster) and is_integer(timeout) and timeout >= 0 do
+    case Process.whereis(ClusterSupervisor.sup_name(cluster)) do
+      nil -> :ok
+      pid -> Supervisor.stop(pid, :normal, timeout)
+    end
+  end
+
+  @doc """
+  Builds a key from namespace, set, and a user key.
+
+  This is a thin wrapper over `Aerospike.Key.new/3`.
+  """
+  @spec key(String.t(), String.t(), String.t() | integer()) :: Key.t()
+  def key(namespace, set, user_key), do: Key.new(namespace, set, user_key)
+
+  @doc """
+  Builds a key from namespace, set, and an existing 20-byte digest.
+
+  This is a thin wrapper over `Aerospike.Key.from_digest/3`.
+  """
+  @spec key_digest(String.t(), String.t(), <<_::160>>) :: Key.t()
+  def key_digest(namespace, set, digest), do: Key.from_digest(namespace, set, digest)
+
+  @doc """
   Reads `key` from `cluster`.
 
   The driver currently supports only `bins: :all`. Named-bin reads remain
@@ -188,15 +245,19 @@ defmodule Aerospike do
   `{:error, %Aerospike.Error{code: :key_not_found}}` on miss, or a
   routing atom (`:cluster_not_ready`, `:no_master`, `:unknown_node`)
   when the cluster view cannot serve the request.
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec get(cluster(), Key.t(), :all, keyword()) ::
+  @spec get(cluster(), Key.key_input(), :all, keyword()) ::
           {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
   def get(cluster, key, bins \\ :all, opts \\ [])
 
-  def get(cluster, %Key{} = key, bins, opts) do
-    Get.execute(cluster, key, bins, opts)
+  def get(cluster, key, bins, opts) do
+    with {:ok, key} <- coerce_key(key) do
+      Get.execute(cluster, key, bins, opts)
+    end
   end
 
   @doc """
@@ -210,8 +271,10 @@ defmodule Aerospike do
   The driver currently supports only `bins: :all` and only `:timeout` in
   `opts`. Retry-driven regrouping stays disabled until the batch reroute
   path can honestly split a failed grouped request back across nodes.
+
+  Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_get(cluster(), [Key.t()], :all, keyword()) ::
+  @spec batch_get(cluster(), [Key.key_input()], :all, keyword()) ::
           {:ok,
            [
              {:ok, Aerospike.Record.t()}
@@ -223,7 +286,9 @@ defmodule Aerospike do
   def batch_get(cluster, keys, bins \\ :all, opts \\ [])
 
   def batch_get(cluster, keys, bins, opts) when is_list(keys) do
-    BatchGet.execute(cluster, keys, bins, opts)
+    with {:ok, keys} <- coerce_keys(keys) do
+      BatchGet.execute(cluster, keys, bins, opts)
+    end
   end
 
   @doc """
@@ -232,22 +297,37 @@ defmodule Aerospike do
   The returned stream is lazy at the Enumerable boundary, but the current
   runtime drains each node response fully before yielding that node's
   records downstream. It does not promise frame-by-frame backpressure or
-  an explicit cancellation API.
+  an explicit cancellation API. Node-targeted scans pass `node: node_name`
+  in `opts`.
   """
-  @spec stream!(cluster(), Scan.t(), keyword()) :: Enumerable.t()
-  def stream!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
-    case ScanOps.stream(cluster, scan, opts) do
+  @spec scan_stream(cluster(), Scan.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
+  def scan_stream(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    ScanOps.stream(cluster, scan, opts)
+  end
+
+  @doc """
+  Same as `scan_stream/3` but raises on error.
+  """
+  @spec scan_stream!(cluster(), Scan.t(), keyword()) :: Enumerable.t()
+  def scan_stream!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    case scan_stream(cluster, scan, opts) do
       {:ok, stream} -> stream
       {:error, %Aerospike.Error{} = err} -> raise err
     end
   end
 
+  @deprecated "Use scan_stream!/3 instead."
+  def stream!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    scan_stream!(cluster, scan, opts)
+  end
+
   @doc """
   Returns a lazy `Stream` of records from a secondary-index query.
 
-  Like `stream!/3`, this is lazy only at the outer Enumerable boundary.
+  Like `scan_stream/3`, this is lazy only at the outer Enumerable boundary.
   The current runtime buffers each node's query results before yielding
-  them to the caller.
+  them to the caller. Node-targeted queries pass `node: node_name` in `opts`.
   """
   @spec query_stream(cluster(), Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
@@ -268,11 +348,18 @@ defmodule Aerospike do
 
   @doc """
   Eagerly collects scan records into a list.
+
+  Node-targeted scans pass `node: node_name` in `opts`.
   """
-  @spec all(cluster(), Scan.t(), keyword()) ::
+  @spec scan_all(cluster(), Scan.t(), keyword()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
-  def all(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+  def scan_all(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     ScanOps.all(cluster, scan, opts)
+  end
+
+  @deprecated "Use scan_all/3 instead."
+  def all(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    scan_all(cluster, scan, opts)
   end
 
   @doc """
@@ -280,6 +367,7 @@ defmodule Aerospike do
 
   `query.max_records` must be set because this helper advances through
   the query in repeated page-sized steps until the cursor is exhausted.
+  Node-targeted queries pass `node: node_name` in `opts`.
   """
   @spec query_all(cluster(), Query.t(), keyword()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
@@ -299,30 +387,43 @@ defmodule Aerospike do
   end
 
   @doc """
-  Same as `all/3` but returns the list or raises `Aerospike.Error`.
+  Same as `scan_all/3` but returns the list or raises `Aerospike.Error`.
   """
-  @spec all!(cluster(), Scan.t(), keyword()) :: [Aerospike.Record.t()]
-  def all!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
-    case all(cluster, scan, opts) do
+  @spec scan_all!(cluster(), Scan.t(), keyword()) :: [Aerospike.Record.t()]
+  def scan_all!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    case scan_all(cluster, scan, opts) do
       {:ok, records} -> records
       {:error, %Aerospike.Error{} = err} -> raise err
     end
   end
 
+  @deprecated "Use scan_all!/3 instead."
+  def all!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    scan_all!(cluster, scan, opts)
+  end
+
   @doc """
   Counts scan matches without materializing the records.
+
+  Node-targeted scans pass `node: node_name` in `opts`.
   """
-  @spec count(cluster(), Scan.t(), keyword()) ::
+  @spec scan_count(cluster(), Scan.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
-  def count(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+  def scan_count(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     ScanOps.count(cluster, scan, opts)
+  end
+
+  @deprecated "Use scan_count/3 instead."
+  def count(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    scan_count(cluster, scan, opts)
   end
 
   @doc """
   Counts query matches without materializing the records.
 
   This still walks the query stream and counts client-side. It is not a
-  separate server-side count primitive.
+  separate server-side count primitive. Node-targeted queries pass
+  `node: node_name` in `opts`.
   """
   @spec query_count(cluster(), Query.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
@@ -370,7 +471,7 @@ defmodule Aerospike do
   distributed across active nodes, so a page is resumable but not
   guaranteed to contain exactly `query.max_records` records. The cursor
   resumes partition progress from the prior page; it is not a stable
-  snapshot token.
+  snapshot token. Node-targeted queries pass `node: node_name` in `opts`.
   """
   @spec query_page(cluster(), Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Aerospike.Error.t()}
@@ -404,6 +505,7 @@ defmodule Aerospike do
   Starts a background query write job that applies the given operations.
 
   This returns a pollable task handle, not a resumable record stream.
+  Node-targeted jobs pass `node: node_name` in `opts`.
   """
   @spec query_execute(cluster(), Query.t(), list(), keyword()) ::
           {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
@@ -416,6 +518,7 @@ defmodule Aerospike do
   Starts a background query UDF job.
 
   This returns a pollable task handle, not a resumable record stream.
+  Node-targeted jobs pass `node: node_name` in `opts`.
   """
   @spec query_udf(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
@@ -425,47 +528,52 @@ defmodule Aerospike do
   end
 
   @doc """
-  Commits a transaction.
+  Commits a transaction on the named cluster `cluster`.
 
   This only works for a transaction handle whose tracking row is already
-  initialized on `conn`. A fresh `%Aerospike.Txn{}` is not enough by itself.
+  initialized on `cluster`. A fresh `%Aerospike.Txn{}` is not enough by itself.
   In the current spike, public code initializes that runtime state only when
-  `transaction/2` or `transaction/3` enters its callback.
+  `transaction/2` or `transaction/3` enters its callback. Transaction
+  tracking is keyed off the started cluster name, so this helper currently
+  requires that registered atom.
   """
-  @spec commit(cluster(), Txn.t()) ::
+  @spec commit(named_cluster(), Txn.t()) ::
           {:ok, :committed | :already_committed} | {:error, Aerospike.Error.t()}
-  def commit(conn, %Txn{} = txn) when is_atom(conn) do
-    TxnRoll.commit(conn, txn, [])
+  def commit(cluster, %Txn{} = txn) when is_atom(cluster) do
+    TxnRoll.commit(cluster, txn, [])
   end
 
   @doc """
-  Aborts a transaction.
+  Aborts a transaction on the named cluster `cluster`.
 
   Like `commit/2`, this requires a handle with initialized runtime tracking on
-  `conn`. It is for an already-open transaction; it does not create one.
+  `cluster`. It is for an already-open transaction; it does not create one,
+  and it currently requires the registered cluster atom.
   """
-  @spec abort(cluster(), Txn.t()) ::
+  @spec abort(named_cluster(), Txn.t()) ::
           {:ok, :aborted | :already_aborted} | {:error, Aerospike.Error.t()}
-  def abort(conn, %Txn{} = txn) when is_atom(conn) do
-    TxnRoll.abort(conn, txn, [])
+  def abort(cluster, %Txn{} = txn) when is_atom(cluster) do
+    TxnRoll.abort(cluster, txn, [])
   end
 
   @doc """
-  Returns the current state of a transaction.
+  Returns the current state of a transaction on the named cluster `cluster`.
 
   This reflects only the in-flight states backed by the runtime tracking row.
   After commit or abort, the spike cleans that row up, so `txn_status/2`
   returns an error instead of a terminal `:committed` or `:aborted` state.
+  Like the other transaction lifecycle helpers, this currently requires the
+  registered cluster atom.
   """
-  @spec txn_status(cluster(), Txn.t()) ::
+  @spec txn_status(named_cluster(), Txn.t()) ::
           {:ok, :open | :verified | :committed | :aborted}
           | {:error, Aerospike.Error.t()}
-  def txn_status(conn, %Txn{} = txn) when is_atom(conn) do
-    TxnRoll.txn_status(conn, txn)
+  def txn_status(cluster, %Txn{} = txn) when is_atom(cluster) do
+    TxnRoll.txn_status(cluster, txn)
   end
 
   @doc """
-  Runs a function within a new transaction.
+  Runs a function within a new transaction on the named cluster `cluster`.
 
   The callback owns the public transaction lifecycle. The spike initializes the
   runtime tracking row before invoking `fun`, then commits on success or aborts
@@ -475,37 +583,45 @@ defmodule Aerospike do
   The `%Aerospike.Txn{}` passed to `fun` is safe only for sequential use within
   that transaction. Do not share it across concurrent processes, and do not use
   scans or queries with it; the current transaction proof covers only
-  transaction-aware single-record commands.
+  transaction-aware single-record commands. This helper currently requires the
+  registered cluster atom.
   """
-  @spec transaction(cluster(), (Txn.t() -> term())) ::
+  @spec transaction(named_cluster(), (Txn.t() -> term())) ::
           {:ok, term()} | {:error, Aerospike.Error.t()}
-  def transaction(conn, fun) when is_atom(conn) and is_function(fun, 1) do
-    TxnRoll.transaction(conn, [], fun)
+  def transaction(cluster, fun) when is_atom(cluster) and is_function(fun, 1) do
+    TxnRoll.transaction(cluster, [], fun)
   end
 
   @doc """
-  Runs a function within a transaction using a provided handle or options.
+  Runs a function within a transaction on the named cluster `cluster` using a
+  provided handle or options.
 
   When `txn_or_opts` is a `%Aerospike.Txn{}`, the spike initializes fresh
-  runtime tracking for that handle on `conn` at callback entry. Reusing the
-  same handle concurrently or against another cluster is unsupported.
+  runtime tracking for that handle on `cluster` at callback entry. Reusing the
+  same handle concurrently or against another cluster is unsupported. This
+  helper currently requires the registered cluster atom.
   """
-  @spec transaction(cluster(), Txn.t() | keyword(), (Txn.t() -> term())) ::
+  @spec transaction(named_cluster(), Txn.t() | keyword(), (Txn.t() -> term())) ::
           {:ok, term()} | {:error, Aerospike.Error.t()}
-  def transaction(conn, txn_or_opts, fun)
-      when is_atom(conn) and is_function(fun, 1) do
-    TxnRoll.transaction(conn, txn_or_opts, fun)
+  def transaction(cluster, txn_or_opts, fun)
+      when is_atom(cluster) and is_function(fun, 1) do
+    TxnRoll.transaction(cluster, txn_or_opts, fun)
   end
 
   @doc """
-  Same as `count/3` but returns the count or raises `Aerospike.Error`.
+  Same as `scan_count/3` but returns the count or raises `Aerospike.Error`.
   """
-  @spec count!(cluster(), Scan.t(), keyword()) :: non_neg_integer()
-  def count!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
-    case count(cluster, scan, opts) do
+  @spec scan_count!(cluster(), Scan.t(), keyword()) :: non_neg_integer()
+  def scan_count!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    case scan_count(cluster, scan, opts) do
       {:ok, count} -> count
       {:error, %Aerospike.Error{} = err} -> raise err
     end
+  end
+
+  @deprecated "Use scan_count!/3 instead."
+  def count!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    scan_count!(cluster, scan, opts)
   end
 
   @doc """
@@ -520,13 +636,17 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec put(cluster(), Key.t(), Aerospike.Record.bins_input(), keyword()) ::
+  @spec put(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
           {:ok, Aerospike.Record.metadata()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
-  def put(cluster, %Key{} = key, bins, opts \\ []) do
-    Put.execute(cluster, key, bins, opts)
+  def put(cluster, key, bins, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      Put.execute(cluster, key, bins, opts)
+    end
   end
 
   @doc """
@@ -534,13 +654,17 @@ defmodule Aerospike do
 
   Supported read opts are `:timeout`, `:max_retries`,
   `:sleep_between_retries_ms`, and `:replica_policy`.
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec exists(cluster(), Key.t(), keyword()) ::
+  @spec exists(cluster(), Key.key_input(), keyword()) ::
           {:ok, boolean()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
-  def exists(cluster, %Key{} = key, opts \\ []) do
-    Exists.execute(cluster, key, opts)
+  def exists(cluster, key, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      Exists.execute(cluster, key, opts)
+    end
   end
 
   @doc """
@@ -548,13 +672,17 @@ defmodule Aerospike do
 
   Supported write opts are `:timeout`, `:max_retries`,
   `:sleep_between_retries_ms`, `:ttl`, and `:generation`.
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec touch(cluster(), Key.t(), keyword()) ::
+  @spec touch(cluster(), Key.key_input(), keyword()) ::
           {:ok, Aerospike.Record.metadata()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
-  def touch(cluster, %Key{} = key, opts \\ []) do
-    Touch.execute(cluster, key, opts)
+  def touch(cluster, key, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      Touch.execute(cluster, key, opts)
+    end
   end
 
   @doc """
@@ -563,13 +691,17 @@ defmodule Aerospike do
   Returns `{:ok, true}` when a record was deleted and `{:ok, false}`
   when the key was already absent. Supported write opts are `:timeout`,
   `:max_retries`, `:sleep_between_retries_ms`, and `:generation`.
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec delete(cluster(), Key.t(), keyword()) ::
+  @spec delete(cluster(), Key.key_input(), keyword()) ::
           {:ok, boolean()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
-  def delete(cluster, %Key{} = key, opts \\ []) do
-    Delete.execute(cluster, key, opts)
+  def delete(cluster, key, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      Delete.execute(cluster, key, opts)
+    end
   end
 
   @doc """
@@ -593,12 +725,30 @@ defmodule Aerospike do
 
   Accepted operations include the simple tuple form plus the public
   `Aerospike.Op` helpers for primitive and CDT-style operations.
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec operate(cluster(), Key.t(), [Operate.operation_input()], keyword()) ::
+  @spec operate(cluster(), Key.key_input(), [Operate.operation_input()], keyword()) ::
           {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
-  def operate(cluster, %Key{} = key, operations, opts \\ []) do
-    Operate.execute(cluster, key, operations, opts)
+  def operate(cluster, key, operations, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      Operate.execute(cluster, key, operations, opts)
+    end
+  end
+
+  defp coerce_key(key) do
+    {:ok, Key.coerce!(key)}
+  rescue
+    err in ArgumentError ->
+      {:error, Error.from_result_code(:invalid_argument, message: err.message)}
+  end
+
+  defp coerce_keys(keys) do
+    {:ok, Enum.map(keys, &Key.coerce!/1)}
+  rescue
+    err in ArgumentError ->
+      {:error, Error.from_result_code(:invalid_argument, message: err.message)}
   end
 end

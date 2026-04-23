@@ -4,6 +4,11 @@ defmodule Aerospike.Scan do
 
   The scan itself is pure data. It does not own transport state or
   partition iteration.
+
+  Scan execution lives in explicit facade calls such as
+  `Aerospike.scan_stream/3`, `Aerospike.scan_all/3`, and
+  `Aerospike.scan_count/3`. Node-targeted execution uses `node: node_name`
+  in facade opts where supported.
   """
 
   alias Aerospike.PartitionFilter

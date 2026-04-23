@@ -56,14 +56,14 @@ defmodule Aerospike.Command.ScanOpsTest do
 
     stream_payloads =
       tender
-      |> Aerospike.stream!(scan)
+      |> Aerospike.scan_stream!(scan)
       |> Enum.map(& &1.bins["payload"])
       |> Enum.sort()
 
     assert stream_payloads == ["A1-1", "A1-2", "B1-1"]
   end
 
-  test "short-form scan helpers accept node targeting through opts", ctx do
+  test "explicit scan helpers accept node targeting through opts", ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
     :ok = Tender.tend_now(tender)
@@ -72,8 +72,45 @@ defmodule Aerospike.Command.ScanOpsTest do
 
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("A1-only"), last_frame()]})
 
-    assert {:ok, [record]} = Aerospike.all(tender, scan, node: "A1")
+    assert {:ok, [record]} = Aerospike.scan_all(tender, scan, node: "A1")
     assert record.bins["payload"] == "A1-only"
+  end
+
+  test "bare scan aliases remain compatible with the explicit helpers", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    scan = Scan.new(@namespace, "scan_ops")
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-stream"), last_frame()]})
+
+    assert ["alias-stream"] =
+             tender
+             |> Aerospike.scan_stream!(scan, node: "A1")
+             |> Enum.map(& &1.bins["payload"])
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-stream"), last_frame()]})
+
+    assert ["alias-stream"] =
+             apply(Aerospike, :stream!, [tender, scan, [node: "A1"]])
+             |> Enum.map(& &1.bins["payload"])
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-all"), last_frame()]})
+
+    assert {:ok, [%{bins: %{"payload" => "alias-all"}}]} =
+             Aerospike.scan_all(tender, scan, node: "A1")
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-all"), last_frame()]})
+
+    assert {:ok, [%{bins: %{"payload" => "alias-all"}}]} =
+             apply(Aerospike, :all, [tender, scan, [node: "A1"]])
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
+    assert 1 = Aerospike.scan_count!(tender, scan, node: "A1")
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
+    assert 1 = apply(Aerospike, :count!, [tender, scan, [node: "A1"]])
   end
 
   test "query helpers expose a lazy outer stream and resumable collected pages", ctx do
