@@ -19,7 +19,7 @@ defmodule Aerospike.TxnSupportTest do
       ClusterSupervisor.start_link(
         name: name,
         transport: Fake,
-        seeds: [{"10.0.0.1", 3000}],
+        hosts: ["10.0.0.1:3000"],
         namespaces: ["test"],
         tend_trigger: :manual,
         connect_opts: [fake: fake]

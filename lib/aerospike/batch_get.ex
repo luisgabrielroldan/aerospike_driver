@@ -9,8 +9,8 @@ defmodule Aerospike.BatchGet do
 
   The spike currently supports only full-record reads (`bins: :all`) and
   only the `:timeout` option. Retries remain disabled at the public
-  policy surface even though grouped execution now supports honest
-  regrouping internally.
+  policy surface even though grouped execution can now regroup retries
+  internally.
   """
 
   alias Aerospike.Batch, as: MixedBatch

@@ -23,7 +23,7 @@ defmodule Aerospike.NodeTransport do
 
   @typedoc """
   Options accepted by `c:connect/3`. Implementations decide which keys they
-  honour; the only key callers are expected to pass is `:timeout`
+  support; the only key callers are expected to pass is `:timeout`
   (milliseconds, default left to the implementation).
   """
   @type connect_opts :: keyword()

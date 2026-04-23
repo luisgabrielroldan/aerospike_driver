@@ -121,7 +121,7 @@ defmodule Aerospike.Transport.Tls do
   defdelegate login(conn, opts), to: Tcp
 
   # Base TCP opts only — every TLS-relevant option is applied by
-  # `:ssl.connect/3`, not the underlying TCP socket. We still honour the
+  # `:ssl.connect/3`, not the underlying TCP socket. We still apply the
   # same send-buffer / recv-buffer / keepalive / nodelay tuning knobs the
   # plaintext transport exposes, because they apply to the kernel socket
   # regardless of whether it has been upgraded.

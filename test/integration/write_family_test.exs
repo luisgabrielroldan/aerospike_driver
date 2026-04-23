@@ -21,7 +21,7 @@ defmodule Aerospike.Integration.WriteFamilyTest do
       Aerospike.start_link(
         name: name,
         transport: Aerospike.Transport.Tcp,
-        seeds: [{@host, @port}],
+        hosts: ["#{@host}:#{@port}"],
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 2

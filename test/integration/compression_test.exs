@@ -64,7 +64,7 @@ defmodule Aerospike.Integration.CompressionTest do
       Aerospike.start_link(
         name: name,
         transport: Aerospike.Transport.Tcp,
-        seeds: [{"127.0.0.1", port}],
+        hosts: ["127.0.0.1:#{port}"],
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 1,
@@ -100,7 +100,7 @@ defmodule Aerospike.Integration.CompressionTest do
       Aerospike.start_link(
         name: name,
         transport: Aerospike.Transport.Tcp,
-        seeds: [{"127.0.0.1", port}],
+        hosts: ["127.0.0.1:#{port}"],
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 1,
@@ -134,7 +134,7 @@ defmodule Aerospike.Integration.CompressionTest do
       Aerospike.start_link(
         name: name,
         transport: Aerospike.Transport.Tcp,
-        seeds: [{"127.0.0.1", port}],
+        hosts: ["127.0.0.1:#{port}"],
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 1,

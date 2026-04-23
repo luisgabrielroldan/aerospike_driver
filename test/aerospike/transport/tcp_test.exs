@@ -584,7 +584,7 @@ defmodule Aerospike.Transport.TcpTest do
         :inet.getopts(conn.socket, [:sndbuf, :recbuf])
 
       # Kernels may round the requested value up to the page size, so
-      # only assert the socket at-least-honours what we asked for.
+      # only assert the socket reports at least what we asked for.
       assert sndbuf >= requested_sndbuf
       assert recbuf >= requested_rcvbuf
 

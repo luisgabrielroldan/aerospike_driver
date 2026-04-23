@@ -11,7 +11,7 @@ defmodule Aerospike.Bench.Fanout.BatchGet do
 
   @conn_name :bench_fanout
   @namespace "test"
-  @seeds [{"localhost", 3000}, {"localhost", 3010}, {"localhost", 3020}]
+  @hosts ["localhost:3000", "localhost:3010", "localhost:3020"]
 
   def run do
     config = Aerospike.Bench.load_config()
@@ -27,7 +27,7 @@ defmodule Aerospike.Bench.Fanout.BatchGet do
       Aerospike.start_link(
         name: @conn_name,
         transport: Aerospike.Transport.Tcp,
-        seeds: @seeds,
+        hosts: @hosts,
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 16
@@ -113,8 +113,9 @@ defmodule Aerospike.Bench.Fanout.BatchGet do
   end
 
   defp verify_cluster_available! do
-    Enum.each(@seeds, fn {host, port} ->
-      E2EHelpers.verify_server_available!(host, port)
+    Enum.each(@hosts, fn host_port ->
+      [host, port] = String.split(host_port, ":", parts: 2)
+      E2EHelpers.verify_server_available!(host, String.to_integer(port))
     end)
   end
 

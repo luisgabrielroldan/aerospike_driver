@@ -28,7 +28,7 @@ defmodule Aerospike.Supervisor do
       rehydrates its `:ready` flag from the `:meta` table.
     * Writer crash → Tender also restarts (it is after the Writer). The
       next tend-cycle write would target a dead writer anyway; taking
-      the Tender with it keeps the cycle honest.
+      the Tender with it keeps the cycle consistent.
     * NodeSupervisor crash → Writer and Tender also restart.
     * TableOwner crash → the whole subtree restarts with fresh tables.
 
@@ -50,7 +50,8 @@ defmodule Aerospike.Supervisor do
       the NodeSupervisor's registered name.
     * `:transport` — module implementing `Aerospike.NodeTransport`
       (required).
-    * `:seeds` — list of `{host, port}` tuples (required, non-empty).
+    * `:hosts` — list of `"host:port"` or `"host"` seed strings
+      (required, non-empty).
     * `:namespaces` — list of namespace strings the cluster must serve
       before `Aerospike.Cluster.ready?/1` returns `true` (required,
       non-empty).
@@ -71,7 +72,7 @@ defmodule Aerospike.Supervisor do
   and reuses it across pool workers.
 
   Pool-level knobs live at the top level of the keyword list because
-  the pool supervisor — not the transport — honours them:
+  the pool supervisor — not the transport — applies them:
 
     * `:idle_timeout_ms` — milliseconds a pooled worker may sit idle
       before `NimblePool.handle_ping/2` evicts it. Must be a positive
@@ -87,7 +88,7 @@ defmodule Aerospike.Supervisor do
   @type option ::
           {:name, atom()}
           | {:transport, module()}
-          | {:seeds, [Tender.seed(), ...]}
+          | {:hosts, [String.t(), ...]}
           | {:namespaces, [Tender.namespace(), ...]}
           | {atom(), term()}
 
@@ -114,10 +115,12 @@ defmodule Aerospike.Supervisor do
   def start_link(opts) when is_list(opts) do
     validated = validate!(opts)
     name = Keyword.fetch!(validated, :name)
+    hosts = Keyword.fetch!(validated, :hosts)
 
     tender_opts =
       validated
-      |> Keyword.drop([:tables, :node_supervisor, :writer])
+      |> Keyword.drop([:tables, :node_supervisor, :writer, :hosts])
+      |> Keyword.put(:seeds, parse_hosts!(hosts))
       |> Keyword.put(:node_supervisor, NodeSupervisor.sup_name(name))
       |> Keyword.put(:writer, PartitionMapWriter.via(name))
 
@@ -176,7 +179,7 @@ defmodule Aerospike.Supervisor do
 
   ## Validation
 
-  @required_keys [:name, :transport, :seeds, :namespaces]
+  @required_keys [:name, :transport, :hosts, :namespaces]
 
   defp validate!(opts) do
     Enum.each(@required_keys, fn key ->
@@ -195,13 +198,13 @@ defmodule Aerospike.Supervisor do
       raise ArgumentError,
             "Aerospike.Supervisor: :transport must be a module, got #{inspect(transport)}"
 
-    seeds = Keyword.fetch!(opts, :seeds)
+    hosts = Keyword.fetch!(opts, :hosts)
 
-    (is_list(seeds) and seeds != []) or
+    (is_list(hosts) and hosts != []) or
       raise ArgumentError,
-            "Aerospike.Supervisor: :seeds must be a non-empty list of {host, port} tuples"
+            "Aerospike.Supervisor: :hosts must be a non-empty list of \"host:port\" strings"
 
-    validate_seeds!(seeds)
+    _ = parse_hosts!(hosts)
 
     namespaces = Keyword.fetch!(opts, :namespaces)
 
@@ -277,20 +280,40 @@ defmodule Aerospike.Supervisor do
             "got #{inspect(value)}"
   end
 
-  defp validate_seeds!(seeds) do
-    Enum.each(seeds, &validate_seed!/1)
+  defp parse_hosts!(hosts) do
+    Enum.map(hosts, &parse_host!/1)
   end
 
-  defp validate_seed!({host, port}) when is_binary(host) and host != "" and is_integer(port) do
-    (port >= 1 and port <= 65_535) or
-      raise ArgumentError,
-            "Aerospike.Supervisor: seed port must be in 1..65535, got #{inspect(port)}"
+  defp parse_host!(host_port) when is_binary(host_port) and host_port != "" do
+    case String.split(host_port, ":", parts: 2) do
+      [host, port] when host != "" ->
+        {host, parse_host_port!(host_port, port)}
+
+      [host] when host != "" ->
+        {host, 3000}
+
+      _ ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: each host must be a non-empty string in " <>
+                "\"host:port\" or \"host\" form, got #{inspect(host_port)}"
+    end
   end
 
-  defp validate_seed!(seed) do
+  defp parse_host!(host_port) do
     raise ArgumentError,
-          "Aerospike.Supervisor: each seed must be a {host, port} tuple with a non-empty " <>
-            "string host and integer port, got #{inspect(seed)}"
+          "Aerospike.Supervisor: each host must be a non-empty string in " <>
+            "\"host:port\" or \"host\" form, got #{inspect(host_port)}"
+  end
+
+  defp parse_host_port!(host_port, port) do
+    case Integer.parse(port) do
+      {value, ""} when value in 1..65_535 ->
+        value
+
+      _ ->
+        raise ArgumentError,
+              "Aerospike.Supervisor: invalid host port in #{inspect(host_port)}"
+    end
   end
 
   defp validate_namespaces!(namespaces) do

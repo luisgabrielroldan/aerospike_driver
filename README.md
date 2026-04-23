@@ -8,7 +8,7 @@ driver that remains in this workspace as a migration/reference repo.
 The goal is a production-grade, OTP-native Aerospike client with a sharper
 runtime foundation than the legacy driver: supervised cluster ownership,
 deterministic routing, reusable unary execution, explicit streaming paths, and
-an honest test matrix tied to real Aerospike environments.
+a concrete test matrix tied to real Aerospike environments.
 
 ## Current Surface
 
@@ -48,7 +48,7 @@ Then open `iex -S mix` in this repo and start one cluster manually:
   Aerospike.start_link(
     name: :aerospike,
     transport: Aerospike.Transport.Tcp,
-    seeds: [{"127.0.0.1", 3000}],
+    hosts: ["127.0.0.1:3000"],
     namespaces: ["test"],
     tend_trigger: :manual,
     pool_size: 2
@@ -62,7 +62,7 @@ key = Aerospike.Key.new("test", "demo", "hello")
 {:ok, record} = Aerospike.get(:aerospike, key)
 ```
 
-Required startup options are `:name`, `:transport`, `:seeds`, and
+Required startup options are `:name`, `:transport`, `:hosts`, and
 `:namespaces`. Cluster options such as retry, pool, breaker, and auth settings
 are validated synchronously by `Aerospike.start_link/1` through
 `Aerospike.Supervisor`.
@@ -85,7 +85,7 @@ workspace still carries as a reference implementation.
 
 Support is currently profile-based, not a semver promise over a pinned
 Aerospike server matrix. The compose stacks still resolve `:latest`, so the
-honest support claim is limited to the exact images exercised during
+current support claim is limited to the exact images exercised during
 validation.
 
 | Profile | Purpose | Where it runs |

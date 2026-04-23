@@ -101,7 +101,7 @@ defmodule Aerospike.Integration.AuthTest do
     base_opts = [
       name: name,
       transport: Aerospike.Transport.Tcp,
-      seeds: [{@host, @port}],
+      hosts: ["#{@host}:#{@port}"],
       namespaces: [@namespace],
       tend_trigger: :manual,
       pool_size: 2

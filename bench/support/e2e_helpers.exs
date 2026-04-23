@@ -25,7 +25,7 @@ defmodule Aerospike.Bench.Support.E2EHelpers do
       [
         name: conn_name,
         transport: Aerospike.Transport.Tcp,
-        seeds: [{host, port}],
+        hosts: ["#{host}:#{port}"],
         namespaces: [Keyword.get(opts, :namespace, "test")],
         tend_trigger: :manual,
         pool_size: Keyword.get(opts, :pool_size, 16)

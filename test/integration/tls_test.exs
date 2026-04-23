@@ -152,7 +152,7 @@ defmodule Aerospike.Integration.TlsTest do
       Aerospike.start_link(
         name: name,
         transport: Aerospike.Transport.Tls,
-        seeds: [{"localhost", port}],
+        hosts: ["localhost:#{port}"],
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 2,

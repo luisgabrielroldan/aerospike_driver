@@ -32,7 +32,7 @@ defmodule Aerospike.Integration.BatchTest do
       Aerospike.start_link(
         name: name,
         transport: Tcp,
-        seeds: @seeds,
+        hosts: Enum.map(, fn {host, port} -> "#{host}:#{port}" end),
         namespaces: [@namespace],
         tend_trigger: :manual,
         pool_size: 2

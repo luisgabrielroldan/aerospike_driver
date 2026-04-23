@@ -40,7 +40,7 @@ defmodule Aerospike do
         Aerospike.start_link(
           name: :spike,
           transport: Aerospike.Transport.Tcp,
-          seeds: [{"127.0.0.1", 3000}],
+          hosts: ["127.0.0.1:3000"],
           namespaces: ["test"],
           tend_trigger: :manual,
           pool_size: 2
@@ -54,11 +54,10 @@ defmodule Aerospike do
     * Community Edition three-node cluster from `../aerospike_driver/`
     * Enterprise Edition variants from this repo's `docker-compose.yml`
 
-  The public `Stream` helpers are honest only about lazy enumeration at
-  the API boundary. The current runtime still drains each node stream
-  into memory before yielding that node's records downstream, so it does
-  not promise frame-by-frame cross-node backpressure or cancellation
-  coordination.
+  The public `Stream` helpers are lazy only at the API boundary. The
+  current runtime still drains each node stream into memory before
+  yielding that node's records downstream, so it does not promise
+  frame-by-frame cross-node backpressure or cancellation coordination.
 
   Broader batch semantics, the remaining expression surface, and the
   wider policy surface remain out of scope until later work proves them.
@@ -102,7 +101,7 @@ defmodule Aerospike do
   option is used both as the supervisor's registered name and as the
   Tender's identity for `get/3`.
 
-  Required options: `:name`, `:transport`, `:seeds`, `:namespaces`.
+  Required options: `:name`, `:transport`, `:hosts`, `:namespaces`.
 
   Startup validation happens synchronously at this boundary. Shape
   errors for required opts, retry/breaker knobs, TLS/connect opts, and

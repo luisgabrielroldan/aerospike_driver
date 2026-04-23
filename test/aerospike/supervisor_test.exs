@@ -22,11 +22,11 @@ defmodule Aerospike.SupervisorTest do
   end
 
   describe "start_link/1 validation" do
-    test "requires :name, :transport, :seeds, :namespaces" do
+    test "requires :name, :transport, :hosts, :namespaces" do
       assert_raise ArgumentError, ~r/missing required option :name/, fn ->
         ClusterSupervisor.start_link(
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"]
         )
       end
@@ -34,17 +34,47 @@ defmodule Aerospike.SupervisorTest do
       assert_raise ArgumentError, ~r/missing required option :transport/, fn ->
         ClusterSupervisor.start_link(
           name: :x,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"]
         )
       end
 
-      assert_raise ArgumentError, ~r/missing required option :seeds/, fn ->
+      assert_raise ArgumentError, ~r/missing required option :hosts/, fn ->
         ClusterSupervisor.start_link(name: :x, transport: Fake, namespaces: ["test"])
       end
 
       assert_raise ArgumentError, ~r/missing required option :namespaces/, fn ->
-        ClusterSupervisor.start_link(name: :x, transport: Fake, seeds: [{"10.0.0.1", 3000}])
+        ClusterSupervisor.start_link(name: :x, transport: Fake, hosts: ["10.0.0.1:3000"])
+      end
+    end
+
+    test "parses :hosts and passes tuple seeds to the tender" do
+      assert {:ok, sup} =
+               ClusterSupervisor.start_link(
+                 name: :x,
+                 transport: Fake,
+                 hosts: ["10.0.0.1:3000", "10.0.0.2"],
+                 namespaces: ["test"],
+                 tend_trigger: :manual
+               )
+
+      Process.unlink(sup)
+
+      assert %{
+               seeds: [{"10.0.0.1", 3000}, {"10.0.0.2", 3000}]
+             } = :sys.get_state(:x)
+
+      stop_if_alive(sup)
+    end
+
+    test "rejects malformed :hosts entries" do
+      assert_raise ArgumentError, ~r/invalid host port/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          hosts: ["10.0.0.1:notaport"],
+          namespaces: ["test"]
+        )
       end
     end
 
@@ -53,38 +83,38 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: "not_an_atom",
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"]
         )
       end
     end
 
-    test "rejects empty :seeds" do
-      assert_raise ArgumentError, ~r/:seeds must be a non-empty list/, fn ->
+    test "rejects empty :hosts" do
+      assert_raise ArgumentError, ~r/:hosts must be a non-empty list/, fn ->
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [],
+          hosts: [],
           namespaces: ["test"]
         )
       end
     end
 
-    test "rejects malformed seed tuples" do
-      assert_raise ArgumentError, ~r/each seed must be a \{host, port\} tuple/, fn ->
+    test "rejects malformed hosts" do
+      assert_raise ArgumentError, ~r/each host must be a non-empty string/, fn ->
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [:bad_seed],
+          hosts: [:bad_seed],
           namespaces: ["test"]
         )
       end
 
-      assert_raise ArgumentError, ~r/seed port must be in 1..65535/, fn ->
+      assert_raise ArgumentError, ~r/invalid host port/, fn ->
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 0}],
+          hosts: ["10.0.0.1:0"],
           namespaces: ["test"]
         )
       end
@@ -95,7 +125,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: []
         )
       end
@@ -106,7 +136,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: [:test]
         )
       end
@@ -121,7 +151,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           pool_size: 0
         )
@@ -133,7 +163,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           idle_timeout_ms: -1
         )
@@ -145,7 +175,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           max_idle_pings: 0
         )
@@ -157,7 +187,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           connect_opts: [tcp_nodelay: :yes]
         )
@@ -169,7 +199,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           connect_opts: [tcp_sndbuf: 0]
         )
@@ -181,7 +211,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           connect_opts: :not_a_list
         )
@@ -195,7 +225,7 @@ defmodule Aerospike.SupervisorTest do
                      ClusterSupervisor.start_link(
                        name: :x,
                        transport: Fake,
-                       seeds: [{"10.0.0.1", 3000}],
+                       hosts: ["10.0.0.1:3000"],
                        namespaces: ["test"],
                        user: "admin"
                      )
@@ -207,7 +237,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           max_retries: -1
         )
@@ -217,7 +247,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           replica_policy: :any
         )
@@ -231,7 +261,7 @@ defmodule Aerospike.SupervisorTest do
                      ClusterSupervisor.start_link(
                        name: :x,
                        transport: Fake,
-                       seeds: [{"10.0.0.1", 3000}],
+                       hosts: ["10.0.0.1:3000"],
                        namespaces: ["test"],
                        circuit_open_threshold: -1
                      )
@@ -243,7 +273,7 @@ defmodule Aerospike.SupervisorTest do
                      ClusterSupervisor.start_link(
                        name: :x,
                        transport: Fake,
-                       seeds: [{"10.0.0.1", 3000}],
+                       hosts: ["10.0.0.1:3000"],
                        namespaces: ["test"],
                        max_concurrent_ops_per_node: 0
                      )
@@ -253,7 +283,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           tend_trigger: :now
         )
@@ -265,7 +295,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           use_compression: :yes
         )
@@ -275,7 +305,7 @@ defmodule Aerospike.SupervisorTest do
         ClusterSupervisor.start_link(
           name: :x,
           transport: Fake,
-          seeds: [{"10.0.0.1", 3000}],
+          hosts: ["10.0.0.1:3000"],
           namespaces: ["test"],
           use_services_alternate: :alt
         )
@@ -393,7 +423,7 @@ defmodule Aerospike.SupervisorTest do
         name: ctx.name,
         transport: Fake,
         connect_opts: [fake: ctx.fake],
-        seeds: Keyword.get(opts, :seeds, [{"10.0.0.1", 3000}]),
+        hosts: Keyword.get(opts, :hosts, ["10.0.0.1:3000"]),
         namespaces: Keyword.get(opts, :namespaces, ["test"]),
         tend_trigger: :manual
       ]

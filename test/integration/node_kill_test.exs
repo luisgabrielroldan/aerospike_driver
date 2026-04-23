@@ -64,7 +64,7 @@ defmodule Aerospike.Integration.NodeKillTest do
       Aerospike.start_link(
         name: name,
         transport: Aerospike.Transport.Tcp,
-        seeds: [{@host, @port}],
+        hosts: ["#{@host}:#{@port}"],
         namespaces: [@namespace],
         tend_interval_ms: @tend_interval_ms,
         failure_threshold: @failure_threshold,

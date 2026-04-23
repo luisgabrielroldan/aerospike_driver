@@ -165,7 +165,7 @@ defmodule Aerospike.Protocol.Login do
   Callers handle the result code themselves so a non-zero "auth failed"
   reply still exposes its field-count and body length — today every error
   path skips the body (the server sends no fields on a non-zero reply), but
-  surfacing the values here keeps the decoder honest against future server
+  surfacing the values here keeps the decoder aligned with future server
   versions that add diagnostic fields to error replies.
   """
   @spec decode_reply_header(binary()) ::
