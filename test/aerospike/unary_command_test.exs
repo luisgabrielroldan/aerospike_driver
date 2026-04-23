@@ -38,6 +38,22 @@ defmodule Aerospike.Command.UnaryCommandTest do
              UnaryCommand.run_transport(command, TestTransport, :conn, "k1", 50, [])
   end
 
+  test "retry_transport?: false returns a no-retry transport result for side-effectful commands" do
+    Process.put(:transport_result, {:error, Error.from_result_code(:network_error)})
+
+    command =
+      UnaryCommand.new!(
+        name: __MODULE__,
+        dispatch: :write,
+        retry_transport: false,
+        build_request: fn _key -> "request" end,
+        parse_response: fn _body, _key -> {:ok, :unused} end
+      )
+
+    assert {{:no_retry, {:error, %Error{code: :network_error}}}, {:close, :failure}} =
+             UnaryCommand.run_transport(command, TestTransport, :conn, "k1", 50, [])
+  end
+
   test "parse errors close the worker without node-failure accounting" do
     Process.put(:transport_result, {:ok, "bad-wire"})
 

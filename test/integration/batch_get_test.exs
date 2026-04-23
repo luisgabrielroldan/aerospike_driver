@@ -75,6 +75,58 @@ defmodule Aerospike.Integration.BatchGetTest do
     assert {:ok, %Record{key: ^key_c, bins: %{"node" => ^node_c, "value" => 33}}} = fourth
   end
 
+  test "batch_get_header returns header-only records with empty bins in caller order", %{
+    cluster: cluster
+  } do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = "spike_batch_header_#{System.unique_integer([:positive])}"
+    [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
+    missing_key = key_for_node(cluster, set, node_a, "missing")
+
+    assert {:ok, _} = Aerospike.put(cluster, key_a, %{"node" => node_a, "value" => 11})
+    assert {:ok, _} = Aerospike.put(cluster, key_b, %{"node" => node_b, "value" => 22})
+    assert {:ok, _} = Aerospike.put(cluster, key_c, %{"node" => node_c, "value" => 33})
+
+    assert {:ok, [first, second, third, fourth]} =
+             Aerospike.batch_get_header(cluster, [key_b, missing_key, key_a, key_c],
+               timeout: 5_000
+             )
+
+    assert {:ok, %Record{key: ^key_b, bins: %{}, generation: generation_b, ttl: ttl_b}} = first
+    assert generation_b >= 1
+    assert ttl_b >= 0
+    assert {:error, %Error{code: :key_not_found}} = second
+    assert {:ok, %Record{key: ^key_a, bins: %{}, generation: generation_a, ttl: ttl_a}} = third
+    assert generation_a >= 1
+    assert ttl_a >= 0
+    assert {:ok, %Record{key: ^key_c, bins: %{}, generation: generation_c, ttl: ttl_c}} = fourth
+    assert generation_c >= 1
+    assert ttl_c >= 0
+  end
+
+  test "batch_exists returns booleans in caller order across multiple live cluster nodes", %{
+    cluster: cluster
+  } do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = "spike_batch_exists_#{System.unique_integer([:positive])}"
+    [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
+    missing_key = key_for_node(cluster, set, node_a, "missing")
+
+    assert {:ok, _} = Aerospike.put(cluster, key_a, %{"node" => node_a, "value" => 11})
+    assert {:ok, _} = Aerospike.put(cluster, key_b, %{"node" => node_b, "value" => 22})
+    assert {:ok, _} = Aerospike.put(cluster, key_c, %{"node" => node_c, "value" => 33})
+
+    assert {:ok, [first, second, third, fourth]} =
+             Aerospike.batch_exists(cluster, [key_b, missing_key, key_a, key_c], timeout: 5_000)
+
+    assert {:ok, true} = first
+    assert {:ok, false} = second
+    assert {:ok, true} = third
+    assert {:ok, true} = fourth
+  end
+
   defp keys_for_distinct_nodes(cluster, set, count) when is_integer(count) and count > 0 do
     tables = Tender.tables(cluster)
 

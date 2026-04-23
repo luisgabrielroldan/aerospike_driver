@@ -13,9 +13,9 @@ defmodule Aerospike.Protocol.Batch do
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.Message
-  alias Aerospike.Protocol.MessagePack
   alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Protocol.ResultCode
+  alias Aerospike.Protocol.UdfArgs
   alias Aerospike.Record
 
   @batch_msg_info 0x02
@@ -285,7 +285,7 @@ defmodule Aerospike.Protocol.Batch do
   defp udf_fields(payload) do
     package = Map.fetch!(payload, :package)
     function = Map.fetch!(payload, :function)
-    args = payload |> Map.get(:args, []) |> Enum.map(&pack_udf_arg/1) |> MessagePack.pack!()
+    args = payload |> Map.get(:args, []) |> UdfArgs.pack!()
 
     [
       Field.encode(Field.udf_package_name(package)),
@@ -293,18 +293,6 @@ defmodule Aerospike.Protocol.Batch do
       Field.encode(Field.udf_arglist(args))
     ]
   end
-
-  defp pack_udf_arg(s) when is_binary(s), do: {:particle_string, s}
-  defp pack_udf_arg({:bytes, b}) when is_binary(b), do: {:bytes, b}
-  defp pack_udf_arg(nil), do: nil
-  defp pack_udf_arg(true), do: true
-  defp pack_udf_arg(false), do: false
-  defp pack_udf_arg(n) when is_integer(n), do: n
-  defp pack_udf_arg(f) when is_float(f), do: f
-  defp pack_udf_arg(list) when is_list(list), do: Enum.map(list, &pack_udf_arg/1)
-
-  defp pack_udf_arg(%{} = map),
-    do: Map.new(map, fn {k, v} -> {pack_udf_arg(k), pack_udf_arg(v)} end)
 
   defp maybe_header_flag(info1, true), do: info1 ||| AsmMsg.info1_nobindata()
   defp maybe_header_flag(info1, false), do: info1

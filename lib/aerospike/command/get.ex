@@ -25,6 +25,8 @@ defmodule Aerospike.Command.Get do
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport
 
+  @type mode :: :all | :header
+
   @type option ::
           {:timeout, non_neg_integer()}
           | {:max_retries, non_neg_integer()}
@@ -32,12 +34,13 @@ defmodule Aerospike.Command.Get do
           | {:replica_policy, :master | :sequence}
 
   @doc """
-  Reads all bins for `key` from the cluster identified by `tender`.
+  Reads `key` from the cluster identified by `tender`.
 
   `tender` is a running `Aerospike.Cluster.Tender` (pid or registered name). The
-  spike only supports reading every bin (`bins = :all`); other shapes
-  return `{:error, %Aerospike.Error{code: :invalid_argument}}` so future
-  tasks can widen the API without changing the signature.
+  spike only supports reading every bin (`mode = :all`) or record metadata only
+  (`mode = :header`); other shapes return
+  `{:error, %Aerospike.Error{code: :invalid_argument}}` so future tasks can widen
+  the API without changing the signature.
 
   Options:
 
@@ -51,13 +54,13 @@ defmodule Aerospike.Command.Get do
   Errors surface as typed `Aerospike.Error` structs or the router's
   `:cluster_not_ready` / `:no_master` atoms for routing failures.
   """
-  @spec execute(GenServer.server(), Key.t(), :all | term(), [option()]) ::
+  @spec execute(GenServer.server(), Key.t(), mode() | term(), [option()]) ::
           {:ok, Record.t()}
           | {:error, Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
   def execute(tender, key, bins, opts \\ [])
 
-  def execute(tender, %Key{} = key, :all, opts) do
+  def execute(tender, %Key{} = key, mode, opts) when mode in [:all, :header] do
     with {:ok, txn} <- TxnSupport.txn_from_opts(opts),
          {:ok, policy} <- UnarySupport.read_policy(tender, opts),
          :ok <- TxnSupport.prepare_txn_read(tender, txn, key) do
@@ -66,7 +69,7 @@ defmodule Aerospike.Command.Get do
         key,
         policy,
         command(),
-        %{key: key, conn: tender, txn: txn, opts: opts}
+        %{key: key, conn: tender, txn: txn, opts: opts, mode: mode}
       )
     end
   end
@@ -75,7 +78,7 @@ defmodule Aerospike.Command.Get do
     {:error,
      %Error{
        code: :invalid_argument,
-       message: "Aerospike.Command.Get supports only :all bins in the spike"
+       message: "Aerospike.Command.Get supports only :all and :header read modes in the spike"
      }}
   end
 
@@ -88,9 +91,9 @@ defmodule Aerospike.Command.Get do
     )
   end
 
-  defp encode_read(%{key: %Key{} = key, conn: conn, opts: opts}) do
-    key.namespace
-    |> AsmMsg.read_command(key.set, key.digest)
+  defp encode_read(%{key: %Key{} = key, conn: conn, opts: opts, mode: mode}) do
+    key
+    |> AsmMsg.key_command([], read: true, read_all: mode == :all, read_header: mode == :header)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, false)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()

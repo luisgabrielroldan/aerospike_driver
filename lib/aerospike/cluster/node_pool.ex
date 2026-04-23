@@ -96,6 +96,7 @@ defmodule Aerospike.Cluster.NodePool do
   alias Aerospike.Error
   alias Aerospike.Cluster.NodeCounters
   alias Aerospike.Runtime.PoolCheckout
+  alias Aerospike.RuntimeMetrics
 
   require Logger
 
@@ -112,6 +113,21 @@ defmodule Aerospike.Cluster.NodePool do
   increments the node's `:failed` counter.
   """
   @type checkin_value :: term() | :close | {:close, :failure}
+
+  @doc """
+  Checks out and checks in `count` workers serially to prove the pool can serve them.
+
+  This does not create a new warm-up mode. It exercises the already-started
+  pool so operator-facing code can verify that the configured worker slots are
+  reachable through the normal checkout path.
+  """
+  @spec warm_up(pid(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, non_neg_integer()} | {:error, Error.t(), non_neg_integer()}
+  def warm_up(pool, count, timeout)
+      when is_pid(pool) and is_integer(count) and count >= 0 and is_integer(timeout) and
+             timeout >= 0 do
+    do_warm_up(pool, count, 0, timeout)
+  end
 
   @doc """
   Checks out a worker and runs `fun.(conn)` with a pool-owned connection.
@@ -179,6 +195,18 @@ defmodule Aerospike.Cluster.NodePool do
     )
   end
 
+  defp do_warm_up(_pool, 0, warmed, _timeout), do: {:ok, warmed}
+
+  defp do_warm_up(pool, remaining, warmed, timeout) when remaining > 0 do
+    case checkout!(pool, fn conn -> {:ok, conn} end, timeout) do
+      :ok ->
+        do_warm_up(pool, remaining - 1, warmed + 1, timeout)
+
+      {:error, %Error{} = error} ->
+        {:error, error, warmed}
+    end
+  end
+
   ## NimblePool callbacks
 
   @impl NimblePool
@@ -191,6 +219,7 @@ defmodule Aerospike.Cluster.NodePool do
     # `:counters` is optional: tests and cluster-state-only modes may
     # omit it, and the callbacks below degrade to no-ops when it is nil.
     _counters = Keyword.get(opts, :counters)
+    _cluster_name = Keyword.get(opts, :cluster_name)
     # `:features` is optional and defaults to an empty set so tests and
     # cluster-state-only modes that never run the bootstrap probe still
     # produce a usable pool. Stash an explicit empty set on the
@@ -220,6 +249,9 @@ defmodule Aerospike.Cluster.NodePool do
     # carry `node_name: nil` — acceptable because that traffic is
     # cluster-state-only.
     connect_opts = Keyword.put(connect_opts, :node_name, node_name)
+    cluster_name = Keyword.get(pool_state, :cluster_name)
+
+    RuntimeMetrics.record_connection_attempt(cluster_name, node_name)
 
     try do
       transport.connect(host, port, connect_opts)
@@ -241,6 +273,8 @@ defmodule Aerospike.Cluster.NodePool do
     end
     |> case do
       {:ok, conn} ->
+        RuntimeMetrics.record_connection_success(cluster_name, node_name)
+
         Logger.debug(fn ->
           "Aerospike.Cluster.NodePool: connected worker for #{node_name} at #{host}:#{port}"
         end)
@@ -248,6 +282,8 @@ defmodule Aerospike.Cluster.NodePool do
         {:ok, conn, pool_state}
 
       {:error, %Error{} = err} ->
+        RuntimeMetrics.record_connection_failure(cluster_name, node_name)
+
         Logger.warning(
           "Aerospike.Cluster.NodePool: connect failed for #{node_name} at #{host}:#{port}: #{err.message}"
         )
@@ -266,6 +302,13 @@ defmodule Aerospike.Cluster.NodePool do
   def handle_checkin({:close, :failure}, _from, _worker, pool_state) do
     decr_in_flight(pool_state)
     incr_failed(pool_state)
+
+    RuntimeMetrics.record_connection_drop(
+      Keyword.get(pool_state, :cluster_name),
+      Keyword.fetch!(pool_state, :node_name),
+      :dead
+    )
+
     {:remove, :closed, pool_state}
   end
 
@@ -296,10 +339,13 @@ defmodule Aerospike.Cluster.NodePool do
   @impl NimblePool
   def handle_ping(_conn, pool_state) do
     node_name = Keyword.fetch!(pool_state, :node_name)
+    cluster_name = Keyword.get(pool_state, :cluster_name)
 
     Logger.debug(fn ->
       "Aerospike.Cluster.NodePool: evicting idle worker for #{node_name}"
     end)
+
+    RuntimeMetrics.record_connection_drop(cluster_name, node_name, :idle)
 
     {:remove, :idle}
   end
@@ -307,6 +353,8 @@ defmodule Aerospike.Cluster.NodePool do
   @impl NimblePool
   def terminate_worker(_reason, conn, pool_state) do
     transport = Keyword.fetch!(pool_state, :transport)
+    cluster_name = Keyword.get(pool_state, :cluster_name)
+    node_name = Keyword.fetch!(pool_state, :node_name)
 
     # A worker can outlive its transport peer during a supervisor
     # shutdown: NimblePool calls `terminate_worker/3` on every worker
@@ -318,6 +366,8 @@ defmodule Aerospike.Cluster.NodePool do
     catch
       :exit, _ -> :ok
     end
+
+    RuntimeMetrics.record_connection_closed(cluster_name, node_name)
 
     {:ok, pool_state}
   end

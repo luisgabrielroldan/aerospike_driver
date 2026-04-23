@@ -62,6 +62,25 @@ defmodule Aerospike.Protocol.Response do
   end
 
   @doc """
+  Parses a single-record UDF reply into its returned value or a typed error.
+  """
+  @spec parse_udf_response(AsmMsg.t()) :: {:ok, term()} | {:error, Error.t()}
+  def parse_udf_response(%AsmMsg{} = msg) do
+    case result_atom(msg.result_code) do
+      {:ok, :ok} ->
+        with {:ok, bins} <- record_bins_from_operations(msg.operations) do
+          extract_udf_value(bins)
+        end
+
+      {:ok, :udf_bad_response} ->
+        extract_udf_error(msg.operations)
+
+      other ->
+        error_from_result(other)
+    end
+  end
+
+  @doc """
   Parses a multi-record batch read/header reply into per-record indexed results.
   """
   @spec parse_batch_response(binary(), Aerospike.Command.BatchCommand.NodeRequest.t()) ::
@@ -150,6 +169,25 @@ defmodule Aerospike.Protocol.Response do
 
   defp result_atom(code) when is_integer(code) do
     ResultCode.from_integer(code)
+  end
+
+  defp extract_udf_value(%{"SUCCESS" => value}), do: {:ok, value}
+
+  defp extract_udf_value(%{"FAILURE" => message}) do
+    {:error, Error.from_result_code(:udf_bad_response, message: to_string(message))}
+  end
+
+  defp extract_udf_value(bins) when map_size(bins) == 0, do: {:ok, nil}
+  defp extract_udf_value(bins), do: {:ok, bins}
+
+  defp extract_udf_error(operations) do
+    case record_bins_from_operations(operations) do
+      {:ok, %{"FAILURE" => message}} ->
+        {:error, Error.from_result_code(:udf_bad_response, message: to_string(message))}
+
+      _ ->
+        {:error, Error.from_result_code(:udf_bad_response)}
+    end
   end
 
   defp error_from_result({:ok, error_code}) do

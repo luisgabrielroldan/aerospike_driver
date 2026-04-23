@@ -10,6 +10,7 @@ defmodule Aerospike.Command.WriteFamilyTest do
   alias Aerospike.Command.Exists
   alias Aerospike.Command.Put
   alias Aerospike.Command.Touch
+  alias Aerospike.Command.WriteOp
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Test.ReplicasFixture
@@ -128,6 +129,50 @@ defmodule Aerospike.Command.WriteFamilyTest do
       key = Key.new(@namespace, @set, "delete-missing")
 
       assert {:ok, false} = Delete.execute(tender, key)
+    end
+  end
+
+  describe "write op wrappers" do
+    test "add returns metadata through the shared unary write path", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 5, 21)})
+
+      key = Key.new(@namespace, @set, "add-success")
+
+      assert {:ok, %{generation: 5, ttl: 21}} =
+               WriteOp.execute(tender, key, :add, %{count: 3}, ttl: 120)
+    end
+
+    test "append retries transport errors on the write master", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}], max_retries: 1)
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:error, Error.from_result_code(:network_error)})
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 2, 33)})
+
+      key = Key.new(@namespace, @set, "append-retry")
+
+      assert {:ok, %{generation: 2, ttl: 33}} =
+               Aerospike.append(tender, key, %{greeting: " world"})
+
+      assert Keyword.get(Fake.last_command_opts(ctx.fake, "A1"), :attempt) == 1
+    end
+
+    test "prepend rejects empty bin maps", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      key = Key.new(@namespace, @set, "prepend-empty")
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               WriteOp.execute(tender, key, :prepend, %{})
+
+      assert message =~ "prepend requires at least one bin mutation"
     end
   end
 

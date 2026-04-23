@@ -69,11 +69,12 @@ defmodule Aerospike.ClusterTest do
     end
   end
 
-  describe "active_nodes/1 and active_node?/2" do
+  describe "active_nodes/1, node_names/1, and active_node?/2" do
     test "reads the published active node snapshot", ctx do
       :ets.insert(ctx.tables.meta, {:active_nodes, ["A1", "B1"]})
 
       assert Cluster.active_nodes(ctx.name) == ["A1", "B1"]
+      assert Cluster.node_names(ctx.name) == ["A1", "B1"]
       assert Cluster.active_node?(ctx.name, "A1")
       refute Cluster.active_node?(ctx.name, "C1")
     end

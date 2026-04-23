@@ -91,6 +91,8 @@ defmodule Aerospike.Cluster.NodeSupervisor do
       transport-class failure via `{:close, :failure}`. Omitting this
       key leaves counter writes as no-ops, which is the intended
       behaviour for tests and cluster-state-only modes.
+    * `:cluster_name` — optional cluster identity atom used by internal
+      runtime metrics hooks. When absent, connection metrics are skipped.
     * `:features` — optional `MapSet` of capability tokens captured
       from the node's `features` info-key reply at registration. Pool
       consumers (capability-gated send paths) read this to decide
@@ -108,6 +110,7 @@ defmodule Aerospike.Cluster.NodeSupervisor do
     idle_timeout_ms = Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms)
     max_idle_pings = Keyword.get(opts, :max_idle_pings, @default_max_idle_pings)
     counters = Keyword.get(opts, :counters)
+    cluster_name = Keyword.get(opts, :cluster_name)
     features = Keyword.get(opts, :features, MapSet.new())
 
     worker_opts =
@@ -118,6 +121,7 @@ defmodule Aerospike.Cluster.NodeSupervisor do
         connect_opts: connect_opts,
         node_name: node_name,
         counters: counters,
+        cluster_name: cluster_name,
         features: features
       ]
 

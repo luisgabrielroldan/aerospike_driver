@@ -15,17 +15,37 @@ defmodule Aerospike do
   supervised cluster runtime:
 
     * `get/3` reads all bins for a key
+    * `get_header/2` reads only record metadata for a key
     * `put/4` writes a bin map
+    * `apply_udf/6` executes one record UDF against one key
+    * `register_udf/3`, `register_udf/4`, `remove_udf/2`,
+      `remove_udf/3`, and `list_udfs/1` / `list_udfs/2` manage
+      server-side UDF packages and return explicit metadata/task
+      handles
+    * `truncate/2`, `truncate/3`, and `truncate/4` expose one-node
+      operator truncation helpers with explicit namespace and set forms
+    * `create_user/5`, `drop_user/3`, `change_password/4`,
+      `grant_roles/4`, `revoke_roles/4`, `query_user/3`,
+      `query_users/2`, `create_role/4`, `drop_role/3`,
+      `grant_privileges/4`, `revoke_privileges/4`, `query_role/3`,
+      and `query_roles/2` expose the enterprise security-admin seam
+    * `add/4`, `append/4`, and `prepend/4` expose thin unary write
+      helpers for common counter and string mutations
+    * `metrics_enabled?/1`, `enable_metrics/2`, `disable_metrics/1`,
+      `stats/1`, and `warm_up/2` expose opt-in runtime metrics and an
+      explicit operator pool probe over the already-started workers
     * `exists/2` performs a header-only existence probe
     * `touch/2` updates record metadata
     * `delete/2` removes a record
     * `operate/4` runs simple and CDT-style unary operation lists built
       with `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, and
       `Aerospike.Ctx`
-    * `batch_get/4` reads multiple keys and returns per-key results in
-      caller order
+    * `batch_get/4`, `batch_get_header/3`, and `batch_exists/3` read
+      multiple keys and return per-key results in caller order
     * `child_spec/1`, `close/2`, `key/3`, and `key_digest/3` round out
       the root lifecycle and key-construction boundary
+    * `info/3`, `nodes/1`, and `node_names/1` expose one-node operator
+      reads over the published cluster view
     * `query_stream!/3`, `query_all/3`, `query_count/3`, and
       `query_aggregate/6` run secondary-index queries through the same
       node-preparation pipeline, with lazy outer streams but
@@ -73,7 +93,9 @@ defmodule Aerospike do
   """
 
   alias Aerospike.Command.Admin
+  alias Aerospike.Command.ApplyUdf
   alias Aerospike.Command.BatchGet
+  alias Aerospike.Cluster
   alias Aerospike.Command.Delete
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
@@ -84,19 +106,30 @@ defmodule Aerospike do
   alias Aerospike.Command.Operate
   alias Aerospike.Page
   alias Aerospike.Command.Put
+  alias Aerospike.Policy
+  alias Aerospike.Privilege
   alias Aerospike.Query
+  alias Aerospike.RegisterTask
+  alias Aerospike.Role
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Scan
   alias Aerospike.Command.ScanOps
   alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
   alias Aerospike.Command.Touch
+  alias Aerospike.UDF
+  alias Aerospike.User
+  alias Aerospike.Command.WriteOp
   alias Aerospike.Txn
   alias Aerospike.Runtime.TxnRoll
 
   @typedoc """
-  Identifier for a running cluster for the read/write/query/scan facade,
-  i.e. its registered name or a pid registered under that name.
+  Identifier for a running cluster facade.
+
+  Read-side helpers accept the registered cluster name or a pid
+  registered under that name. Arbitrary `GenServer.server()` forms are
+  not supported.
   """
-  @type cluster :: GenServer.server()
+  @type cluster :: named_cluster() | pid()
 
   @typedoc """
   Registered atom name for a running cluster.
@@ -106,6 +139,21 @@ defmodule Aerospike do
   identities.
   """
   @type named_cluster :: atom()
+
+  @typedoc """
+  One active cluster node as returned by `nodes/1`.
+  """
+  @type node_info :: %{name: String.t(), host: String.t(), port: :inet.port_number()}
+
+  @typedoc "Security user metadata returned by `query_user/3` and `query_users/2`."
+  @type user_info :: User.t()
+
+  @typedoc "Security role metadata returned by `query_role/3` and `query_roles/2`."
+  @type role_info :: Role.t()
+
+  @typedoc "Security privilege metadata used by role administration APIs."
+  @type privilege :: Privilege.t()
+
   @doc """
   Starts a supervised cluster.
 
@@ -120,7 +168,9 @@ defmodule Aerospike do
   Startup validation happens synchronously at this boundary. Shape
   errors for required opts, retry/breaker knobs, TLS/connect opts, and
   auth pairs fail `start_link/1` immediately instead of surfacing later
-  from the first tend cycle or pool worker.
+  from the first tend cycle or pool worker. The `:name` remains the
+  public cluster identity for facade calls such as `get/3`, `info/3`,
+  and `Aerospike.Cluster.ready?/1`.
 
   Cluster lifecycle knobs:
 
@@ -261,6 +311,42 @@ defmodule Aerospike do
   end
 
   @doc """
+  Reads only record metadata for `key` from `cluster`.
+
+  This is the explicit single-record header helper. It reuses the same unary
+  read path as `get/3`, but requests only generation/TTL metadata and returns
+  a `%Aerospike.Record{}` with `bins: %{}` on hit.
+
+  Options:
+
+    * `:timeout` — total op-budget milliseconds for the call, shared
+      across the initial send and every retry. Default `5_000`.
+    * `:max_retries` — overrides the cluster-default retry cap for this
+      call. `0` disables retry entirely. See `Aerospike.RetryPolicy`.
+    * `:sleep_between_retries_ms` — fixed delay between retry attempts.
+    * `:replica_policy` — `:master` (all attempts against the master)
+      or `:sequence` (walk the replica list by attempt index).
+
+  Returns `{:ok, %Aerospike.Record{bins: %{}}}` on hit,
+  `{:error, %Aerospike.Error{code: :key_not_found}}` on miss, or a
+  routing atom (`:cluster_not_ready`, `:no_master`, `:unknown_node`)
+  when the cluster view cannot serve the request.
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
+  """
+  @spec get_header(cluster(), Key.key_input(), keyword()) ::
+          {:ok, Aerospike.Record.t()}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready | :no_master | :unknown_node}
+  def get_header(cluster, key, opts \\ [])
+
+  def get_header(cluster, key, opts) when is_list(opts) do
+    with {:ok, key} <- coerce_key(key) do
+      Get.execute(cluster, key, :header, opts)
+    end
+  end
+
+  @doc """
   Reads multiple `keys` from `cluster` in one batch request per target node.
 
   The result list stays in the same order as `keys`. Each list item is
@@ -288,6 +374,66 @@ defmodule Aerospike do
   def batch_get(cluster, keys, bins, opts) when is_list(keys) do
     with {:ok, keys} <- coerce_keys(keys) do
       BatchGet.execute(cluster, keys, bins, opts)
+    end
+  end
+
+  @doc """
+  Reads record headers for multiple `keys` from `cluster`.
+
+  The result list stays in the same order as `keys`. Each list item is
+  either `{:ok, %Aerospike.Record{bins: %{}}}` for a hit or an indexed
+  error for that key (`{:error, %Aerospike.Error{}}`,
+  `{:error, :no_master}`, or `{:error, :unknown_node}`).
+
+  This helper keeps the same narrow batch policy surface as `batch_get/4`:
+  only `:timeout` is currently accepted in `opts`.
+
+  Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
+  """
+  @spec batch_get_header(cluster(), [Key.key_input()], keyword()) ::
+          {:ok,
+           [
+             {:ok, Aerospike.Record.t()}
+             | {:error, Aerospike.Error.t()}
+             | {:error, :no_master | :unknown_node}
+           ]}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready}
+  def batch_get_header(cluster, keys, opts \\ [])
+
+  def batch_get_header(cluster, keys, opts) when is_list(keys) and is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys) do
+      BatchGet.execute(cluster, keys, :header, opts)
+    end
+  end
+
+  @doc """
+  Checks existence for multiple `keys` from `cluster`.
+
+  The result list stays in the same order as `keys`. Each list item is
+  either `{:ok, true}` / `{:ok, false}` for the targeted key or an
+  indexed error for that key (`{:error, %Aerospike.Error{}}`,
+  `{:error, :no_master}`, or `{:error, :unknown_node}`).
+
+  This helper keeps the same narrow batch policy surface as `batch_get/4`:
+  only `:timeout` is currently accepted in `opts`.
+
+  Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
+  """
+  @spec batch_exists(cluster(), [Key.key_input()], keyword()) ::
+          {:ok,
+           [
+             {:ok, boolean()}
+             | {:error, Aerospike.Error.t()}
+             | {:error, :no_master | :unknown_node}
+           ]}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready}
+  def batch_exists(cluster, keys, opts \\ [])
+
+  def batch_exists(cluster, keys, opts) when is_list(keys) and is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys) do
+      BatchGet.execute(cluster, keys, :exists, opts)
     end
   end
 
@@ -443,6 +589,104 @@ defmodule Aerospike do
   end
 
   @doc """
+  Sends one info command to one active cluster node and returns that node's reply.
+  """
+  @spec info(cluster(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Aerospike.Error.t()}
+  def info(cluster, command, opts \\ [])
+      when is_binary(command) and is_list(opts) do
+    Admin.info(cluster, command, opts)
+  end
+
+  @doc """
+  Returns the published active cluster nodes with their direct-connect host and port.
+  """
+  @spec nodes(cluster()) :: {:ok, [node_info()]}
+  def nodes(cluster) do
+    {:ok, Cluster.nodes(cluster)}
+  end
+
+  @doc """
+  Returns the published active cluster node-name snapshot.
+  """
+  @spec node_names(cluster()) :: {:ok, [String.t()]}
+  def node_names(cluster) do
+    {:ok, Cluster.node_names(cluster)}
+  end
+
+  @doc """
+  Returns whether internal runtime metrics are enabled for `cluster`.
+
+  Metrics are opt-in. The collector is initialized at cluster start so the
+  config rows exist early, but command, pool, and tender counters remain idle
+  until `enable_metrics/2` is called.
+  """
+  @spec metrics_enabled?(cluster()) :: boolean()
+  def metrics_enabled?(cluster) do
+    RuntimeMetrics.metrics_enabled?(cluster)
+  end
+
+  @doc """
+  Enables internal runtime metrics for `cluster`.
+
+  Supported options:
+
+    * `:reset` — boolean. When `true`, clears the existing runtime counters
+      before enabling collection.
+  """
+  @spec enable_metrics(cluster(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  def enable_metrics(cluster, opts \\ []) when is_list(opts) do
+    with :ok <- validate_enable_metrics_opts(opts) do
+      RuntimeMetrics.enable(cluster, opts)
+    end
+  end
+
+  @doc """
+  Disables internal runtime metrics for `cluster`.
+
+  Counter rows remain in place so `stats/1` still reports the last collected
+  values until metrics are re-enabled or reset.
+  """
+  @spec disable_metrics(cluster()) :: :ok | {:error, Aerospike.Error.t()}
+  def disable_metrics(cluster) do
+    RuntimeMetrics.disable(cluster)
+  end
+
+  @doc """
+  Returns the current internal runtime metrics snapshot for `cluster`.
+
+  The returned map is intentionally limited to the counters and cluster
+  metadata the runtime collector actually records today. It is not a
+  generalized exporter surface.
+  """
+  @spec stats(cluster()) :: map()
+  def stats(cluster) do
+    RuntimeMetrics.stats(cluster)
+  end
+
+  @doc """
+  Verifies that the active node pools can serve checkouts through the normal path.
+
+  This is an explicit operator action; it does not toggle metrics and it does
+  not change the pool startup mode. The current spike pools are already eager at
+  cluster start. `warm_up/2` simply proves that the active pools can hand out
+  the requested number of workers right now.
+
+  Supported options:
+
+    * `:count` — non-negative integer. `0` (default) means "up to the configured
+      pool size per active node".
+    * `:pool_checkout_timeout` — non-negative integer timeout in milliseconds
+      for each checkout probe.
+  """
+  @spec warm_up(cluster(), keyword()) :: {:ok, map()} | {:error, Aerospike.Error.t()}
+  def warm_up(cluster, opts \\ []) when is_list(opts) do
+    with :ok <- validate_warm_up_opts(opts) do
+      Cluster.warm_up(cluster, opts)
+    end
+  end
+
+  @doc """
   Creates a secondary index and returns a pollable task handle.
   """
   @spec create_index(cluster(), String.t(), String.t(), keyword()) ::
@@ -460,6 +704,42 @@ defmodule Aerospike do
   def drop_index(cluster, namespace, index_name, opts \\ [])
       when is_binary(namespace) and is_binary(index_name) and is_list(opts) do
     Admin.drop_index(cluster, namespace, index_name, opts)
+  end
+
+  @doc """
+  Lists the registered server-side UDF packages visible from one active node.
+
+  This is package lifecycle state, not record execution. Use `apply_udf/6`
+  to invoke one function against one key.
+  """
+  @spec list_udfs(cluster(), keyword()) :: {:ok, [UDF.t()]} | {:error, Aerospike.Error.t()}
+  def list_udfs(cluster, opts \\ []) when is_list(opts) do
+    Admin.list_udfs(cluster, opts)
+  end
+
+  @doc """
+  Uploads a UDF package from inline source or a readable local `.lua` path.
+
+  Returns a pollable `Aerospike.RegisterTask` once the server accepts the
+  upload. The package may still be propagating, so call `RegisterTask.wait/2`
+  before relying on it from `apply_udf/6` or background UDF jobs.
+  """
+  @spec register_udf(cluster(), String.t(), String.t(), keyword()) ::
+          {:ok, RegisterTask.t()} | {:error, Aerospike.Error.t()}
+  def register_udf(cluster, path_or_content, server_name, opts \\ [])
+      when is_binary(path_or_content) and is_binary(server_name) and is_list(opts) do
+    Admin.register_udf(cluster, path_or_content, server_name, opts)
+  end
+
+  @doc """
+  Removes a registered UDF package by server filename.
+
+  This is idempotent: removing an already-absent package still returns `:ok`.
+  """
+  @spec remove_udf(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  def remove_udf(cluster, server_name, opts \\ [])
+      when is_binary(server_name) and is_list(opts) do
+    Admin.remove_udf(cluster, server_name, opts)
   end
 
   @doc """
@@ -487,6 +767,271 @@ defmodule Aerospike do
     case query_page(cluster, query, opts) do
       {:ok, page} -> page
       {:error, %Aerospike.Error{} = err} -> raise err
+    end
+  end
+
+  @doc """
+  Truncates all records in `namespace`.
+
+  This sends one truncate info command through the shared admin seam. The
+  server then distributes the truncate across the cluster.
+
+  Options:
+
+    * `:before` — `%DateTime{}` — truncate only records whose last-update
+      time is older than the provided timestamp
+    * `:pool_checkout_timeout` — non-negative integer checkout timeout in
+      milliseconds for the one-node admin request
+  """
+  @spec truncate(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  def truncate(cluster, namespace, opts \\ [])
+
+  def truncate(cluster, namespace, set)
+      when is_binary(namespace) and is_binary(set) do
+    truncate(cluster, namespace, set, [])
+  end
+
+  def truncate(cluster, namespace, opts)
+      when is_binary(namespace) and is_list(opts) do
+    with {:ok, opts} <- validate_truncate_opts(opts, "Aerospike.truncate/3") do
+      Admin.truncate(cluster, namespace, opts)
+    end
+  end
+
+  @doc """
+  Truncates all records in `namespace` and `set`.
+
+  Like `truncate/3`, this uses the shared one-node admin info seam. The optional
+  `:before` filter is forwarded to the server as a last-update cutoff.
+
+  Options:
+
+    * `:before` — `%DateTime{}` — truncate only records whose last-update
+      time is older than the provided timestamp
+    * `:pool_checkout_timeout` — non-negative integer checkout timeout in
+      milliseconds for the one-node admin request
+  """
+  @spec truncate(cluster(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def truncate(cluster, namespace, set, opts)
+      when is_binary(namespace) and is_binary(set) and is_list(opts) do
+    with {:ok, opts} <- validate_truncate_opts(opts, "Aerospike.truncate/4") do
+      Admin.truncate(cluster, namespace, set, opts)
+    end
+  end
+
+  @doc """
+  Creates a password-authenticated security user.
+
+  This requires Aerospike Enterprise with security enabled and a cluster
+  connection authenticated as a user that holds the `user-admin` privilege.
+
+  Supported opts are:
+
+    * `:timeout`
+    * `:pool_checkout_timeout`
+  """
+  @spec create_user(cluster(), String.t(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def create_user(cluster, user_name, password, roles, opts \\ [])
+      when is_binary(user_name) and is_binary(password) and is_list(roles) and is_list(opts) do
+    with {:ok, role_names} <- validate_role_names(roles),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.create_user(cluster, user_name, password, role_names, opts)
+    end
+  end
+
+  @doc """
+  Drops a security user.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec drop_user(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  def drop_user(cluster, user_name, opts \\ [])
+      when is_binary(user_name) and is_list(opts) do
+    with {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.drop_user(cluster, user_name, opts)
+    end
+  end
+
+  @doc """
+  Changes a security user's password.
+
+  When `user_name` matches the credentials configured on `cluster`, the driver
+  uses the self-service password-change command and rotates the running
+  cluster's in-memory credentials for future reconnects. For other users it
+  uses the user-admin password-set command.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec change_password(cluster(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def change_password(cluster, user_name, password, opts \\ [])
+      when is_binary(user_name) and is_binary(password) and is_list(opts) do
+    with {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.change_password(cluster, user_name, password, opts)
+    end
+  end
+
+  @doc """
+  Grants roles to a security user.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec grant_roles(cluster(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def grant_roles(cluster, user_name, roles, opts \\ [])
+      when is_binary(user_name) and is_list(roles) and is_list(opts) do
+    with {:ok, role_names} <- validate_role_names(roles),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.grant_roles(cluster, user_name, role_names, opts)
+    end
+  end
+
+  @doc """
+  Revokes roles from a security user.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec revoke_roles(cluster(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def revoke_roles(cluster, user_name, roles, opts \\ [])
+      when is_binary(user_name) and is_list(roles) and is_list(opts) do
+    with {:ok, role_names} <- validate_role_names(roles),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.revoke_roles(cluster, user_name, role_names, opts)
+    end
+  end
+
+  @doc """
+  Queries one security user.
+
+  Returns `{:ok, nil}` when the named user does not exist.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec query_user(cluster(), String.t(), keyword()) ::
+          {:ok, user_info() | nil} | {:error, Aerospike.Error.t()}
+  def query_user(cluster, user_name, opts \\ [])
+      when is_binary(user_name) and is_list(opts) do
+    with {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.query_user(cluster, user_name, opts)
+    end
+  end
+
+  @doc """
+  Queries all security users visible to the authenticated cluster user.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec query_users(cluster(), keyword()) :: {:ok, [user_info()]} | {:error, Aerospike.Error.t()}
+  def query_users(cluster, opts \\ []) when is_list(opts) do
+    with {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.query_users(cluster, opts)
+    end
+  end
+
+  @doc """
+  Creates a security role.
+
+  This requires Aerospike Enterprise with security enabled.
+
+  Supported opts are:
+
+    * `:whitelist` — list of client address strings
+    * `:read_quota` — non-negative integer operations-per-second limit
+    * `:write_quota` — non-negative integer operations-per-second limit
+    * `:timeout`
+    * `:pool_checkout_timeout`
+  """
+  @spec create_role(cluster(), String.t(), [privilege()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def create_role(cluster, role_name, privileges, opts \\ [])
+      when is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    with {:ok, privileges} <- validate_privileges(privileges),
+         {:ok, {whitelist, read_quota, write_quota, call_opts}} <-
+           validate_create_role_opts(opts),
+         {:ok, _policy} <- Policy.security_admin(call_opts) do
+      Admin.create_role(
+        cluster,
+        role_name,
+        privileges,
+        whitelist,
+        read_quota,
+        write_quota,
+        call_opts
+      )
+    end
+  end
+
+  @doc """
+  Drops a security role.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec drop_role(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  def drop_role(cluster, role_name, opts \\ [])
+      when is_binary(role_name) and is_list(opts) do
+    with {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.drop_role(cluster, role_name, opts)
+    end
+  end
+
+  @doc """
+  Grants privileges to a security role.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec grant_privileges(cluster(), String.t(), [privilege()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def grant_privileges(cluster, role_name, privileges, opts \\ [])
+      when is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    with {:ok, privileges} <- validate_privileges(privileges),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.grant_privileges(cluster, role_name, privileges, opts)
+    end
+  end
+
+  @doc """
+  Revokes privileges from a security role.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec revoke_privileges(cluster(), String.t(), [privilege()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def revoke_privileges(cluster, role_name, privileges, opts \\ [])
+      when is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    with {:ok, privileges} <- validate_privileges(privileges),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.revoke_privileges(cluster, role_name, privileges, opts)
+    end
+  end
+
+  @doc """
+  Queries one security role.
+
+  Returns `{:ok, nil}` when the named role does not exist.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec query_role(cluster(), String.t(), keyword()) ::
+          {:ok, role_info() | nil} | {:error, Aerospike.Error.t()}
+  def query_role(cluster, role_name, opts \\ [])
+      when is_binary(role_name) and is_list(opts) do
+    with {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.query_role(cluster, role_name, opts)
+    end
+  end
+
+  @doc """
+  Queries all security roles visible to the authenticated cluster user.
+
+  This requires Aerospike Enterprise with security enabled.
+  """
+  @spec query_roles(cluster(), keyword()) :: {:ok, [role_info()]} | {:error, Aerospike.Error.t()}
+  def query_roles(cluster, opts \\ []) when is_list(opts) do
+    with {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.query_roles(cluster, opts)
     end
   end
 
@@ -525,6 +1070,36 @@ defmodule Aerospike do
   def query_udf(cluster, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
     ScanOps.query_udf(cluster, query, package, function, args, opts)
+  end
+
+  @doc """
+  Executes one record UDF against `key`.
+
+  This is a single-record command, not a background query job. It accepts the
+  same narrow write opts as the unary write family:
+
+    * `:timeout`
+    * `:max_retries`
+    * `:sleep_between_retries_ms`
+    * `:ttl`
+    * `:generation`
+    * `:txn`
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
+
+  Transport failures are not retried automatically once the request is on the
+  wire, because record UDFs may already have produced server-side effects.
+  Package lifecycle lives on `register_udf/*`, `remove_udf/*`, and `list_udfs/2`.
+  """
+  @spec apply_udf(cluster(), Key.key_input(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, term()}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready | :no_master | :unknown_node}
+  def apply_udf(cluster, key, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key) do
+      ApplyUdf.execute(cluster, key, package, function, args, opts)
+    end
   end
 
   @doc """
@@ -650,6 +1225,85 @@ defmodule Aerospike do
   end
 
   @doc """
+  Atomically adds numeric deltas in `bins` for `key`.
+
+  This is a thin unary write helper over the same routed write path as `put/4`.
+  The return shape stays aligned with the write family and does not expose
+  `operate/4` record results.
+
+  Supported write opts are:
+
+    * `:timeout`
+    * `:max_retries`
+    * `:sleep_between_retries_ms`
+    * `:ttl`
+    * `:generation` — expect generation equality when non-zero
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
+  """
+  @spec add(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+          {:ok, Aerospike.Record.metadata()}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready | :no_master | :unknown_node}
+  def add(cluster, key, bins, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      WriteOp.execute(cluster, key, :add, bins, opts)
+    end
+  end
+
+  @doc """
+  Atomically appends string suffixes in `bins` for `key`.
+
+  This stays on the unary write path and returns write metadata, not an
+  `operate/4` record payload.
+
+  Supported write opts are:
+
+    * `:timeout`
+    * `:max_retries`
+    * `:sleep_between_retries_ms`
+    * `:ttl`
+    * `:generation` — expect generation equality when non-zero
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
+  """
+  @spec append(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+          {:ok, Aerospike.Record.metadata()}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready | :no_master | :unknown_node}
+  def append(cluster, key, bins, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      WriteOp.execute(cluster, key, :append, bins, opts)
+    end
+  end
+
+  @doc """
+  Atomically prepends string prefixes in `bins` for `key`.
+
+  This stays on the unary write path and returns write metadata, not an
+  `operate/4` record payload.
+
+  Supported write opts are:
+
+    * `:timeout`
+    * `:max_retries`
+    * `:sleep_between_retries_ms`
+    * `:ttl`
+    * `:generation` — expect generation equality when non-zero
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
+  """
+  @spec prepend(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+          {:ok, Aerospike.Record.metadata()}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready | :no_master | :unknown_node}
+  def prepend(cluster, key, bins, opts \\ []) do
+    with {:ok, key} <- coerce_key(key) do
+      WriteOp.execute(cluster, key, :prepend, bins, opts)
+    end
+  end
+
+  @doc """
   Returns whether `key` exists in `cluster` without reading bins.
 
   Supported read opts are `:timeout`, `:max_retries`,
@@ -750,5 +1404,183 @@ defmodule Aerospike do
   rescue
     err in ArgumentError ->
       {:error, Error.from_result_code(:invalid_argument, message: err.message)}
+  end
+
+  defp validate_truncate_opts(opts, callsite) when is_list(opts) do
+    with :ok <- validate_truncate_opt_keys(opts, callsite),
+         {:ok, _policy} <- Policy.admin_info(Keyword.delete(opts, :before)),
+         :ok <- validate_truncate_before(opts) do
+      {:ok, opts}
+    end
+  end
+
+  defp validate_truncate_opt_keys([], _callsite), do: :ok
+
+  defp validate_truncate_opt_keys([{key, _value} | rest], callsite)
+       when key in [:before, :pool_checkout_timeout] do
+    validate_truncate_opt_keys(rest, callsite)
+  end
+
+  defp validate_truncate_opt_keys([{key, _value} | _rest], callsite) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message:
+         "#{callsite} supports only :before and :pool_checkout_timeout options, got #{inspect(key)}"
+     )}
+  end
+
+  defp validate_truncate_before(opts) do
+    case Keyword.get(opts, :before) do
+      nil ->
+        :ok
+
+      %DateTime{} ->
+        :ok
+
+      other ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: ":before must be a DateTime, got: #{inspect(other)}"
+         )}
+    end
+  end
+
+  defp validate_role_names(roles) when is_list(roles) do
+    if Enum.all?(roles, &is_binary/1) do
+      {:ok, roles}
+    else
+      {:error,
+       Error.from_result_code(:invalid_argument, message: "roles must be a list of strings")}
+    end
+  end
+
+  defp validate_privileges(privileges) when is_list(privileges) do
+    if Enum.all?(privileges, &match?(%Privilege{}, &1)) do
+      {:ok, privileges}
+    else
+      {:error,
+       Error.from_result_code(:invalid_argument,
+         message: "privileges must be a list of %Aerospike.Privilege{} structs"
+       )}
+    end
+  end
+
+  defp validate_create_role_opts(opts) when is_list(opts) do
+    supported = [:whitelist, :read_quota, :write_quota, :timeout, :pool_checkout_timeout]
+
+    with :ok <- validate_supported_opts(opts, supported, "Aerospike.create_role/4"),
+         {:ok, whitelist} <- validate_role_whitelist(opts),
+         {:ok, read_quota} <- validate_role_quota(opts, :read_quota),
+         {:ok, write_quota} <- validate_role_quota(opts, :write_quota) do
+      call_opts = Keyword.drop(opts, [:whitelist, :read_quota, :write_quota])
+      {:ok, {whitelist, read_quota, write_quota, call_opts}}
+    end
+  end
+
+  defp validate_supported_opts(opts, supported, callsite) when is_list(opts) do
+    case Enum.find(opts, fn {key, _value} -> key not in supported end) do
+      nil ->
+        :ok
+
+      {key, _value} ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message:
+             "#{callsite} supports only #{format_supported_opts(supported)} options, got #{inspect(key)}"
+         )}
+    end
+  end
+
+  defp validate_role_whitelist(opts) do
+    case Keyword.get(opts, :whitelist, []) do
+      whitelist when is_list(whitelist) ->
+        if Enum.all?(whitelist, &is_binary/1) do
+          {:ok, whitelist}
+        else
+          invalid_role_whitelist(whitelist)
+        end
+
+      other ->
+        invalid_role_whitelist(other)
+    end
+  end
+
+  defp validate_role_quota(opts, key) when key in [:read_quota, :write_quota] do
+    case Keyword.get(opts, key, 0) do
+      quota when is_integer(quota) and quota >= 0 ->
+        {:ok, quota}
+
+      other ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: ":#{key} must be a non-negative integer, got: #{inspect(other)}"
+         )}
+    end
+  end
+
+  defp format_supported_opts([opt]), do: inspect(opt)
+  defp format_supported_opts([left, right]), do: "#{inspect(left)} and #{inspect(right)}"
+
+  defp format_supported_opts(opts) when is_list(opts) do
+    {init, [last]} = Enum.split(opts, -1)
+    Enum.map_join(init, ", ", &inspect/1) <> ", and " <> inspect(last)
+  end
+
+  defp invalid_role_whitelist(value) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: ":whitelist must be a list of strings, got: #{inspect(value)}"
+     )}
+  end
+
+  defp validate_enable_metrics_opts(opts) when is_list(opts) do
+    case Enum.find(opts, fn {key, _value} -> key != :reset end) do
+      nil ->
+        validate_enable_metrics_reset(opts)
+
+      {key, _value} ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: "Aerospike.enable_metrics/2 supports only :reset option, got #{inspect(key)}"
+         )}
+    end
+  end
+
+  defp validate_enable_metrics_reset(opts) do
+    case Keyword.get(opts, :reset, false) do
+      reset when is_boolean(reset) ->
+        :ok
+
+      other ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: ":reset must be a boolean, got: #{inspect(other)}"
+         )}
+    end
+  end
+
+  defp validate_warm_up_opts(opts) when is_list(opts) do
+    with :ok <-
+           validate_supported_opts(opts, [:count, :pool_checkout_timeout], "Aerospike.warm_up/2"),
+         :ok <- validate_non_neg_opt(opts, :count),
+         :ok <- validate_non_neg_opt(opts, :pool_checkout_timeout) do
+      :ok
+    end
+  end
+
+  defp validate_non_neg_opt(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_integer(value) and value >= 0 ->
+        :ok
+
+      {:ok, value} ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: ":#{key} must be a non-negative integer, got: #{inspect(value)}"
+         )}
+    end
   end
 end

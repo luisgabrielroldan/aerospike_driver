@@ -137,6 +137,22 @@ defmodule Aerospike.Command.GetTest do
     end
   end
 
+  describe "header-only GETs" do
+    test "return a record with metadata and empty bins on hit", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, tender} = start_tender(ctx, [])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", scripted_ok_body(4, 90))
+
+      key = Key.new("test", "spike", "header_hit")
+
+      assert {:ok, %Aerospike.Record{key: ^key, bins: %{}, generation: 4, ttl: 90}} =
+               Get.execute(tender, key, :header)
+    end
+  end
+
   describe ":use_compression plumbing" do
     # The matrix of (cluster flag, node feature) that decides whether a
     # command is dispatched with `use_compression: true`. The Fake
@@ -273,6 +289,10 @@ defmodule Aerospike.Command.GetTest do
     # offset 13. Field count = 0, op count = 0. Generation, ttl, etc
     # are irrelevant for this code path.
     {:ok, header()}
+  end
+
+  defp scripted_ok_body(generation, ttl) do
+    {:ok, <<22, 0x21, 0, 0, 0, 0::8, generation::32, ttl::32, 0::32, 0::16, 0::16>>}
   end
 
   defp header do

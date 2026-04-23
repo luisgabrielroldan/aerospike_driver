@@ -10,6 +10,7 @@ defmodule Aerospike.Cluster.TenderTest do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.RetryPolicy
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 
@@ -99,6 +100,29 @@ defmodule Aerospike.Cluster.TenderTest do
       :ok = Tender.tend_now(pid)
 
       assert :ets.lookup(ctx.tables.meta, :active_nodes) == [{:active_nodes, ["A1"]}]
+    end
+  end
+
+  describe "runtime metrics" do
+    test "starts disabled and records tend-cycle topology counters when enabled", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, pid} = start_tender(ctx, "test")
+
+      refute RuntimeMetrics.metrics_enabled?(ctx.name)
+      assert :ok = RuntimeMetrics.enable(ctx.name, reset: true)
+
+      :ok = Tender.tend_now(pid)
+
+      stats = RuntimeMetrics.stats(ctx.name)
+
+      assert stats.metrics_enabled
+      assert stats.cluster.tends.total == 1
+      assert stats.cluster.tends.successful == 1
+      assert stats.cluster.nodes.added == 1
+      assert stats.cluster.partition_map_updates == 1
+      assert stats.nodes_total == 1
+      assert stats.nodes_active == 1
     end
   end
 

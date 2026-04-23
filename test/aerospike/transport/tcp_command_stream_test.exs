@@ -74,6 +74,28 @@ defmodule Aerospike.Transport.TcpCommandStreamTest do
       :ok = Tcp.close(conn)
       wait_for(server)
     end
+
+    test "treats an admin error frame as terminal without waiting for query_end", %{
+      listener: listener,
+      port: port
+    } do
+      invalid_role_frame = Message.encode(2, 2, <<0, 74, 16, 0, 0::96>>)
+
+      server =
+        spawn_server(listener, fn client ->
+          {:ok, _} = :gen_tcp.recv(client, 0, 1_000)
+          :ok = :gen_tcp.send(client, invalid_role_frame)
+          :ok = :gen_tcp.close(client)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+
+      assert {:ok, ^invalid_role_frame} =
+               Tcp.command_stream(conn, <<"req">>, 500, message_type: :admin)
+
+      :ok = Tcp.close(conn)
+      wait_for(server)
+    end
   end
 
   defp as_msg_body(info3, payload \\ <<>>) do

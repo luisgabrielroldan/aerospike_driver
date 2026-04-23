@@ -494,7 +494,7 @@ defmodule Aerospike.Transport.Tcp do
   def stream_open(%__MODULE__{} = conn, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
-    framed = maybe_compress(request, opts)
+    framed = maybe_compress(request, opts, :as_msg)
 
     metadata = %{
       node_name: conn.node_name,
@@ -543,7 +543,8 @@ defmodule Aerospike.Transport.Tcp do
   @impl true
   def command(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
       when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
-    framed = maybe_compress(request, opts)
+    message_type = Keyword.get(opts, :message_type, :as_msg)
+    framed = maybe_compress(request, opts, message_type)
     attempt = Keyword.get(opts, :attempt, 0)
 
     span_metadata = %{node_name: node_name, attempt: attempt, deadline_ms: deadline_ms}
@@ -551,21 +552,22 @@ defmodule Aerospike.Transport.Tcp do
     with :ok <- send_framed(conn, framed, span_metadata),
          {:ok, version, type, body} <- recv_framed(conn, deadline_ms, span_metadata),
          :ok <- validate_version(version),
-         :ok <- validate_command_type(type) do
-      maybe_decompress(type, body)
+         :ok <- validate_command_type(type, message_type) do
+      maybe_decompress(type, body, message_type)
     end
   end
 
   @impl true
   def command_stream(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
       when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
-    framed = maybe_compress(request, opts)
+    message_type = Keyword.get(opts, :message_type, :as_msg)
+    framed = maybe_compress(request, opts, message_type)
     attempt = Keyword.get(opts, :attempt, 0)
 
     span_metadata = %{node_name: node_name, attempt: attempt, deadline_ms: deadline_ms}
 
     case send_framed(conn, framed, span_metadata) do
-      :ok -> recv_stream_framed(conn, deadline_ms, span_metadata)
+      :ok -> recv_stream_framed(conn, deadline_ms, span_metadata, message_type)
       {:error, %Error{} = err} -> {:error, err}
     end
   end
@@ -596,9 +598,9 @@ defmodule Aerospike.Transport.Tcp do
     end)
   end
 
-  defp recv_stream_framed(conn, deadline_ms, metadata) do
+  defp recv_stream_framed(conn, deadline_ms, metadata, message_type) do
     :telemetry.span(Telemetry.command_recv_span(), metadata, fn ->
-      result = recv_stream_message(conn, deadline_ms, [])
+      result = recv_stream_message(conn, deadline_ms, [], message_type)
       stop_metadata = Map.put(metadata, :bytes, recv_bytes(result))
       {result, stop_metadata}
     end)
@@ -615,12 +617,14 @@ defmodule Aerospike.Transport.Tcp do
   # `if (def.finished())` guard. The `:zlib` writer can produce output
   # larger than its input for tiny payloads, so the threshold alone does
   # not guarantee a win.
-  defp maybe_compress(request, opts) do
+  defp maybe_compress(request, opts, :as_msg) do
     case Keyword.get(opts, :use_compression, false) do
       true -> compress_if_worthwhile(request, IO.iodata_length(request))
       false -> request
     end
   end
+
+  defp maybe_compress(request, _opts, :admin), do: request
 
   defp compress_if_worthwhile(request, uncompressed_size)
        when uncompressed_size <= @compress_threshold,
@@ -650,11 +654,14 @@ defmodule Aerospike.Transport.Tcp do
   defp validate_type(type, type), do: :ok
   defp validate_type(type, expected), do: type_mismatch_error(type, [expected])
 
-  defp validate_command_type(@type_as_msg), do: :ok
-  defp validate_command_type(@type_compressed), do: :ok
+  defp validate_command_type(@type_as_msg, :as_msg), do: :ok
+  defp validate_command_type(@type_compressed, :as_msg), do: :ok
+  defp validate_command_type(2, :admin), do: :ok
 
-  defp validate_command_type(type),
+  defp validate_command_type(type, :as_msg),
     do: type_mismatch_error(type, [@type_as_msg, @type_compressed])
+
+  defp validate_command_type(type, :admin), do: type_mismatch_error(type, [2])
 
   # For a plain AS_MSG reply the body is returned verbatim. For a
   # compressed reply (type 4, `AS_MSG_COMPRESSED`) we peel the 8-byte
@@ -663,9 +670,10 @@ defmodule Aerospike.Transport.Tcp do
   # header — the inner frame must be a plain AS_MSG (type 3, version 2).
   # Layout reference: Go `command.go:3574-3627`,
   # `multi_command.go:150-173` (see `notes.md` Finding 3).
-  defp maybe_decompress(@type_as_msg, body), do: {:ok, body}
+  defp maybe_decompress(@type_as_msg, body, :as_msg), do: {:ok, body}
+  defp maybe_decompress(2, body, :admin), do: {:ok, body}
 
-  defp maybe_decompress(@type_compressed, body) do
+  defp maybe_decompress(@type_compressed, body, :as_msg) do
     with {:ok, {uncompressed_size, compressed}} <- decode_compressed_payload(body),
          {:ok, inflated} <- safe_uncompress(compressed),
          :ok <- validate_uncompressed_size(inflated, uncompressed_size),
@@ -675,6 +683,8 @@ defmodule Aerospike.Transport.Tcp do
       {:ok, inner_body}
     end
   end
+
+  defp maybe_decompress(type, _body, :admin), do: type_mismatch_error(type, [2])
 
   defp decode_compressed_payload(body) do
     case Message.decode_compressed_payload(body) do
@@ -770,24 +780,32 @@ defmodule Aerospike.Transport.Tcp do
     end
   end
 
-  defp recv_stream_message(conn, deadline_ms, acc) do
-    with {:ok, _version, type, body} <- recv_message(conn, deadline_ms),
-         {:ok, frame_body} <- maybe_decompress(type, body) do
-      recv_stream_body(conn, deadline_ms, acc, frame_body)
+  defp recv_stream_message(conn, deadline_ms, acc, :admin) do
+    with {:ok, version, type, body} <- recv_message(conn, deadline_ms),
+         :ok <- validate_version(version),
+         :ok <- validate_command_type(type, :admin) do
+      recv_stream_body(conn, deadline_ms, acc, Message.encode(version, type, body), :admin)
     end
   end
 
-  defp recv_stream_body(conn, deadline_ms, acc, <<>>) do
-    recv_stream_message(conn, deadline_ms, acc)
+  defp recv_stream_message(conn, deadline_ms, acc, message_type) do
+    with {:ok, _version, type, body} <- recv_message(conn, deadline_ms),
+         {:ok, frame_body} <- maybe_decompress(type, body, message_type) do
+      recv_stream_body(conn, deadline_ms, acc, frame_body, message_type)
+    end
   end
 
-  defp recv_stream_body(conn, deadline_ms, acc, frame_body) do
+  defp recv_stream_body(conn, deadline_ms, acc, <<>>, message_type) do
+    recv_stream_message(conn, deadline_ms, acc, message_type)
+  end
+
+  defp recv_stream_body(conn, deadline_ms, acc, frame_body, message_type) do
     acc = [frame_body | acc]
 
-    if stream_last_frame?(frame_body) do
+    if stream_terminal_frame?(frame_body, message_type) do
       {:ok, IO.iodata_to_binary(Enum.reverse(acc))}
     else
-      recv_stream_message(conn, deadline_ms, acc)
+      recv_stream_message(conn, deadline_ms, acc, message_type)
     end
   end
 
@@ -848,6 +866,22 @@ defmodule Aerospike.Transport.Tcp do
   end
 
   def stream_last_frame?(_frame), do: false
+
+  defp stream_terminal_frame?(frame_body, :as_msg), do: stream_last_frame?(frame_body)
+
+  defp stream_terminal_frame?(frame, :admin) do
+    case Message.decode(frame) do
+      {:ok, {_version, 2, body}} ->
+        case body do
+          <<_::8, 0, _::binary>> -> false
+          <<_::8, _result_code, _::binary>> -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
 
   defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_reason(reason), do: inspect(reason)
@@ -925,7 +959,7 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
   def handle_call({:read, deadline_ms}, _from, %__MODULE__{} = state) do
     case recv_stream_frame(state, deadline_ms) do
       {:ok, frame} ->
-        if stream_last_frame?(frame) do
+        if Tcp.stream_last_frame?(frame) do
           {:stop, :normal, :done, state}
         else
           {:reply, {:ok, frame}, state}
@@ -1077,13 +1111,6 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
 
   defp validate_inner_type(@type_as_msg), do: :ok
   defp validate_inner_type(type), do: {:error, unexpected_type_error(type)}
-
-  defp stream_last_frame?(frame) do
-    case Message.decode(frame) do
-      {:ok, {_version, _type, body}} -> Tcp.stream_last_frame?(body)
-      {:error, _reason} -> false
-    end
-  end
 
   defp transport_error(:recv, :timeout) do
     %Error{code: :timeout, message: "transport timed out"}

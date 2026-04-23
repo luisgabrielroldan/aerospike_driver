@@ -17,6 +17,8 @@ defmodule Aerospike.MixProject do
     "test/integration/node_kill_test.exs",
     "test/integration/operate_cdt_test.exs",
     "test/integration/stream_transport_test.exs",
+    "test/integration/udf_apply_test.exs",
+    "test/integration/udf_lifecycle_test.exs",
     "test/integration/write_family_test.exs"
   ]
   @cluster_integration_files [
@@ -26,6 +28,7 @@ defmodule Aerospike.MixProject do
   @enterprise_integration_files [
     "test/integration/auth_test.exs",
     "test/integration/operator_surface_smoke_test.exs",
+    "test/integration/security_admin_test.exs",
     "test/integration/tls_test.exs",
     "test/integration/txn_test.exs"
   ]

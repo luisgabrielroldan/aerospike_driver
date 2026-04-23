@@ -66,6 +66,7 @@ defmodule Aerospike.Cluster.Tender do
   alias Aerospike.Cluster.TableOwner
   alias Aerospike.Telemetry
   alias Aerospike.Cluster.TendHistogram
+  alias Aerospike.RuntimeMetrics
 
   @default_tend_interval_ms 1_000
   @default_failure_threshold 5
@@ -385,6 +386,22 @@ defmodule Aerospike.Cluster.Tender do
     GenServer.call(server, :transport)
   end
 
+  @doc false
+  @spec auth_credentials(GenServer.server()) :: %{
+          user: String.t() | nil,
+          password: String.t() | nil
+        }
+  def auth_credentials(server) do
+    GenServer.call(server, :auth_credentials)
+  end
+
+  @doc false
+  @spec rotate_auth_credentials(GenServer.server(), String.t(), String.t()) :: :ok
+  def rotate_auth_credentials(server, user, password)
+      when is_binary(user) and is_binary(password) do
+    GenServer.call(server, {:rotate_auth_credentials, user, password})
+  end
+
   @impl GenServer
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
@@ -418,12 +435,19 @@ defmodule Aerospike.Cluster.Tender do
     :ok = PartitionMapWriter.publish_retry_policy(writer, retry_opts)
     :ok = PartitionMapWriter.publish_active_nodes(writer, [])
 
+    :ok =
+      RuntimeMetrics.init(name,
+        pool_size: pool_size,
+        tend_interval_ms: Keyword.get(opts, :tend_interval_ms, @default_tend_interval_ms)
+      )
+
     user = Keyword.get(opts, :user)
     password = Keyword.get(opts, :password)
 
     validate_auth_pair!(user, password)
 
     state = %{
+      name: name,
       transport: transport,
       connect_opts: Keyword.get(opts, :connect_opts, []),
       seeds: seeds,
@@ -542,6 +566,14 @@ defmodule Aerospike.Cluster.Tender do
     {:reply, state.transport, state}
   end
 
+  def handle_call(:auth_credentials, _from, state) do
+    {:reply, %{user: state.user, password: state.password}, state}
+  end
+
+  def handle_call({:rotate_auth_credentials, user, password}, _from, state) do
+    {:reply, :ok, %{state | user: user, password: password}}
+  end
+
   def handle_call(:nodes_status, _from, state) do
     snapshot =
       Map.new(state.nodes, fn {name, entry} ->
@@ -580,18 +612,28 @@ defmodule Aerospike.Cluster.Tender do
   ## Tend cycle
 
   defp run_tend(state) do
-    :telemetry.span(Telemetry.tend_cycle_span(), %{}, fn ->
+    try do
       new_state =
-        %{state | peers_refresh_needed?: false}
-        |> bootstrap_if_needed()
-        |> refresh_nodes()
-        |> maybe_discover_peers()
-        |> maybe_refresh_partition_maps()
-        |> publish_active_nodes()
-        |> recompute_ready()
+        :telemetry.span(Telemetry.tend_cycle_span(), %{}, fn ->
+          next_state =
+            %{state | peers_refresh_needed?: false}
+            |> bootstrap_if_needed()
+            |> refresh_nodes()
+            |> maybe_discover_peers()
+            |> maybe_refresh_partition_maps()
+            |> publish_active_nodes()
+            |> recompute_ready()
 
-      {new_state, %{}}
-    end)
+          {next_state, %{}}
+        end)
+
+      RuntimeMetrics.record_tend(state.name, :ok)
+      new_state
+    catch
+      kind, reason ->
+        RuntimeMetrics.record_tend(state.name, :error)
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    end
   end
 
   # Calls `discover_peers/1` only when any event this cycle flagged that a
@@ -730,6 +772,7 @@ defmodule Aerospike.Cluster.Tender do
         }
 
         emit_transition(node.name, :unknown, :active, reason)
+        RuntimeMetrics.record_node_added(state.name, node.name)
 
         %{
           state
@@ -985,6 +1028,7 @@ defmodule Aerospike.Cluster.Tender do
         ClusterNode.close(state.transport, entry.node.conn)
         PartitionMapWriter.delete_node_gen(state.writer, name)
         PartitionMapWriter.drop_node(state.writer, name)
+        RuntimeMetrics.record_node_removed(state.name, name)
         emit_transition(name, :inactive, :unknown, :dropped)
         %{state | nodes: nodes}
     end
@@ -1184,6 +1228,7 @@ defmodule Aerospike.Cluster.Tender do
     state = register_replicas_success(state, entry.node.name)
 
     if applied? do
+      RuntimeMetrics.record_partition_map_update(state.name)
       mark_partition_map_applied(state, entry.node.name, entry.node.generation_seen)
     else
       state
@@ -1241,6 +1286,7 @@ defmodule Aerospike.Cluster.Tender do
         connect_opts: pool_connect_opts(state, node.session),
         pool_size: state.pool_size,
         counters: counters,
+        cluster_name: state.name,
         features: node.features
       ]
       |> maybe_put_pool_opt(:idle_timeout_ms, state.idle_timeout_ms)

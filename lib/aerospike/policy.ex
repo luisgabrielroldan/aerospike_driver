@@ -83,6 +83,18 @@ defmodule Aerospike.Policy do
     @type t :: %__MODULE__{pool_checkout_timeout: non_neg_integer()}
   end
 
+  defmodule SecurityAdmin do
+    @moduledoc false
+
+    @enforce_keys [:timeout, :pool_checkout_timeout]
+    defstruct [:timeout, :pool_checkout_timeout]
+
+    @type t :: %__MODULE__{
+            timeout: non_neg_integer(),
+            pool_checkout_timeout: non_neg_integer()
+          }
+  end
+
   defmodule ScanQueryRuntime do
     @moduledoc false
 
@@ -120,6 +132,13 @@ defmodule Aerospike.Policy do
 
   @spec admin_checkout_timeout(AdminInfo.t()) :: non_neg_integer()
   def admin_checkout_timeout(%AdminInfo{pool_checkout_timeout: timeout}), do: timeout
+
+  @spec security_admin_timeout(SecurityAdmin.t()) :: non_neg_integer()
+  def security_admin_timeout(%SecurityAdmin{timeout: timeout}), do: timeout
+
+  @spec security_admin_checkout_timeout(SecurityAdmin.t()) :: non_neg_integer()
+  def security_admin_checkout_timeout(%SecurityAdmin{pool_checkout_timeout: timeout}),
+    do: timeout
 
   @spec batch_read(keyword()) :: {:ok, BatchRead.t()} | {:error, Error.t()}
   def batch_read(opts) when is_list(opts) do
@@ -193,6 +212,35 @@ defmodule Aerospike.Policy do
     end
   end
 
+  @spec security_admin(keyword()) :: {:ok, SecurityAdmin.t()} | {:error, Error.t()}
+  def security_admin(opts) when is_list(opts) do
+    case Enum.find(opts, &invalid_security_admin_opt?/1) do
+      nil ->
+        with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
+             {:ok, checkout_timeout} <-
+               fetch_non_neg_integer(
+                 opts,
+                 :pool_checkout_timeout,
+                 @default_pool_checkout_timeout
+               ) do
+          {:ok, %SecurityAdmin{timeout: timeout, pool_checkout_timeout: checkout_timeout}}
+        end
+
+      {:timeout, _value} ->
+        invalid_argument("security admin commands expect :timeout to be a non-negative integer")
+
+      {:pool_checkout_timeout, _value} ->
+        invalid_argument(
+          "security admin commands expect :pool_checkout_timeout to be a non-negative integer"
+        )
+
+      {key, _value} ->
+        invalid_argument(
+          "security admin commands support only :timeout and :pool_checkout_timeout options, got #{inspect(key)}"
+        )
+    end
+  end
+
   @spec scan_query_runtime(keyword()) :: {:ok, ScanQueryRuntime.t()} | {:error, Error.t()}
   def scan_query_runtime(opts) when is_list(opts) do
     with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
@@ -217,6 +265,14 @@ defmodule Aerospike.Policy do
     do: not (is_integer(timeout) and timeout >= 0)
 
   defp invalid_batch_read_opt?({_key, _value}), do: true
+
+  defp invalid_security_admin_opt?({:timeout, timeout}),
+    do: not (is_integer(timeout) and timeout >= 0)
+
+  defp invalid_security_admin_opt?({:pool_checkout_timeout, timeout}),
+    do: not (is_integer(timeout) and timeout >= 0)
+
+  defp invalid_security_admin_opt?({_key, _value}), do: true
 
   defp disable_retries(base_retry) do
     %{base_retry | max_retries: 0, sleep_between_retries_ms: 0}

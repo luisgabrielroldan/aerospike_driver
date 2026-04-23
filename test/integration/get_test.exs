@@ -49,6 +49,19 @@ defmodule Aerospike.Integration.GetTest do
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
   end
 
+  test "GET_HEADER returns metadata with empty bins for an existing record", %{cluster: cluster} do
+    user_key = "spike_header_#{System.unique_integer([:positive])}"
+    key = Key.new(@namespace, "spike", user_key)
+
+    assert {:ok, %{generation: 1}} = Aerospike.put(cluster, key, %{"name" => "header-only"})
+
+    assert {:ok, %Aerospike.Record{key: ^key, generation: generation, ttl: ttl, bins: %{}}} =
+             Aerospike.get_header(cluster, key)
+
+    assert generation >= 1
+    assert ttl >= 0
+  end
+
   defp probe_aerospike!(host, port) do
     case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
       {:ok, sock} ->

@@ -266,7 +266,12 @@ defmodule Aerospike.Command.BatchCommand do
   defp run_node_request(executor, command, ctx, %NodeRequest{} = node_request) do
     callbacks = %{
       route_unit: fn %NodeRequest{node_name: node_name}, _attempt -> {:ok, node_name} end,
-      run_transport: fn %NodeRequest{} = request, transport, conn, remaining, command_opts ->
+      run_transport: fn %NodeRequest{} = request,
+                        _node_name,
+                        transport,
+                        conn,
+                        remaining,
+                        command_opts ->
         run_transport(command, transport, conn, request, remaining, command_opts)
       end,
       progress_retry: fn reroute_kind, %NodeRequest{} = request, next_attempt, _last_result ->

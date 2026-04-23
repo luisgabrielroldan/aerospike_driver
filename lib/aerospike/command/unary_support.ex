@@ -4,6 +4,7 @@ defmodule Aerospike.Command.UnarySupport do
   alias Aerospike.Cluster
   alias Aerospike.Error
   alias Aerospike.Runtime.Executor
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Key
   alias Aerospike.Policy
   alias Aerospike.Protocol.Response
@@ -27,14 +28,20 @@ defmodule Aerospike.Command.UnarySupport do
         command_input
       ) do
     runtime = runtime_ctx(tender)
+    start_mono = System.monotonic_time()
 
-    UnaryCommand.run(command, executor(runtime, policy), %{
-      tender: runtime.tender,
-      tables: runtime.tables,
-      transport: runtime.transport,
-      route_key: route_key,
-      command_input: command_input
-    })
+    result =
+      UnaryCommand.run(command, executor(runtime, policy), %{
+        tender: runtime.tender,
+        tables: runtime.tables,
+        transport: runtime.transport,
+        route_key: route_key,
+        command_input: command_input,
+        metrics_cluster: runtime.tender
+      })
+
+    RuntimeMetrics.record_command(runtime.tender, command.name, start_mono, result)
+    result
   end
 
   @spec read_policy(GenServer.server(), keyword()) ::

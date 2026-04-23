@@ -4,26 +4,262 @@ defmodule Aerospike.Command.Admin do
   alias Aerospike.Error
   alias Aerospike.Cluster
   alias Aerospike.IndexTask
+  alias Aerospike.Privilege
+  alias Aerospike.RegisterTask
+  alias Aerospike.Role
+  alias Aerospike.User
+  alias Aerospike.UDF
   alias Aerospike.Cluster.NodePool
   alias Aerospike.Policy
+  alias Aerospike.Protocol.Admin, as: AdminProtocol
   alias Aerospike.Protocol.Filter, as: FilterCodec
+  alias Aerospike.Protocol.Login
+  alias Aerospike.Protocol.Message
   alias Aerospike.Cluster.Tender
 
   @sindex_modern_min {8, 1, 0, 0}
 
+  @spec info(GenServer.server(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Error.t()}
+  def info(cluster, command, opts)
+      when is_binary(command) and is_list(opts) do
+    with {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      {:ok, Map.get(response, command, "")}
+    end
+  end
+
+  @doc false
+  @spec info_node(GenServer.server(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Error.t()}
+  def info_node(cluster, node_name, command, opts)
+      when is_binary(node_name) and is_binary(command) and is_list(opts) do
+    with {:ok, policy} <- Policy.admin_info(opts),
+         :ok <- validate_target_node(cluster, node_name),
+         {:ok, handle} <- fetch_node_handle(cluster, node_name),
+         {:ok, response} <-
+           checkout_info(node_name, handle, Tender.transport(cluster), [command], policy) do
+      {:ok, Map.get(response, command, "")}
+    end
+  end
+
+  @spec list_udfs(GenServer.server(), keyword()) :: {:ok, [UDF.t()]} | {:error, Error.t()}
+  def list_udfs(cluster, opts) when is_list(opts) do
+    command = "udf-list"
+
+    with {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      response
+      |> Map.get(command, "")
+      |> parse_udf_inventory()
+    end
+  end
+
+  @spec register_udf(GenServer.server(), String.t(), String.t(), keyword()) ::
+          {:ok, RegisterTask.t()} | {:error, Error.t()}
+  def register_udf(cluster, path_or_content, server_name, opts)
+      when is_binary(path_or_content) and is_binary(server_name) and is_list(opts) do
+    with {:ok, content} <- read_udf_content(path_or_content),
+         {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         command <- build_register_udf_command(content, server_name),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      parse_register_udf_response(response, command, cluster, server_name)
+    end
+  end
+
+  @spec remove_udf(GenServer.server(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def remove_udf(cluster, server_name, opts)
+      when is_binary(server_name) and is_list(opts) do
+    command = "udf-remove:filename=#{server_name};"
+
+    with {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      parse_remove_udf_response(response, command)
+    end
+  end
+
+  @spec truncate(GenServer.server(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def truncate(cluster, namespace, opts)
+      when is_binary(namespace) and is_list(opts) do
+    with {:ok, policy} <- Policy.admin_info(Keyword.delete(opts, :before)),
+         {:ok, command} <- build_truncate_command(namespace, nil, opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      parse_truncate_response(response, command)
+    end
+  end
+
+  @spec truncate(GenServer.server(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def truncate(cluster, namespace, set, opts)
+      when is_binary(namespace) and is_binary(set) and is_list(opts) do
+    with {:ok, policy} <- Policy.admin_info(Keyword.delete(opts, :before)),
+         {:ok, command} <- build_truncate_command(namespace, set, opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      parse_truncate_response(response, command)
+    end
+  end
+
+  @spec create_user(GenServer.server(), String.t(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def create_user(cluster, user_name, password, roles, opts)
+      when is_binary(user_name) and is_binary(password) and is_list(roles) and is_list(opts) do
+    wire = AdminProtocol.encode_create_user(user_name, Login.hash_password(password), roles)
+    execute_security_command(cluster, wire, opts)
+  end
+
+  @spec drop_user(GenServer.server(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def drop_user(cluster, user_name, opts)
+      when is_binary(user_name) and is_list(opts) do
+    execute_security_command(cluster, AdminProtocol.encode_drop_user(user_name), opts)
+  end
+
+  @spec change_password(GenServer.server(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def change_password(cluster, user_name, password, opts)
+      when is_binary(user_name) and is_binary(password) and is_list(opts) do
+    new_credential = Login.hash_password(password)
+    %{user: auth_user, password: current_password} = Tender.auth_credentials(cluster)
+
+    {wire, rotate?} =
+      case {auth_user, current_password} do
+        {^user_name, current_password} when is_binary(current_password) ->
+          old_credential = Login.hash_password(current_password)
+          {AdminProtocol.encode_change_password(user_name, old_credential, new_credential), true}
+
+        _ ->
+          {AdminProtocol.encode_set_password(user_name, new_credential), false}
+      end
+
+    case execute_security_command(cluster, wire, opts) do
+      :ok ->
+        if rotate? do
+          :ok = Tender.rotate_auth_credentials(cluster, user_name, password)
+        end
+
+        :ok
+
+      {:error, %Error{} = error} ->
+        {:error, error}
+    end
+  end
+
+  @spec grant_roles(GenServer.server(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def grant_roles(cluster, user_name, roles, opts)
+      when is_binary(user_name) and is_list(roles) and is_list(opts) do
+    execute_security_command(cluster, AdminProtocol.encode_grant_roles(user_name, roles), opts)
+  end
+
+  @spec revoke_roles(GenServer.server(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def revoke_roles(cluster, user_name, roles, opts)
+      when is_binary(user_name) and is_list(roles) and is_list(opts) do
+    execute_security_command(cluster, AdminProtocol.encode_revoke_roles(user_name, roles), opts)
+  end
+
+  @spec query_user(GenServer.server(), String.t(), keyword()) ::
+          {:ok, User.t() | nil} | {:error, Error.t()}
+  def query_user(cluster, user_name, opts)
+      when is_binary(user_name) and is_list(opts) do
+    case execute_user_query(cluster, AdminProtocol.encode_query_users(user_name), opts) do
+      {:ok, []} -> {:ok, nil}
+      {:ok, [user | _]} -> {:ok, user}
+      {:error, %Error{} = error} -> {:error, error}
+    end
+  end
+
+  @spec query_users(GenServer.server(), keyword()) :: {:ok, [User.t()]} | {:error, Error.t()}
+  def query_users(cluster, opts) when is_list(opts) do
+    execute_user_query(cluster, AdminProtocol.encode_query_users(), opts)
+  end
+
+  @spec create_role(
+          GenServer.server(),
+          String.t(),
+          [Privilege.t()],
+          [String.t()],
+          non_neg_integer(),
+          non_neg_integer(),
+          keyword()
+        ) ::
+          :ok | {:error, Error.t()}
+  def create_role(cluster, role_name, privileges, whitelist, read_quota, write_quota, opts)
+      when is_binary(role_name) and is_list(privileges) and is_list(whitelist) and
+             is_integer(read_quota) and read_quota >= 0 and is_integer(write_quota) and
+             write_quota >= 0 and is_list(opts) do
+    case AdminProtocol.encode_create_role(
+           role_name,
+           privileges,
+           whitelist,
+           read_quota,
+           write_quota
+         ) do
+      {:ok, wire} -> execute_security_command(cluster, wire, opts)
+      {:error, reason} -> protocol_error(reason)
+    end
+  end
+
+  @spec drop_role(GenServer.server(), String.t(), keyword()) :: :ok | {:error, Error.t()}
+  def drop_role(cluster, role_name, opts)
+      when is_binary(role_name) and is_list(opts) do
+    execute_security_command(cluster, AdminProtocol.encode_drop_role(role_name), opts)
+  end
+
+  @spec grant_privileges(GenServer.server(), String.t(), [Privilege.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def grant_privileges(cluster, role_name, privileges, opts)
+      when is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    case AdminProtocol.encode_grant_privileges(role_name, privileges) do
+      {:ok, wire} -> execute_security_command(cluster, wire, opts)
+      {:error, reason} -> protocol_error(reason)
+    end
+  end
+
+  @spec revoke_privileges(GenServer.server(), String.t(), [Privilege.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def revoke_privileges(cluster, role_name, privileges, opts)
+      when is_binary(role_name) and is_list(privileges) and is_list(opts) do
+    case AdminProtocol.encode_revoke_privileges(role_name, privileges) do
+      {:ok, wire} -> execute_security_command(cluster, wire, opts)
+      {:error, reason} -> protocol_error(reason)
+    end
+  end
+
+  @spec query_role(GenServer.server(), String.t(), keyword()) ::
+          {:ok, Role.t() | nil} | {:error, Error.t()}
+  def query_role(cluster, role_name, opts)
+      when is_binary(role_name) and is_list(opts) do
+    case execute_role_query(cluster, AdminProtocol.encode_query_roles(role_name), opts) do
+      {:ok, []} -> {:ok, nil}
+      {:ok, [role | _]} -> {:ok, role}
+      {:error, %Error{} = error} -> {:error, error}
+    end
+  end
+
+  @spec query_roles(GenServer.server(), keyword()) :: {:ok, [Role.t()]} | {:error, Error.t()}
+  def query_roles(cluster, opts) when is_list(opts) do
+    execute_role_query(cluster, AdminProtocol.encode_query_roles(), opts)
+  end
+
   @spec create_index(GenServer.server(), String.t(), String.t(), keyword()) ::
           {:ok, IndexTask.t()} | {:error, Error.t()}
-  def create_index(tender, namespace, set, opts)
+  def create_index(cluster, namespace, set, opts)
       when is_binary(namespace) and is_binary(set) and is_list(opts) do
     with {:ok, policy} <- Policy.admin_info(opts),
-         {:ok, node_name, handle, transport} <- pick_node(tender),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
          {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
          {:ok, command} <- build_create_index_command(server_version, namespace, set, opts),
          {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
       parse_create_index_response(
         response,
         command,
-        tender,
+        cluster,
         namespace,
         Keyword.fetch!(opts, :name)
       )
@@ -32,10 +268,10 @@ defmodule Aerospike.Command.Admin do
 
   @spec index_status(GenServer.server(), String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, Error.t()}
-  def index_status(tender, namespace, index_name, opts)
+  def index_status(cluster, namespace, index_name, opts)
       when is_binary(namespace) and is_binary(index_name) and is_list(opts) do
     with {:ok, policy} <- Policy.admin_info(opts),
-         {:ok, node_name, handle, transport} <- pick_node(tender),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
          {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
          command <- build_index_status_command(server_version, namespace, index_name),
          {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
@@ -45,10 +281,10 @@ defmodule Aerospike.Command.Admin do
 
   @spec drop_index(GenServer.server(), String.t(), String.t(), keyword()) ::
           :ok | {:error, Error.t()}
-  def drop_index(tender, namespace, index_name, opts)
+  def drop_index(cluster, namespace, index_name, opts)
       when is_binary(namespace) and is_binary(index_name) and is_list(opts) do
     with {:ok, policy} <- Policy.admin_info(opts),
-         {:ok, node_name, handle, transport} <- pick_node(tender),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
          {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
          command <- build_drop_index_command(server_version, namespace, index_name),
          {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
@@ -83,6 +319,55 @@ defmodule Aerospike.Command.Admin do
       end,
       Policy.admin_checkout_timeout(policy)
     )
+  end
+
+  defp checkout_admin(node_name, handle, transport, wire, %Policy.SecurityAdmin{} = policy) do
+    NodePool.checkout!(
+      node_name,
+      handle.pool,
+      fn conn ->
+        {transport.command(conn, wire, Policy.security_admin_timeout(policy),
+           message_type: :admin
+         ), conn}
+      end,
+      Policy.security_admin_checkout_timeout(policy)
+    )
+  end
+
+  defp checkout_admin_stream(node_name, handle, transport, wire, %Policy.SecurityAdmin{} = policy) do
+    NodePool.checkout!(
+      node_name,
+      handle.pool,
+      fn conn ->
+        {transport.command_stream(conn, wire, Policy.security_admin_timeout(policy),
+           message_type: :admin
+         ), conn}
+      end,
+      Policy.security_admin_checkout_timeout(policy)
+    )
+  end
+
+  defp validate_target_node(cluster, node_name) do
+    cond do
+      not cluster_ready?(cluster) ->
+        {:error, Error.from_result_code(:cluster_not_ready)}
+
+      not Cluster.active_node?(cluster, node_name) ->
+        {:error, Error.from_result_code(:invalid_node, node: node_name)}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp fetch_node_handle(cluster, node_name) do
+    case Tender.node_handle(cluster, node_name) do
+      {:ok, handle} ->
+        {:ok, handle}
+
+      {:error, :unknown_node} ->
+        {:error, Error.from_result_code(:invalid_node, node: node_name)}
+    end
   end
 
   defp fetch_server_version(node_name, handle, transport, %Policy.AdminInfo{} = policy) do
@@ -176,6 +461,21 @@ defmodule Aerospike.Command.Admin do
     command <> ";indextype=" <> collection_type_string(collection)
   end
 
+  defp build_truncate_command(namespace, nil, opts) when is_binary(namespace) do
+    with {:ok, before} <- truncate_before(opts) do
+      command = "truncate-namespace:namespace=#{namespace}"
+      {:ok, maybe_append_truncate_before(command, before)}
+    end
+  end
+
+  defp build_truncate_command(namespace, set, opts)
+       when is_binary(namespace) and is_binary(set) do
+    with {:ok, before} <- truncate_before(opts) do
+      command = "truncate:namespace=#{namespace};set=#{set}"
+      {:ok, maybe_append_truncate_before(command, before)}
+    end
+  end
+
   defp append_index_source(command, server_version, bin, type) do
     if modern_sindex_command?(server_version) do
       command <> ";bin=#{bin};type=" <> index_type_string(type)
@@ -213,6 +513,37 @@ defmodule Aerospike.Command.Admin do
          Error.from_result_code(:server_error,
            message: "unexpected info response: #{inspect(body)}"
          )}
+    end
+  end
+
+  defp parse_truncate_response(response, command) do
+    body = Map.get(response, command, "")
+
+    if String.downcase(String.trim(body)) == "ok" do
+      :ok
+    else
+      {:error,
+       Error.from_result_code(:server_error,
+         message: "unexpected info response: #{inspect(body)}"
+       )}
+    end
+  end
+
+  @doc false
+  @spec parse_udf_inventory(String.t()) :: {:ok, [UDF.t()]} | {:error, Error.t()}
+  def parse_udf_inventory(response) when is_binary(response) do
+    response
+    |> String.split(";", trim: true)
+    |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
+      case parse_udf_entry(entry) do
+        {:ok, %UDF{} = udf} -> {:cont, {:ok, [udf | acc]}}
+        :skip -> {:cont, {:ok, acc}}
+        {:error, %Error{} = err} -> {:halt, {:error, err}}
+      end
+    end)
+    |> case do
+      {:ok, udfs} -> {:ok, Enum.reverse(udfs)}
+      {:error, %Error{} = err} -> {:error, err}
     end
   end
 
@@ -280,6 +611,253 @@ defmodule Aerospike.Command.Admin do
         {:error,
          Error.from_result_code(:parameter_error, message: "missing required option :#{key}")}
     end
+  end
+
+  defp build_register_udf_command(content, server_name)
+       when is_binary(content) and is_binary(server_name) do
+    encoded = Base.encode64(content)
+
+    "udf-put:filename=#{server_name};content=#{encoded};content-len=#{byte_size(encoded)};udf-type=LUA;"
+  end
+
+  defp parse_udf_entry(entry) when is_binary(entry) do
+    trimmed = String.trim(entry)
+
+    if trimmed == "" do
+      :skip
+    else
+      with {:ok, pairs} <- parse_udf_pairs(trimmed),
+           {:ok, filename} <- fetch_udf_value(pairs, "filename", trimmed),
+           {:ok, hash} <- fetch_udf_value(pairs, "hash", trimmed),
+           {:ok, language} <- fetch_udf_value(pairs, "type", trimmed) do
+        {:ok, %UDF{filename: filename, hash: hash, language: language}}
+      end
+    end
+  end
+
+  defp parse_udf_pairs(entry) when is_binary(entry) do
+    entry
+    |> String.split(",", trim: true)
+    |> Enum.reduce_while({:ok, %{}}, fn pair, {:ok, acc} ->
+      case String.split(pair, "=", parts: 2) do
+        [key, value] when key != "" and value != "" ->
+          {:cont, {:ok, Map.put(acc, key, value)}}
+
+        _ ->
+          {:halt, {:error, malformed_udf_inventory(entry)}}
+      end
+    end)
+  end
+
+  defp fetch_udf_value(pairs, key, entry)
+       when is_map(pairs) and is_binary(key) and is_binary(entry) do
+    case Map.fetch(pairs, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, malformed_udf_inventory(entry, "missing #{key}")}
+    end
+  end
+
+  defp malformed_udf_inventory(entry, detail \\ "invalid key/value pair") do
+    Error.from_result_code(:server_error,
+      message: "invalid udf-list entry (#{detail}): #{inspect(entry)}"
+    )
+  end
+
+  defp read_udf_content(path_or_content) do
+    cond do
+      File.regular?(path_or_content) ->
+        case File.read(path_or_content) do
+          {:ok, content} ->
+            {:ok, content}
+
+          {:error, reason} ->
+            {:error,
+             Error.from_result_code(:invalid_argument,
+               message:
+                 "unable to read UDF source #{inspect(path_or_content)}: #{:file.format_error(reason)}"
+             )}
+        end
+
+      String.ends_with?(path_or_content, ".lua") ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: "unable to read UDF source #{inspect(path_or_content)}: no such file"
+         )}
+
+      true ->
+        {:ok, path_or_content}
+    end
+  end
+
+  defp parse_register_udf_response(response, command, cluster, server_name) do
+    body = Map.get(response, command, "")
+
+    if String.downcase(String.trim(body)) == "ok" do
+      {:ok, %RegisterTask{conn: cluster, package_name: server_name}}
+    else
+      {:error,
+       Error.from_result_code(:server_error,
+         message: "unexpected info response: #{inspect(body)}"
+       )}
+    end
+  end
+
+  defp parse_remove_udf_response(response, command) do
+    body = Map.get(response, command, "")
+    lowered = String.downcase(String.trim(body))
+
+    cond do
+      lowered == "ok" ->
+        :ok
+
+      String.contains?(lowered, "not found") ->
+        :ok
+
+      true ->
+        {:error,
+         Error.from_result_code(:server_error,
+           message: "unexpected info response: #{inspect(body)}"
+         )}
+    end
+  end
+
+  defp execute_security_command(cluster, wire, opts) when is_binary(wire) and is_list(opts) do
+    with {:ok, policy} <- Policy.security_admin(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, body} <- checkout_admin(node_name, handle, transport, wire, policy) do
+      parse_admin_result(body)
+    end
+  end
+
+  defp execute_user_query(cluster, wire, opts) when is_binary(wire) and is_list(opts) do
+    with {:ok, policy} <- Policy.security_admin(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, frames} <- checkout_admin_stream(node_name, handle, transport, wire, policy),
+         {:ok, bodies} <- decode_admin_frames(frames) do
+      decode_user_bodies(bodies)
+    end
+  end
+
+  defp execute_role_query(cluster, wire, opts) when is_binary(wire) and is_list(opts) do
+    with {:ok, policy} <- Policy.security_admin(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, frames} <- checkout_admin_stream(node_name, handle, transport, wire, policy),
+         {:ok, bodies} <- decode_admin_frames(frames) do
+      decode_role_bodies(bodies)
+    end
+  end
+
+  defp parse_admin_result(body) when is_binary(body) do
+    case AdminProtocol.decode_admin_body(body) do
+      {:ok, %{result_code: :ok}} ->
+        :ok
+
+      {:ok, %{result_code: result_code}} ->
+        {:error, Error.from_result_code(result_code)}
+
+      {:error, reason} ->
+        protocol_error(reason)
+    end
+  end
+
+  defp decode_admin_frames(frames) when is_binary(frames) do
+    decode_admin_frames(frames, [])
+  end
+
+  defp decode_admin_frames(<<>>, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp decode_admin_frames(<<header::binary-size(8), rest::binary>>, acc) do
+    with {:ok, {version, type, length}} <- Message.decode_header(header),
+         true <- version == 2 or {:error, :unexpected_admin_proto_version},
+         true <- type == 2 or {:error, :unexpected_admin_message_type},
+         true <- byte_size(rest) >= length or {:error, :truncated_admin_frame} do
+      <<body::binary-size(length), tail::binary>> = rest
+      decode_admin_frames(tail, [body | acc])
+    else
+      {:error, _} = error -> error
+      false -> {:error, :invalid_admin_frame}
+    end
+  end
+
+  defp decode_admin_frames(_other, _acc), do: {:error, :truncated_admin_header}
+
+  defp decode_user_bodies(bodies) when is_list(bodies) do
+    bodies
+    |> Enum.reduce_while({:ok, []}, fn body, {:ok, acc} ->
+      case AdminProtocol.decode_users_block(body) do
+        {:ok, %{done?: done?, users: users}} ->
+          acc = acc ++ users
+
+          if done? do
+            {:halt, {:ok, acc}}
+          else
+            {:cont, {:ok, acc}}
+          end
+
+        {:error, {:result_code, result_code, _raw}} ->
+          {:halt, {:error, Error.from_result_code(result_code)}}
+
+        {:error, reason} ->
+          {:halt, protocol_error(reason)}
+      end
+    end)
+  end
+
+  defp decode_role_bodies(bodies) when is_list(bodies) do
+    bodies
+    |> Enum.reduce_while({:ok, []}, fn body, {:ok, acc} ->
+      case AdminProtocol.decode_roles_block(body) do
+        {:ok, %{done?: done?, roles: roles}} ->
+          acc = acc ++ roles
+
+          if done? do
+            {:halt, {:ok, acc}}
+          else
+            {:cont, {:ok, acc}}
+          end
+
+        {:error, {:result_code, result_code, _raw}} ->
+          {:halt, {:error, Error.from_result_code(result_code)}}
+
+        {:error, reason} ->
+          {:halt, protocol_error(reason)}
+      end
+    end)
+  end
+
+  defp protocol_error(reason) do
+    {:error,
+     Error.from_result_code(:server_error,
+       message: "invalid admin response: #{inspect(reason)}"
+     )}
+  end
+
+  defp truncate_before(opts) do
+    case Keyword.get(opts, :before) do
+      nil ->
+        {:ok, nil}
+
+      %DateTime{} = before ->
+        {:ok, before}
+
+      other ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: ":before must be a DateTime, got: #{inspect(other)}"
+         )}
+    end
+  end
+
+  defp maybe_append_truncate_before(command, nil), do: command
+
+  defp maybe_append_truncate_before(command, %DateTime{} = before) do
+    command <> ";lut=#{DateTime.to_unix(before, :nanosecond)}"
+  end
+
+  defp cluster_ready?(cluster) do
+    Cluster.ready?(cluster)
+  catch
+    :exit, _ -> false
   end
 
   defp index_type_string(:numeric), do: "NUMERIC"

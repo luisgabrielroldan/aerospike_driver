@@ -67,7 +67,32 @@ defmodule Aerospike.Integration.WriteFamilyTest do
     assert {:ok, %{generation: mutation_generation}} =
              Aerospike.put(cluster, mutation_key, %{"count" => 1})
 
-    assert {:ok, %Record{bins: %{"count" => 4}, generation: operate_generation, ttl: ttl}} =
+    assert {:ok, %{generation: add_generation}} =
+             Aerospike.add(cluster, mutation_key, %{count: 3})
+
+    assert add_generation > mutation_generation
+
+    assert {:ok, %Record{bins: %{"count" => 4}}} = Aerospike.get(cluster, mutation_key)
+
+    string_key = Key.new(@namespace, @set, "#{user_key}-string")
+
+    assert {:ok, %{generation: string_generation}} =
+             Aerospike.put(cluster, string_key, %{"greeting" => "world"})
+
+    assert {:ok, %{generation: append_generation}} =
+             Aerospike.append(cluster, string_key, %{greeting: "!"})
+
+    assert append_generation > string_generation
+
+    assert {:ok, %{generation: prepend_generation}} =
+             Aerospike.prepend(cluster, string_key, %{greeting: "hello "})
+
+    assert prepend_generation > append_generation
+
+    assert {:ok, %Record{bins: %{"greeting" => "hello world!"}}} =
+             Aerospike.get(cluster, string_key)
+
+    assert {:ok, %Record{bins: %{"count" => 7}, generation: operate_generation, ttl: ttl}} =
              Aerospike.operate(
                cluster,
                mutation_key,
@@ -82,7 +107,8 @@ defmodule Aerospike.Integration.WriteFamilyTest do
     assert operate_generation > mutation_generation
     assert ttl > 0
 
-    assert {:ok, %Record{bins: %{"count" => 4}}} = Aerospike.get(cluster, mutation_key)
+    assert operate_generation > add_generation
+    assert {:ok, %Record{bins: %{"count" => 7}}} = Aerospike.get(cluster, mutation_key)
 
     assert {:ok, true} = Aerospike.delete(cluster, key)
     assert {:ok, false} = Aerospike.exists(cluster, key)

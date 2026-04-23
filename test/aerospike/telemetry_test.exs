@@ -1,7 +1,10 @@
 defmodule Aerospike.TelemetryTest do
   use ExUnit.Case, async: false
 
+  alias Aerospike.Error
   alias Aerospike.Telemetry
+  alias Aerospike.RuntimeMetrics
+  alias Aerospike.Cluster.TableOwner
 
   @span_events [
     {:pool_checkout_span, [:aerospike, :pool, :checkout],
@@ -113,6 +116,49 @@ defmodule Aerospike.TelemetryTest do
 
         :telemetry.detach(handler_id)
       end
+    end
+  end
+
+  describe "runtime metrics collector" do
+    test "tracks cluster-level command and retry counters" do
+      name = :"metrics_#{System.unique_integer([:positive])}"
+      {:ok, owner} = TableOwner.start_link(name: name)
+
+      on_exit(fn ->
+        if Process.alive?(owner) do
+          GenServer.stop(owner)
+        end
+      end)
+
+      :ok = RuntimeMetrics.init(name, pool_size: 4, tend_interval_ms: 1_500)
+      refute RuntimeMetrics.metrics_enabled?(name)
+
+      assert :ok = RuntimeMetrics.enable(name, reset: true)
+
+      start_mono = System.monotonic_time() - System.convert_time_unit(5, :millisecond, :native)
+      :ok = RuntimeMetrics.record_command(name, Aerospike.Command.Get, start_mono, {:ok, :value})
+
+      :ok =
+        RuntimeMetrics.record_command(
+          name,
+          Aerospike.Command.Batch,
+          start_mono,
+          {:error, Error.from_result_code(:timeout)}
+        )
+
+      :ok = RuntimeMetrics.record_retry_attempt(name, :transport)
+
+      stats = RuntimeMetrics.stats(name)
+
+      assert stats.metrics_enabled
+      assert stats.cluster.config == %{pool_size: 4, tend_interval_ms: 1_500}
+      assert stats.commands_total == 2
+      assert stats.commands_ok == 1
+      assert stats.commands_error == 1
+      assert stats.cluster.retries.transport == 1
+      assert stats.cluster.commands.by_command[Aerospike.Command.Get].ok == 1
+      assert stats.cluster.commands.by_command[Aerospike.Command.Batch].error == 1
+      assert stats.cluster.commands.errors_by_code[:timeout] == 1
     end
   end
 

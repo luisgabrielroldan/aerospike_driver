@@ -64,14 +64,16 @@ defmodule Aerospike.Cluster.NodeTransport do
       clients (`_COMPRESS_THRESHOLD = 128`). Implementations that ignore
       compression (e.g. `Aerospike.Transport.Fake`) must still accept the
       option without error. Defaults to `false`.
+    * `:message_type` — `:as_msg` (default) or `:admin`. `:admin` is the
+      Aerospike admin-protocol reply type used by security commands.
   """
-  @type command_opts :: [use_compression: boolean()]
+  @type command_opts :: [use_compression: boolean(), message_type: :as_msg | :admin]
 
   @doc """
-  Sends a pre-encoded AS_MSG request and returns the full reply bytes.
+  Sends a pre-encoded request and returns the full reply bytes.
 
   The request is expected to be complete wire bytes (proto header + body)
-  produced by `Aerospike.Protocol.Message` / `Aerospike.Protocol.AsmMsg`.
+  produced by `Aerospike.Protocol.Message` plus the relevant protocol codec.
   The reply is the full response payload; framing/parsing is the caller's
   responsibility.
 
@@ -99,8 +101,9 @@ defmodule Aerospike.Cluster.NodeTransport do
               {:ok, binary()} | {:error, Aerospike.Error.t()}
 
   @doc """
-  Sends a pre-encoded AS_MSG request and reads a multi-frame reply through
-  the terminal marker, returning the concatenated AS_MSG bodies.
+  Sends a pre-encoded request and reads a multi-frame reply through
+  the terminal marker, returning the concatenated reply frames or bodies
+  appropriate for `opts[:message_type]`.
 
   This seam exists for batch-style requests that still complete as one
   bounded command but arrive as multiple protocol frames. Unary callers

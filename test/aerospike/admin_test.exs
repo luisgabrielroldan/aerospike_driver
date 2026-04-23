@@ -7,8 +7,14 @@ defmodule Aerospike.Command.AdminTest do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.IndexTask
+  alias Aerospike.Privilege
+  alias Aerospike.Protocol.Message
+  alias Aerospike.RegisterTask
+  alias Aerospike.Role
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
+  alias Aerospike.UDF
+  alias Aerospike.User
 
   @namespace "test"
 
@@ -115,6 +121,188 @@ defmodule Aerospike.Command.AdminTest do
     assert message =~ "pool_checkout_timeout must be a non-negative integer"
   end
 
+  test "info/3 returns one info reply from an active node", %{conn: conn, fake: fake} do
+    Fake.script_info(fake, "A1", ["namespaces"], %{"namespaces" => "test"})
+
+    assert {:ok, "test"} = Aerospike.info(conn, "namespaces")
+  end
+
+  test "list_udfs/2 parses inventory entries and skips blank fragments", %{conn: conn, fake: fake} do
+    Fake.script_info(fake, "A1", ["udf-list"], %{
+      "udf-list" =>
+        "filename=alpha.lua,hash=abc123,type=LUA; ;filename=beta.lua,hash=def456,type=LUA;"
+    })
+
+    assert {:ok,
+            [
+              %UDF{filename: "alpha.lua", hash: "abc123", language: "LUA"},
+              %UDF{filename: "beta.lua", hash: "def456", language: "LUA"}
+            ]} = Aerospike.Command.Admin.list_udfs(conn, [])
+  end
+
+  test "register_udf/4 uploads inline source and returns a register task", %{
+    conn: conn,
+    fake: fake
+  } do
+    source = "function echo(rec, arg) return arg end"
+    server_name = "echo.lua"
+    encoded = Base.encode64(source)
+
+    command =
+      "udf-put:filename=#{server_name};content=#{encoded};content-len=#{byte_size(encoded)};udf-type=LUA;"
+
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert {:ok, %RegisterTask{conn: ^conn, package_name: ^server_name}} =
+             Aerospike.Command.Admin.register_udf(conn, source, server_name, [])
+  end
+
+  test "remove_udf/3 treats missing packages as an idempotent success", %{conn: conn, fake: fake} do
+    command = "udf-remove:filename=missing.lua;"
+    Fake.script_info(fake, "A1", [command], %{command => "error=file not found"})
+
+    assert :ok = Aerospike.Command.Admin.remove_udf(conn, "missing.lua", [])
+  end
+
+  test "truncate/3 builds the namespace command and appends lut when provided", %{
+    conn: conn,
+    fake: fake
+  } do
+    before = DateTime.from_unix!(1_700_000_000, :second)
+    command = "truncate-namespace:namespace=test;lut=#{DateTime.to_unix(before, :nanosecond)}"
+
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert :ok = Aerospike.Command.Admin.truncate(conn, @namespace, before: before)
+  end
+
+  test "truncate/4 builds the set command and returns :ok", %{conn: conn, fake: fake} do
+    command = "truncate:namespace=test;set=users"
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert :ok = Aerospike.Command.Admin.truncate(conn, @namespace, "users", [])
+  end
+
+  test "query_users/2 decodes streamed admin frames into user structs", %{conn: conn, fake: fake} do
+    user_block =
+      admin_frame(
+        0,
+        9,
+        [
+          admin_field(0, "ada"),
+          counted_string_field(10, ["read", "read-write"]),
+          info_field(16, [1, 2]),
+          info_field(17, [3]),
+          uint32_field(18, 4)
+        ]
+      )
+
+    done_block = admin_frame(50, 9, [])
+    Fake.script_command_stream(fake, "A1", {:ok, user_block <> done_block})
+
+    assert {:ok,
+            [
+              %User{
+                name: "ada",
+                roles: ["read", "read-write"],
+                read_info: [1, 2],
+                write_info: [3],
+                connections_in_use: 4
+              }
+            ]} = Aerospike.Command.Admin.query_users(conn, [])
+  end
+
+  test "create_role sends scoped privileges, whitelist, and quotas", %{conn: conn, fake: fake} do
+    privilege = %Privilege{code: :read_write, namespace: "test", set: "demo"}
+    ok_body = <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>
+
+    Fake.script_command(fake, "A1", {:ok, ok_body})
+
+    assert :ok =
+             Aerospike.Command.Admin.create_role(
+               conn,
+               "analyst",
+               [privilege],
+               ["10.0.0.0/24"],
+               25,
+               50,
+               []
+             )
+  end
+
+  test "query_roles reads streamed admin frames into role structs", %{conn: conn, fake: fake} do
+    role_block =
+      admin_frame(
+        0,
+        16,
+        [
+          admin_field(11, "analyst"),
+          admin_field(12, <<1, 11, 4, "test", 4, "demo">>),
+          admin_field(13, "10.0.0.1,10.0.0.0/24"),
+          uint32_field(14, 25),
+          uint32_field(15, 50)
+        ]
+      )
+
+    done_block = admin_frame(50, 16, [])
+    Fake.script_command_stream(fake, "A1", {:ok, role_block <> done_block})
+
+    assert {:ok,
+            [
+              %Role{
+                name: "analyst",
+                privileges: [%Privilege{code: :read_write, namespace: "test", set: "demo"}],
+                whitelist: ["10.0.0.1", "10.0.0.0/24"],
+                read_quota: 25,
+                write_quota: 50
+              }
+            ]} = Aerospike.Command.Admin.query_roles(conn, [])
+  end
+
+  test "query_role returns nil when the server streams no matching records", %{
+    conn: conn,
+    fake: fake
+  } do
+    done_block = admin_frame(50, 16, [])
+    Fake.script_command_stream(fake, "A1", {:ok, done_block})
+
+    assert {:ok, nil} = Aerospike.Command.Admin.query_role(conn, "missing-role", [])
+  end
+
+  test "query_roles translates malformed privilege payloads into protocol errors", %{
+    conn: conn,
+    fake: fake
+  } do
+    malformed_role =
+      admin_frame(
+        0,
+        16,
+        [
+          admin_field(11, "analyst"),
+          admin_field(12, <<1, 11, 4, "tes">>)
+        ]
+      )
+
+    done_block = admin_frame(50, 16, [])
+    Fake.script_command_stream(fake, "A1", {:ok, malformed_role <> done_block})
+
+    assert {:error, %Error{code: :server_error, message: message}} =
+             Aerospike.Command.Admin.query_roles(conn, [])
+
+    assert message == "invalid admin response: :truncated_privilege_scope"
+  end
+
+  test "change_password/4 uses self-change semantics and rotates tender credentials", %{
+    conn: conn,
+    fake: fake
+  } do
+    Fake.script_command(fake, "A1", {:ok, <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>})
+    :ok = Tender.rotate_auth_credentials(conn, "alice", "old-secret")
+
+    assert :ok = Aerospike.Command.Admin.change_password(conn, "alice", "new-secret", [])
+    assert %{user: "alice", password: "new-secret"} = Tender.auth_credentials(conn)
+  end
+
   defp script_single_node_cluster(fake) do
     Fake.script_info(fake, "A1", ["node", "features"], %{"node" => "A1", "features" => ""})
 
@@ -147,5 +335,28 @@ defmodule Aerospike.Command.AdminTest do
         1_000 -> :ok
       end
     end
+  end
+
+  defp admin_frame(result_code, command, fields) when is_list(fields) do
+    body = IO.iodata_to_binary([<<0, result_code, command, length(fields), 0::96>>, fields])
+    Message.encode(2, 2, body)
+  end
+
+  defp admin_field(id, value) when is_integer(id) and is_binary(value) do
+    <<byte_size(value) + 1::32-big, id::8, value::binary>>
+  end
+
+  defp counted_string_field(id, values) when is_integer(id) and is_list(values) do
+    payload = [<<length(values)::8>>, Enum.map(values, &<<byte_size(&1)::8, &1::binary>>)]
+    admin_field(id, IO.iodata_to_binary(payload))
+  end
+
+  defp info_field(id, values) when is_integer(id) and is_list(values) do
+    payload = [<<length(values)::8>>, Enum.map(values, &<<&1::32-big>>)]
+    admin_field(id, IO.iodata_to_binary(payload))
+  end
+
+  defp uint32_field(id, value) when is_integer(id) and is_integer(value) do
+    admin_field(id, <<value::32-big>>)
   end
 end

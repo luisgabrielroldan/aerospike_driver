@@ -102,7 +102,7 @@ defmodule Aerospike.Command.UnaryCommand do
           attempt
         )
       end,
-      run_transport: fn :unary, transport, conn, remaining, command_opts ->
+      run_transport: fn :unary, _node_name, transport, conn, remaining, command_opts ->
         run_transport(
           command,
           transport,

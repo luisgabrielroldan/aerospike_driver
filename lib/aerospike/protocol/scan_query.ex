@@ -10,7 +10,7 @@ defmodule Aerospike.Protocol.ScanQuery do
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Message
-  alias Aerospike.Protocol.MessagePack
+  alias Aerospike.Protocol.UdfArgs
   alias Aerospike.Query
   alias Aerospike.Scan
 
@@ -299,7 +299,7 @@ defmodule Aerospike.Protocol.ScanQuery do
   defp background_query_operations(udf: _udf), do: []
 
   defp query_udf_fields(udf: {mode, package, function, args}) do
-    arglist = MessagePack.pack!(Enum.map(args, &pack_udf_arg/1))
+    arglist = UdfArgs.pack!(args)
 
     [
       Field.udf_op(mode),
@@ -307,19 +307,6 @@ defmodule Aerospike.Protocol.ScanQuery do
       Field.udf_function(function),
       Field.udf_arglist(arglist)
     ]
-  end
-
-  defp pack_udf_arg(s) when is_binary(s), do: {:particle_string, s}
-  defp pack_udf_arg({:bytes, b}) when is_binary(b), do: {:bytes, b}
-  defp pack_udf_arg(nil), do: nil
-  defp pack_udf_arg(true), do: true
-  defp pack_udf_arg(false), do: false
-  defp pack_udf_arg(n) when is_integer(n), do: n
-  defp pack_udf_arg(f) when is_float(f), do: f
-  defp pack_udf_arg(list) when is_list(list), do: Enum.map(list, &pack_udf_arg/1)
-
-  defp pack_udf_arg(%{} = map) do
-    Map.new(map, fn {k, v} -> {pack_udf_arg(k), pack_udf_arg(v)} end)
   end
 
   defp maybe_append_table(fields, nil), do: fields

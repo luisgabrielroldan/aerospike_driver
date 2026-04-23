@@ -3,7 +3,9 @@ defmodule Aerospike.Cluster.NodePoolTest do
 
   alias Aerospike.Cluster.NodeCounters
   alias Aerospike.Cluster.NodePool
+  alias Aerospike.Cluster.TableOwner
   alias Aerospike.Error
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Telemetry
   alias Aerospike.Transport.Fake
 
@@ -27,6 +29,7 @@ defmodule Aerospike.Cluster.NodePoolTest do
         node_name: @node_name
       ]
       |> maybe_put(opts, :counters)
+      |> maybe_put(opts, :cluster_name)
 
     pool_opts =
       [
@@ -217,6 +220,37 @@ defmodule Aerospike.Cluster.NodePoolTest do
   end
 
   describe "warm-up" do
+    test "warm_up/3 checks out the requested number of workers serially" do
+      %{pool: pool} = start_pool!(2)
+
+      assert {:ok, 2} = NodePool.warm_up(pool, 2, 1_000)
+    end
+
+    test "warm_up/3 returns the first checkout failure with warmed count" do
+      %{pool: pool} = start_pool!(1)
+
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          NodePool.checkout!(
+            pool,
+            fn conn ->
+              send(parent, :holding)
+              Process.sleep(150)
+              {:ok, conn}
+            end,
+            1_000
+          )
+        end)
+
+      assert_receive :holding, 500
+
+      assert {:error, %Error{code: :pool_timeout}, 0} = NodePool.warm_up(pool, 1, 20)
+
+      assert :ok = Task.await(task, 1_000)
+    end
+
     test "opens pool_size workers eagerly before any checkout" do
       pool_size = 3
       %{fake: fake} = start_pool!(pool_size)
@@ -342,6 +376,43 @@ defmodule Aerospike.Cluster.NodePoolTest do
       deadline = System.monotonic_time(:millisecond) + 500
 
       :ok = wait_for_connect_count(fake, pool_size + 1, deadline)
+    end
+  end
+
+  describe "runtime metrics" do
+    test "records connection lifecycle counters when a cluster name is present" do
+      cluster_name = :"node_pool_metrics_#{System.unique_integer([:positive])}"
+      {:ok, owner} = TableOwner.start_link(name: cluster_name)
+
+      on_exit(fn ->
+        if Process.alive?(owner) do
+          GenServer.stop(owner)
+        end
+      end)
+
+      :ok = RuntimeMetrics.init(cluster_name, pool_size: 1, tend_interval_ms: 1_000)
+      assert :ok = RuntimeMetrics.enable(cluster_name, reset: true)
+
+      %{pool: pool} = start_pool!(1, cluster_name: cluster_name)
+
+      assert RuntimeMetrics.stats(cluster_name).cluster.connections.attempts == 1
+      assert RuntimeMetrics.stats(cluster_name).cluster.connections.successful == 1
+
+      assert {:ok, :closed} =
+               NodePool.checkout!(
+                 pool,
+                 fn _conn ->
+                   {{:ok, :closed}, {:close, :failure}}
+                 end,
+                 1_000
+               )
+
+      assert wait_until(fn ->
+               stats = RuntimeMetrics.stats(cluster_name)
+
+               stats.cluster.connections.dead_dropped == 1 and
+                 stats.cluster.connections.closed == 1
+             end)
     end
   end
 
@@ -489,6 +560,19 @@ defmodule Aerospike.Cluster.NodePoolTest do
       end
     end
   end
+
+  defp wait_until(fun, attempts \\ 20)
+
+  defp wait_until(fun, attempts) when attempts > 0 do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      wait_until(fun, attempts - 1)
+    end
+  end
+
+  defp wait_until(_fun, 0), do: false
 
   describe "node counters" do
     test "in_flight is incremented on checkout and decremented on checkin", ctx do

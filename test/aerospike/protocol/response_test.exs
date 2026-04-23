@@ -114,6 +114,23 @@ defmodule Aerospike.Protocol.ResponseTest do
     end
   end
 
+  describe "parse_udf_response/1" do
+    test "extracts the SUCCESS bin as the returned value" do
+      {:ok, operation} = AsmMsg.Operation.write("SUCCESS", "hello")
+      msg = %AsmMsg{result_code: 0, operations: [operation]}
+
+      assert {:ok, "hello"} = Response.parse_udf_response(msg)
+    end
+
+    test "turns runtime failures into udf_bad_response errors" do
+      {:ok, operation} = AsmMsg.Operation.write("FAILURE", "boom")
+      msg = %AsmMsg{result_code: 100, operations: [operation]}
+
+      assert {:error, %Error{code: :udf_bad_response, message: "boom"}} =
+               Response.parse_udf_response(msg)
+    end
+  end
+
   describe "extract_record_version/1" do
     test "returns the record version when present" do
       msg = %AsmMsg{

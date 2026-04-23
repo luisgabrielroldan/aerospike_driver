@@ -15,6 +15,7 @@ defmodule Aerospike.Runtime.Executor do
   alias Aerospike.RetryPolicy
   alias Aerospike.Telemetry
   alias Aerospike.Cluster.Tender
+  alias Aerospike.RuntimeMetrics
 
   defmodule Outcome do
     @moduledoc false
@@ -60,6 +61,7 @@ defmodule Aerospike.Runtime.Executor do
           (String.t(), pid(), (term() -> {term(), NodePool.checkin_value()}), integer() -> term())
   @type transport_fun ::
           (unit :: term(),
+           node_name :: String.t(),
            transport :: module(),
            conn :: term(),
            deadline_ms :: non_neg_integer(),
@@ -86,7 +88,8 @@ defmodule Aerospike.Runtime.Executor do
           required(:transport) => module(),
           optional(:resolve_handle) => resolve_handle_fun(),
           optional(:allow_dispatch) => allow_dispatch_fun(),
-          optional(:checkout) => checkout_fun()
+          optional(:checkout) => checkout_fun(),
+          optional(:metrics_cluster) => atom() | pid()
         }
 
   @type attempt_result :: {node_name :: String.t() | nil, result :: term()}
@@ -252,14 +255,18 @@ defmodule Aerospike.Runtime.Executor do
     remaining = max(remaining_budget(executor), 0)
     command_opts = [use_compression: handle.use_compression, attempt: attempt]
 
-    checkout.(
-      node_name,
-      handle.pool,
-      fn conn ->
-        callbacks.run_transport.(unit, ctx.transport, conn, remaining, command_opts)
-      end,
-      remaining
-    )
+    result =
+      checkout.(
+        node_name,
+        handle.pool,
+        fn conn ->
+          callbacks.run_transport.(unit, node_name, ctx.transport, conn, remaining, command_opts)
+        end,
+        remaining
+      )
+
+    maybe_record_checkout_failure(ctx, node_name, result)
+    result
   end
 
   defp handle_classification(
@@ -366,6 +373,8 @@ defmodule Aerospike.Runtime.Executor do
           remaining_budget(executor)
         )
 
+        maybe_record_retry_attempt(ctx, classification)
+
         progress.outcomes ++
           Enum.flat_map(progress.units, fn next_unit ->
             attempt_loop(executor, next_unit, ctx, callbacks, next_attempt, result)
@@ -382,6 +391,30 @@ defmodule Aerospike.Runtime.Executor do
   defp outcome(unit, node_name, attempt, result) do
     %Outcome{unit: unit, node_name: node_name, attempt: attempt, result: result}
   end
+
+  defp maybe_record_checkout_failure(
+         %{metrics_cluster: cluster},
+         node_name,
+         {:error, %Error{code: :pool_timeout}}
+       ) do
+    RuntimeMetrics.record_checkout_failure(cluster, node_name, :pool_timeout)
+  end
+
+  defp maybe_record_checkout_failure(
+         %{metrics_cluster: cluster},
+         node_name,
+         {:error, %Error{code: :network_error}}
+       ) do
+    RuntimeMetrics.record_checkout_failure(cluster, node_name, :network_error)
+  end
+
+  defp maybe_record_checkout_failure(_ctx, _node_name, _result), do: :ok
+
+  defp maybe_record_retry_attempt(%{metrics_cluster: cluster}, classification) do
+    RuntimeMetrics.record_retry_attempt(cluster, classification)
+  end
+
+  defp maybe_record_retry_attempt(_ctx, _classification), do: :ok
 
   defp maybe_sleep(%{sleep_between_retries_ms: 0}), do: :ok
 

@@ -111,7 +111,28 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
     cluster = start_cluster!()
     wait_for_ready!(cluster, @ready_timeout_ms)
 
+    refute Aerospike.metrics_enabled?(cluster)
+    assert :ok = Aerospike.enable_metrics(cluster, reset: true)
+    assert Aerospike.metrics_enabled?(cluster)
+
+    assert %{
+             metrics_enabled: true,
+             cluster: %{config: %{pool_size: @pool_size}}
+           } = Aerospike.stats(cluster)
+
     [node_name] = Cluster.active_nodes(cluster)
+
+    assert {:ok,
+            %{
+              status: :ok,
+              requested_per_node: @pool_size,
+              total_requested: @pool_size,
+              total_warmed: @pool_size,
+              nodes_total: 1,
+              nodes_ok: 1,
+              nodes_partial: 0,
+              nodes_error: 0
+            }} = Aerospike.warm_up(cluster)
 
     # 100 serial GETs against missing keys exercise the pool-checkout
     # span, command send/recv spans, and keep the tend cycle ticking
@@ -212,6 +233,10 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
 
     assert {:error, %Error{code: :key_not_found}} =
              Aerospike.get(cluster, key, :all, timeout: 2_000)
+
+    stats = Aerospike.stats(cluster)
+    assert stats.commands_total >= 101
+    assert stats.commands_error >= 101
   end
 
   # --- helpers -----------------------------------------------------------

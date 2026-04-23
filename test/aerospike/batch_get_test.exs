@@ -137,6 +137,97 @@ defmodule Aerospike.Command.BatchGetTest do
     end
   end
 
+  describe "batch_get_header/3" do
+    test "returns header-only records with empty bins in caller order", ctx do
+      script_two_node_cluster(ctx.fake)
+      {:ok, tender} = start_tender(ctx)
+      :ok = Tender.tend_now(tender)
+
+      key_a = key_for_partition("test", "batch", 100, "a")
+      key_b = key_for_partition("test", "batch", 101, "b")
+      key_c = key_for_partition("test", "batch", 100, "c")
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "A1",
+        {:ok,
+         IO.iodata_to_binary([batch_row(0, 0, 3, 120, []), batch_row(2, 2, 0, 0, []), last_row()])}
+      )
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "B1",
+        {:ok, IO.iodata_to_binary([batch_row(1, 0, 5, 240, []), last_row()])}
+      )
+
+      assert {:ok, [first, second, third]} =
+               Aerospike.batch_get_header(tender, [key_a, key_b, key_c])
+
+      assert {:ok, %{key: ^key_a, bins: %{}, generation: 3, ttl: 120}} = first
+      assert {:ok, %{key: ^key_b, bins: %{}, generation: 5, ttl: 240}} = second
+      assert {:error, %Error{code: :key_not_found}} = third
+    end
+  end
+
+  describe "batch_exists/3" do
+    test "returns booleans for hits and misses while preserving caller order", ctx do
+      script_two_node_cluster(ctx.fake)
+      {:ok, tender} = start_tender(ctx)
+      :ok = Tender.tend_now(tender)
+
+      key_a = key_for_partition("test", "batch", 100, "a")
+      key_b = key_for_partition("test", "batch", 101, "b")
+      key_c = key_for_partition("test", "batch", 100, "c")
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "A1",
+        {:ok,
+         IO.iodata_to_binary([batch_row(0, 0, 3, 120, []), batch_row(2, 2, 0, 0, []), last_row()])}
+      )
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "B1",
+        {:ok, IO.iodata_to_binary([batch_row(1, 0, 5, 240, []), last_row()])}
+      )
+
+      assert {:ok, [first, second, third]} = Aerospike.batch_exists(tender, [key_a, key_b, key_c])
+
+      assert {:ok, true} = first
+      assert {:ok, true} = second
+      assert {:ok, false} = third
+    end
+
+    test "keeps a node transport failure scoped to the affected key indices", ctx do
+      script_two_node_cluster(ctx.fake)
+      {:ok, tender} = start_tender(ctx)
+      :ok = Tender.tend_now(tender)
+
+      key_a = key_for_partition("test", "batch", 100, "a")
+      key_b = key_for_partition("test", "batch", 101, "b")
+      key_c = key_for_partition("test", "batch", 100, "c")
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "A1",
+        {:error, Error.from_result_code(:network_error)}
+      )
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "B1",
+        {:ok, IO.iodata_to_binary([batch_row(1, 0, 5, 240, []), last_row()])}
+      )
+
+      assert {:ok, [first, second, third]} = Aerospike.batch_exists(tender, [key_a, key_b, key_c])
+
+      assert {:error, %Error{code: :network_error}} = first
+      assert {:ok, true} = second
+      assert {:error, %Error{code: :network_error}} = third
+    end
+  end
+
   defp start_tender(ctx) do
     {:ok, pid} =
       Tender.start_link(

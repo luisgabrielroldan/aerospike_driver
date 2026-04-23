@@ -11,6 +11,7 @@ defmodule Aerospike.Command.Batch do
   alias Aerospike.Cluster
   alias Aerospike.Error
   alias Aerospike.Runtime.Executor
+  alias Aerospike.RuntimeMetrics
   alias Aerospike.Policy
   alias Aerospike.Protocol.Batch, as: BatchProtocol
   alias Aerospike.Protocol.Response
@@ -36,19 +37,25 @@ defmodule Aerospike.Command.Batch do
          {:ok, grouping} <- BatchRouter.group_entries(runtime_ctx(tender).tables, entries) do
       runtime = runtime_ctx(tender)
       executor = Executor.new!(policy: policy)
+      start_mono = System.monotonic_time()
 
-      BatchCommand.run(
-        command(policy),
-        executor,
-        %{entries: entries, routing_failures: grouping.routing_failures},
-        grouping.node_requests,
-        %{
-          tender: runtime.tender,
-          transport: runtime.transport,
-          max_concurrency: @default_max_concurrency,
-          reroute_request: &reroute_request(runtime.tables, &1, &2, &3)
-        }
-      )
+      result =
+        BatchCommand.run(
+          command(policy),
+          executor,
+          %{entries: entries, routing_failures: grouping.routing_failures},
+          grouping.node_requests,
+          %{
+            tender: runtime.tender,
+            transport: runtime.transport,
+            max_concurrency: @default_max_concurrency,
+            reroute_request: &reroute_request(runtime.tables, &1, &2, &3),
+            metrics_cluster: runtime.tender
+          }
+        )
+
+      RuntimeMetrics.record_command(runtime.tender, __MODULE__, start_mono, result)
+      result
     end
   end
 
