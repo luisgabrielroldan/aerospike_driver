@@ -8,16 +8,21 @@ defmodule Aerospike.Integration.IndexQueryTest do
   alias Aerospike.Query
   alias Aerospike.Cluster.Router
   alias Aerospike.Cluster.Tender
+  alias Aerospike.Test.IntegrationSupport
 
   @moduletag :integration
 
   @host "localhost"
   @port 3_000
   @namespace "test"
-
   setup do
-    probe_aerospike!(@host, @port)
-    name = :"spike_index_query_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(@host, @port)
+
+    IntegrationSupport.wait_for_cluster_ready!([{@host, @port}], @namespace, 15_000,
+      expected_size: 3
+    )
+
+    name = IntegrationSupport.unique_atom("spike_index_query")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -29,7 +34,7 @@ defmodule Aerospike.Integration.IndexQueryTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
       try do
@@ -45,9 +50,9 @@ defmodule Aerospike.Integration.IndexQueryTest do
   test "creates a temporary secondary index and queries it through the public filter builder", %{
     cluster: cluster
   } do
-    set = "idx_query_#{System.unique_integer([:positive, :monotonic])}"
-    index_name = "age_idx_#{System.unique_integer([:positive, :monotonic])}"
-    {node_name, keys} = keys_for_one_node(cluster, set, 5)
+    set = IntegrationSupport.unique_name("idx_query")
+    index_name = IntegrationSupport.unique_name("age_idx")
+    {_node_name, keys} = keys_for_one_node(cluster, set, 5)
 
     keys =
       Enum.zip(keys, 20..24)
@@ -69,30 +74,43 @@ defmodule Aerospike.Integration.IndexQueryTest do
       query =
         Query.new(@namespace, set)
         |> Query.where(Filter.range("age", 20, 24))
-        |> Query.max_records(20)
 
-      assert {:ok, records} = Aerospike.query_all(cluster, query)
+      IntegrationSupport.assert_eventually("secondary index query returns all seeded ages", fn ->
+        assert {:ok, records_stream} = Aerospike.query_stream(cluster, query)
 
-      ages =
-        records
-        |> Enum.map(& &1.bins["age"])
-        |> Enum.sort()
+        ages =
+          records_stream
+          |> Enum.to_list()
+          |> Enum.map(& &1.bins["age"])
+          |> Enum.sort()
 
-      assert ages == [20, 21, 22, 23, 24]
+        ages == [20, 21, 22, 23, 24]
+      end)
 
       paged_query =
         Query.new(@namespace, set)
         |> Query.where(Filter.range("age", 20, 24))
         |> Query.max_records(2)
 
-      assert {:ok, %Page{} = page1} = Aerospike.query_page(cluster, paged_query, node: node_name)
-      assert page1.cursor != nil
+      page1 =
+        IntegrationSupport.eventually!("query_page returns a resumable first page", fn ->
+          case Aerospike.query_page(cluster, paged_query) do
+            {:ok, %Page{cursor: cursor} = page} when not is_nil(cursor) ->
+              {:ok, page}
+
+            {:ok, %Page{done?: true}} ->
+              :retry
+
+            {:ok, %Page{cursor: nil}} ->
+              :retry
+
+            {:error, _} ->
+              :retry
+          end
+        end)
 
       assert {:ok, %Page{} = page2} =
-               Aerospike.query_page(cluster, paged_query,
-                 node: node_name,
-                 cursor: Cursor.encode(page1.cursor)
-               )
+               Aerospike.query_page(cluster, paged_query, cursor: Cursor.encode(page1.cursor))
 
       assert Enum.all?(page1.records ++ page2.records, fn record ->
                record.bins["age"] in 20..24
@@ -144,17 +162,6 @@ defmodule Aerospike.Integration.IndexQueryTest do
       {:halt, {node_name, Enum.reverse(next[node_name])}}
     else
       {:cont, next}
-    end
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). Run `docker compose up -d` first."
     end
   end
 end

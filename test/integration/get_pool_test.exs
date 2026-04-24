@@ -33,7 +33,7 @@ defmodule Aerospike.Integration.GetPoolTest do
   alias Aerospike.Cluster.NodeSupervisor
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
-  alias Aerospike.Key
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.Transport.Tcp
 
   @host "localhost"
@@ -47,9 +47,10 @@ defmodule Aerospike.Integration.GetPoolTest do
   @smoke_concurrent_tasks 100
 
   setup context do
-    probe_aerospike!(@host, @port)
+    IntegrationSupport.probe_aerospike!(@host, @port)
+    IntegrationSupport.wait_for_seed_ready!(@host, @port, @namespace, 5_000)
     pool_size = Map.get(context, :pool_size, @concurrent_pool_size)
-    name = :"spike_get_pool_cluster_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_get_pool_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -61,14 +62,10 @@ defmodule Aerospike.Integration.GetPoolTest do
         pool_size: pool_size
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     %{cluster: name, pool_size: pool_size}
@@ -81,7 +78,7 @@ defmodule Aerospike.Integration.GetPoolTest do
     assert Tender.ready?(cluster)
 
     for i <- 1..@serial_gets do
-      key = Key.new(@namespace, @set, "missing_serial_#{i}_#{System.unique_integer([:positive])}")
+      key = IntegrationSupport.unique_key(@namespace, @set, "missing_serial_#{i}")
       assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
     end
   end
@@ -93,11 +90,7 @@ defmodule Aerospike.Integration.GetPoolTest do
       for i <- 1..@concurrent_tasks do
         Task.async(fn ->
           key =
-            Key.new(
-              @namespace,
-              @set,
-              "missing_concurrent_#{i}_#{System.unique_integer([:positive])}"
-            )
+            IntegrationSupport.unique_key(@namespace, @set, "missing_concurrent_#{i}")
 
           Aerospike.get(cluster, key)
         end)
@@ -130,11 +123,7 @@ defmodule Aerospike.Integration.GetPoolTest do
       for i <- 1..@smoke_concurrent_tasks do
         Task.async(fn ->
           key =
-            Key.new(
-              @namespace,
-              @set,
-              "missing_smoke_#{i}_#{System.unique_integer([:positive])}"
-            )
+            IntegrationSupport.unique_key(@namespace, @set, "missing_smoke_#{i}")
 
           Aerospike.get(cluster, key)
         end)
@@ -157,15 +146,11 @@ defmodule Aerospike.Integration.GetPoolTest do
     # end-to-end guarantee this test needs to prove: `handle_ping/2`
     # closes a real TCP socket and `init_worker/1` opens a fresh one on
     # the next checkout.
-    name = :"spike_idle_sup_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_idle_sup")
     {:ok, sup} = NodeSupervisor.start_link(name: name)
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     idle_timeout_ms = 100
@@ -277,18 +262,6 @@ defmodule Aerospike.Integration.GetPoolTest do
           Process.sleep(20)
           wait_for_socket_closed(socket, deadline)
         end
-    end
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` first."
     end
   end
 end

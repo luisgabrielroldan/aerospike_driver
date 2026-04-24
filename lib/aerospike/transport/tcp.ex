@@ -511,7 +511,7 @@ defmodule Aerospike.Transport.Tcp do
   @impl true
   def stream_read(stream, deadline_ms)
       when is_pid(stream) and is_integer(deadline_ms) and deadline_ms >= 0 do
-    stream_call(stream, {:read, deadline_ms}, {:error, closed_stream_error()})
+    stream_call(stream, {:read, deadline_ms}, :done)
   end
 
   @impl true
@@ -899,13 +899,6 @@ defmodule Aerospike.Transport.Tcp do
       message: "failed to hand off stream socket: #{format_reason(reason)}"
     }
   end
-
-  defp closed_stream_error do
-    %Error{
-      code: :network_error,
-      message: "stream handle closed or unavailable"
-    }
-  end
 end
 
 defmodule Aerospike.Transport.Tcp.StreamWorker do
@@ -923,11 +916,12 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
   @type_compressed Message.type_compressed()
 
   @enforce_keys [:socket_mod, :socket]
-  defstruct [:socket_mod, :socket]
+  defstruct [:socket_mod, :socket, done?: false]
 
   @type t :: %__MODULE__{
           socket_mod: :gen_tcp | :ssl,
-          socket: :gen_tcp.socket() | :ssl.sslsocket()
+          socket: :gen_tcp.socket() | :ssl.sslsocket(),
+          done?: boolean()
         }
 
   @spec start_link(Tcp.t()) :: {:ok, pid()} | :ignore | {:error, any()}
@@ -952,15 +946,19 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
 
   @impl true
   def init(%Tcp{} = conn) do
-    {:ok, %__MODULE__{socket_mod: conn.socket_mod, socket: conn.socket}}
+    {:ok, %__MODULE__{socket_mod: conn.socket_mod, socket: conn.socket, done?: false}}
+  end
+
+  def handle_call({:read, _deadline_ms}, _from, %__MODULE__{done?: true} = state) do
+    {:stop, :normal, :done, state}
   end
 
   @impl true
   def handle_call({:read, deadline_ms}, _from, %__MODULE__{} = state) do
     case recv_stream_frame(state, deadline_ms) do
-      {:ok, frame} ->
-        if Tcp.stream_last_frame?(frame) do
-          {:stop, :normal, :done, state}
+      {:ok, {frame, frame_body}} ->
+        if Tcp.stream_last_frame?(frame_body) do
+          {:reply, {:ok, frame}, %{state | done?: true}}
         else
           {:reply, {:ok, frame}, state}
         end
@@ -1013,7 +1011,7 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
 
   defp decode_frame(version, @type_as_msg, body) do
     with :ok <- validate_version(version) do
-      {:ok, Message.encode(version, @type_as_msg, body)}
+      {:ok, {Message.encode(version, @type_as_msg, body), body}}
     end
   end
 
@@ -1025,7 +1023,7 @@ defmodule Aerospike.Transport.Tcp.StreamWorker do
          {:ok, {inner_version, inner_type, inner_body}} <- decode_inner_frame(inflated),
          :ok <- validate_version(inner_version),
          :ok <- validate_inner_type(inner_type) do
-      {:ok, Message.encode(inner_version, inner_type, inner_body)}
+      {:ok, {Message.encode(inner_version, inner_type, inner_body), inner_body}}
     end
   end
 

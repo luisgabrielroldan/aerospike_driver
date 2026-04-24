@@ -57,7 +57,7 @@ defmodule Aerospike.Runtime.ExecutorTest do
 
       callbacks = %{
         route_unit: fn %{node_name: node_name}, _attempt -> {:ok, node_name} end,
-        run_transport: fn unit, _transport, conn, _remaining, command_opts ->
+        run_transport: fn unit, _node_name, _transport, conn, _remaining, command_opts ->
           send(parent, {:transport, unit.node_name, command_opts})
           result = next_response(conn)
           {result, conn}
@@ -116,7 +116,7 @@ defmodule Aerospike.Runtime.ExecutorTest do
 
       callbacks = %{
         route_unit: fn :unit, _attempt -> {:ok, "A1"} end,
-        run_transport: fn :unit, _transport, _conn, _remaining, _command_opts ->
+        run_transport: fn :unit, _node_name, _transport, _conn, _remaining, _command_opts ->
           {{:no_retry, {:error, network_error("boom")}}, :conn}
         end,
         progress_retry: fn _kind, unit, _next_attempt, _last_result ->

@@ -5,7 +5,7 @@ defmodule Aerospike.Integration.UdfApplyTest do
 
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
-  alias Aerospike.Key
+  alias Aerospike.Test.IntegrationSupport
 
   @host "localhost"
   @port 3000
@@ -16,7 +16,12 @@ defmodule Aerospike.Integration.UdfApplyTest do
   @package "spike_test_udf"
 
   setup_all do
-    probe_aerospike!(@host, @port)
+    IntegrationSupport.probe_aerospike!(
+      @host,
+      @port,
+      "Run `docker compose up -d` in `aerospike_driver_spike/` first."
+    )
+
     register_fixture_udf!()
 
     on_exit(fn ->
@@ -27,7 +32,7 @@ defmodule Aerospike.Integration.UdfApplyTest do
   end
 
   setup do
-    name = :"spike_udf_apply_cluster_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_udf_apply_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -39,14 +44,10 @@ defmodule Aerospike.Integration.UdfApplyTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     %{cluster: name}
@@ -57,8 +58,7 @@ defmodule Aerospike.Integration.UdfApplyTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    user_key = "spike_udf_apply_#{System.unique_integer([:positive])}"
-    key = Key.new(@namespace, "spike", user_key)
+    key = IntegrationSupport.unique_key(@namespace, "spike", "spike_udf_apply")
 
     assert {:ok, %{generation: generation}} = Aerospike.put(cluster, key, %{"seed" => 1})
     assert generation >= 1
@@ -89,7 +89,17 @@ defmodule Aerospike.Integration.UdfApplyTest do
         raise "Failed to register #{@server_name} (status #{status}): #{output}"
     end
 
-    wait_for_udf!()
+    IntegrationSupport.assert_eventually(
+      "registered udf appears in udf-list",
+      fn ->
+        case docker(["exec", @container, "asinfo", "-v", "udf-list"]) do
+          {output, 0} -> output =~ @server_name
+          _ -> false
+        end
+      end,
+      5_000,
+      100
+    )
   end
 
   defp remove_fixture_udf do
@@ -97,47 +107,7 @@ defmodule Aerospike.Integration.UdfApplyTest do
     :ok
   end
 
-  defp wait_for_udf!(timeout_ms \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for_udf(deadline)
-  end
-
-  defp do_wait_for_udf(deadline) do
-    case docker(["exec", @container, "asinfo", "-v", "udf-list"]) do
-      {output, 0} ->
-        if output =~ @server_name do
-          :ok
-        else
-          retry_wait_for_udf(deadline)
-        end
-
-      {_output, _status} ->
-        retry_wait_for_udf(deadline)
-    end
-  end
-
-  defp retry_wait_for_udf(deadline) do
-    if System.monotonic_time(:millisecond) >= deadline do
-      raise "Timed out waiting for #{@server_name} to appear in udf-list"
-    end
-
-    Process.sleep(100)
-    do_wait_for_udf(deadline)
-  end
-
   defp docker(args) do
     System.cmd("docker", args, stderr_to_stdout: true)
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` in `aerospike_driver_spike/` first."
-    end
   end
 end

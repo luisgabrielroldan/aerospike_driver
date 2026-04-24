@@ -727,13 +727,16 @@ defmodule Aerospike.Cluster.TenderTest do
       # replicas fetch is skipped because the :inactive filter in
       # `refresh_partition_maps/1` sees A1 after the flip, and
       # peers-clear-std is skipped because peers-generation did not
-      # advance). Cycle 3 probes A1's pg/cluster-stable through
-      # `refresh_nodes/1` and fails again — because A1 is already
-      # :inactive, that single failure removes the node entirely. At that
-      # point `state.nodes == %{}` and the next tend cycle must re-run
-      # `bootstrap_seed/3` against the configured seeds. `connect_count`
-      # must advance to 2 and A1 must come back as :active with a fresh
-      # partition map applied.
+      # advance). Cycle 3 must drop A1 entirely so `state.nodes == %{}`
+      # and the next tend cycle must re-run `bootstrap_seed/3` against
+      # the configured seeds. Because `bootstrap_seeds/1` now runs every
+      # cycle for any seed not covered by an `:active` node, cycle 3's
+      # bootstrap attempt is scripted to fail at `connect` so the
+      # `:inactive` re-register branch does not fire — leaving the
+      # cycle's refresh-node failure as the trigger that drops A1.
+      # `connect_count` must advance to 3 (cycle 1 success, cycle 3
+      # failure, cycle 4 recovery) and A1 must come back as :active with
+      # a fresh partition map applied.
       script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
 
       err = %Error{code: :network_error, message: "injected"}
@@ -747,7 +750,8 @@ defmodule Aerospike.Cluster.TenderTest do
         err
       )
 
-      # Cycle 3 — A1 is :inactive; only `refresh_nodes/1` probes it.
+      # Cycle 3 — refresh fails again; because A1 is already :inactive,
+      # this single failure removes the node entirely.
       Fake.script_info_error(
         ctx.fake,
         "A1",
@@ -768,21 +772,29 @@ defmodule Aerospike.Cluster.TenderTest do
       assert %{"A1" => %{status: :inactive}} = Tender.nodes_status(pid)
       refute Tender.ready?(pid)
 
+      # Script the cycle-3 connect failure AFTER cycle 2 has run so the
+      # error is queued for the eager `bootstrap_seeds/1` call at the
+      # top of cycle 3. Without this the bootstrap would consume the
+      # `[node, features]` script intended for the cycle-4 recovery and
+      # re-register A1 as :active before the cycle's refresh failure
+      # runs.
+      Fake.script_connect(ctx.fake, "A1", {:error, err})
+
       # Cycle 3 — drop the node; state.nodes becomes empty.
       :ok = Tender.tend_now(pid)
       assert Tender.nodes_status(pid) == %{}
 
-      # Cycle 4 — `bootstrap_if_needed/1` must re-enter because
-      # state.nodes is empty. The replayed bootstrap cycle puts A1 back
-      # into :active and re-applies the partition map.
+      # Cycle 4 — `bootstrap_seeds/1` re-dials the seed because no
+      # :active node covers it. The replayed bootstrap cycle puts A1
+      # back into :active and re-applies the partition map.
       :ok = Tender.tend_now(pid)
 
       status = Tender.nodes_status(pid)
       assert %{"A1" => %{status: :active, generation_seen: 1}} = status
       assert Tender.ready?(pid)
 
-      assert Fake.connect_count(ctx.fake, "A1") == 2,
-             "seed must be re-dialled exactly once after the drop"
+      assert Fake.connect_count(ctx.fake, "A1") == 3,
+             "expected 3 connects: cycle 1 bootstrap, cycle 3 failed dial, cycle 4 recovery"
     end
 
     test "seed dial failure during recovery leaves state.nodes empty", ctx do

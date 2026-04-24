@@ -4,10 +4,9 @@ defmodule Aerospike.Integration.TxnTest do
   @moduletag :integration
   @moduletag :enterprise
 
-  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
-  alias Aerospike.Key
   alias Aerospike.Runtime.TxnOps
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.Txn
 
   @host System.get_env("AEROSPIKE_EE_HOST", "127.0.0.1")
@@ -16,8 +15,9 @@ defmodule Aerospike.Integration.TxnTest do
   @set "spike"
 
   setup do
-    probe_aerospike!(@host, @port)
-    name = :"spike_txn_cluster_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(@host, @port)
+    IntegrationSupport.wait_for_seed_ready!(@host, @port, @namespace, 5_000)
+    name = IntegrationSupport.unique_atom("spike_txn_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -29,8 +29,7 @@ defmodule Aerospike.Integration.TxnTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
-    assert Tender.ready?(name), "Tender must be ready after one manual tend cycle"
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
       try do
@@ -92,17 +91,6 @@ defmodule Aerospike.Integration.TxnTest do
   end
 
   defp unique_key(prefix) do
-    Key.new(@namespace, @set, "#{prefix}_#{System.unique_integer([:positive])}")
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). Run `docker compose up -d` first."
-    end
+    IntegrationSupport.unique_key(@namespace, @set, prefix)
   end
 end

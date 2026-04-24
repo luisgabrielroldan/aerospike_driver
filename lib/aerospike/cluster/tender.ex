@@ -617,7 +617,7 @@ defmodule Aerospike.Cluster.Tender do
         :telemetry.span(Telemetry.tend_cycle_span(), %{}, fn ->
           next_state =
             %{state | peers_refresh_needed?: false}
-            |> bootstrap_if_needed()
+            |> bootstrap_seeds()
             |> refresh_nodes()
             |> maybe_discover_peers()
             |> maybe_refresh_partition_maps()
@@ -687,20 +687,26 @@ defmodule Aerospike.Cluster.Tender do
     |> Map.new(fn {name, entry} -> {name, entry.node.cluster_stable} end)
   end
 
-  # Re-enters seed bootstrap whenever `state.nodes` is empty. In steady
-  # state the map is non-empty and this is a `map_size == 0` check — the
-  # same cost as a boolean latch. When every node has been dropped (full
-  # outage followed by the grace-cycle drop), the next tend cycle re-runs
-  # the seed against the configured seeds. A seed that is still dead fails
-  # the info probe inside `bootstrap_seed/3` and logs at `:warning`; no
-  # state is written and the next cycle retries. The `:seeds` option is
-  # validated non-empty in `init/1`, so the "no configured seeds" edge
-  # case cannot occur here.
-  defp bootstrap_if_needed(%{nodes: nodes} = state) when map_size(nodes) > 0, do: state
-
-  defp bootstrap_if_needed(state) do
+  # Re-runs seed bootstrap for every configured seed not currently covered
+  # by an `:active` node at the same direct-connect host:port. This keeps
+  # configured seeds as a recovery path even when the cluster is only
+  # partially degraded: if one restarted seed comes back with a new node id
+  # while other nodes remain healthy, the Tender does not have to wait for
+  # peer discovery to notice it.
+  defp bootstrap_seeds(state) do
     Enum.reduce(state.seeds, state, fn {host, port}, acc ->
-      bootstrap_seed(acc, host, port)
+      if seed_bootstrap_needed?(acc, host, port) do
+        bootstrap_seed(acc, host, port)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp seed_bootstrap_needed?(state, host, port) do
+    not Enum.any?(state.nodes, fn
+      {_name, %{status: :active, node: %ClusterNode{host: ^host, port: ^port}}} -> true
+      _ -> false
     end)
   end
 
@@ -719,12 +725,20 @@ defmodule Aerospike.Cluster.Tender do
          ) do
       {:ok, node} ->
         case Map.fetch(state.nodes, node.name) do
-          {:ok, _existing} ->
+          {:ok, %{status: :active}} ->
             ClusterNode.close(state.transport, node.conn)
             state
 
+          {:ok, %{status: status}} when status in [:inactive] ->
+            state
+            |> drop_node(node.name)
+            |> drop_stale_seed_nodes(host, port)
+            |> register_new_node(node, :bootstrap)
+
           :error ->
-            register_new_node(state, node, :bootstrap)
+            state
+            |> drop_stale_seed_nodes(host, port)
+            |> register_new_node(node, :bootstrap)
         end
 
       {:error, %Error{} = err} ->
@@ -738,6 +752,18 @@ defmodule Aerospike.Cluster.Tender do
         Logger.warning("Aerospike.Cluster.Tender: seed #{host}:#{port} missing 'node' info")
         state
     end
+  end
+
+  defp drop_stale_seed_nodes(state, host, port) do
+    state.nodes
+    |> Enum.reduce(state, fn
+      {name, %{status: status, node: %ClusterNode{host: ^host, port: ^port}}}, acc
+      when status != :active ->
+        drop_node(acc, name)
+
+      _, acc ->
+        acc
+    end)
   end
 
   defp auth_opts(state), do: [user: state.user, password: state.password]

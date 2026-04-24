@@ -45,6 +45,7 @@ defmodule Aerospike.Transport.TcpStreamTest do
 
       assert {:ok, ^first_frame} = Tcp.stream_read(stream, 500)
       assert {:ok, ^second_frame} = Tcp.stream_read(stream, 500)
+      assert {:ok, ^terminal_frame} = Tcp.stream_read(stream, 500)
       assert :done = Tcp.stream_read(stream, 500)
       assert :ok = Tcp.stream_close(stream)
 

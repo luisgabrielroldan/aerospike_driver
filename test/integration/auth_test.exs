@@ -29,7 +29,7 @@ defmodule Aerospike.Integration.AuthTest do
 
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
-  alias Aerospike.Key
+  alias Aerospike.Test.IntegrationSupport
 
   @host "localhost"
   @port 3200
@@ -39,7 +39,12 @@ defmodule Aerospike.Integration.AuthTest do
   @data_password "spike-password"
 
   setup_all do
-    probe_aerospike!(@host, @port)
+    IntegrationSupport.probe_aerospike!(
+      @host,
+      @port,
+      "Run `docker compose --profile enterprise up -d aerospike-ee-security` first."
+    )
+
     ensure_data_user!(@data_user, @data_password)
     :ok
   end
@@ -52,11 +57,8 @@ defmodule Aerospike.Integration.AuthTest do
     test "valid data-plane credentials let get/3 reach the server" do
       cluster = start_cluster!(user: @data_user, password: @data_password)
 
-      :ok = Tender.tend_now(cluster)
-      assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
-
-      missing_user_key = "spike_auth_missing_#{System.unique_integer([:positive])}"
-      key = Key.new(@namespace, "spike", missing_user_key)
+      IntegrationSupport.wait_for_tender_ready!(cluster, 5_000)
+      key = IntegrationSupport.unique_key(@namespace, "spike", "spike_auth_missing")
 
       assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
     end
@@ -73,7 +75,7 @@ defmodule Aerospike.Integration.AuthTest do
       refute Tender.ready?(cluster),
              "Tender must not register a node when the seed login fails"
 
-      key = Key.new(@namespace, "spike", "spike_auth_wrong_#{System.unique_integer([:positive])}")
+      key = IntegrationSupport.unique_key(@namespace, "spike", "spike_auth_wrong")
       assert {:error, :cluster_not_ready} = Aerospike.get(cluster, key)
     end
 
@@ -88,15 +90,14 @@ defmodule Aerospike.Integration.AuthTest do
       refute Tender.ready?(cluster),
              "Tender must not register a node without credentials against a secured cluster"
 
-      key =
-        Key.new(@namespace, "spike", "spike_auth_nocreds_#{System.unique_integer([:positive])}")
+      key = IntegrationSupport.unique_key(@namespace, "spike", "spike_auth_nocreds")
 
       assert {:error, :cluster_not_ready} = Aerospike.get(cluster, key)
     end
   end
 
   defp start_cluster!(extra_opts) do
-    name = :"spike_auth_cluster_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_auth_cluster")
 
     base_opts = [
       name: name,
@@ -110,11 +111,7 @@ defmodule Aerospike.Integration.AuthTest do
     {:ok, sup} = Aerospike.start_link(Keyword.merge(base_opts, extra_opts))
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     name
@@ -148,18 +145,5 @@ defmodule Aerospike.Integration.AuthTest do
       ["exec", @container, "asadm", "-U", "admin", "-P", "admin", "--enable"] ++ args,
       stderr_to_stdout: true
     )
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike EE security profile not reachable at #{host}:#{port} " <>
-                "(#{inspect(reason)}). Run `docker compose --profile enterprise " <>
-                "up -d aerospike-ee-security` first."
-    end
   end
 end

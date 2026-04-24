@@ -3,11 +3,10 @@ defmodule Aerospike.Integration.OperateCdtTest do
 
   @moduletag :integration
 
-  alias Aerospike.Cluster.Tender
-  alias Aerospike.Key
   alias Aerospike.Op.List, as: ListOp
   alias Aerospike.Op.Map, as: MapOp
   alias Aerospike.Record
+  alias Aerospike.Test.IntegrationSupport
 
   @host "localhost"
   @port 3000
@@ -15,8 +14,9 @@ defmodule Aerospike.Integration.OperateCdtTest do
   @set "spike"
 
   setup do
-    probe_aerospike!(@host, @port)
-    name = :"spike_operate_cdt_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(@host, @port)
+    IntegrationSupport.wait_for_seed_ready!(@host, @port, @namespace, 5_000)
+    name = IntegrationSupport.unique_atom("spike_operate_cdt")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -28,14 +28,10 @@ defmodule Aerospike.Integration.OperateCdtTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     %{cluster: name}
@@ -44,7 +40,7 @@ defmodule Aerospike.Integration.OperateCdtTest do
   test "list and map CDT helpers read and modify records on the shared unary path", %{
     cluster: cluster
   } do
-    key = Key.new(@namespace, @set, "operate-cdt-#{System.unique_integer([:positive])}")
+    key = IntegrationSupport.unique_key(@namespace, @set, "operate-cdt")
 
     assert {:ok, _} = Aerospike.put(cluster, key, %{"seed" => 0})
 
@@ -59,17 +55,5 @@ defmodule Aerospike.Integration.OperateCdtTest do
 
     assert {:ok, %Record{bins: %{"prefs" => "dark"}}} =
              Aerospike.operate(cluster, key, [MapOp.get_by_key("prefs", "theme")])
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` first."
-    end
   end
 end

@@ -153,7 +153,11 @@ defmodule Aerospike.Cluster.PartitionMapTest do
 
   defp safe_delete(tab) do
     if :ets.info(tab) != :undefined do
-      :ets.delete(tab)
+      try do
+        :ets.delete(tab)
+      rescue
+        ArgumentError -> :ok
+      end
     end
   end
 end

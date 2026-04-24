@@ -23,7 +23,7 @@ defmodule Aerospike.Integration.TlsTest do
 
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
-  alias Aerospike.Key
+  alias Aerospike.Test.IntegrationSupport
 
   @tls_port 4333
   @pki_port 4334
@@ -44,7 +44,7 @@ defmodule Aerospike.Integration.TlsTest do
     test "authenticated TLS handshake followed by a successful info probe" do
       cluster =
         start_cluster!(
-          name: :"spike_tls_std_#{System.unique_integer([:positive])}",
+          name: IntegrationSupport.unique_atom("spike_tls_std"),
           port: @tls_port,
           connect_opts: [
             tls_name: "localhost",
@@ -52,17 +52,8 @@ defmodule Aerospike.Integration.TlsTest do
           ]
         )
 
-      :ok = Tender.tend_now(cluster)
-
-      assert Tender.ready?(cluster),
-             "Tender must be ready after one tend cycle against aerospike-ee-tls"
-
-      key =
-        Key.new(
-          @namespace,
-          "spike",
-          "spike_tls_missing_#{System.unique_integer([:positive])}"
-        )
+      IntegrationSupport.wait_for_tender_ready!(cluster, 5_000)
+      key = IntegrationSupport.unique_key(@namespace, "spike", "spike_tls_missing")
 
       assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
     end
@@ -73,7 +64,7 @@ defmodule Aerospike.Integration.TlsTest do
       # the seed never registers.
       cluster =
         start_cluster!(
-          name: :"spike_tls_bad_ca_#{System.unique_integer([:positive])}",
+          name: IntegrationSupport.unique_atom("spike_tls_bad_ca"),
           port: @tls_port,
           connect_opts: [
             tls_name: "localhost",
@@ -86,14 +77,14 @@ defmodule Aerospike.Integration.TlsTest do
       refute Tender.ready?(cluster),
              "Tender must not register a node when TLS verification fails"
 
-      key = Key.new(@namespace, "spike", "spike_tls_bad_ca_#{System.unique_integer([:positive])}")
+      key = IntegrationSupport.unique_key(@namespace, "spike", "spike_tls_bad_ca")
       assert {:error, :cluster_not_ready} = Aerospike.get(cluster, key)
     end
 
     test "wrong :tls_name surfaces as cluster_not_ready" do
       cluster =
         start_cluster!(
-          name: :"spike_tls_wrong_name_#{System.unique_integer([:positive])}",
+          name: IntegrationSupport.unique_atom("spike_tls_wrong_name"),
           port: @tls_port,
           connect_opts: [
             tls_name: "not-the-server-name.example.com",
@@ -106,8 +97,7 @@ defmodule Aerospike.Integration.TlsTest do
       refute Tender.ready?(cluster),
              "Tender must not register a node when hostname verification fails"
 
-      key =
-        Key.new(@namespace, "spike", "spike_tls_wrong_name_#{System.unique_integer([:positive])}")
+      key = IntegrationSupport.unique_key(@namespace, "spike", "spike_tls_wrong_name")
 
       assert {:error, :cluster_not_ready} = Aerospike.get(cluster, key)
     end
@@ -117,7 +107,7 @@ defmodule Aerospike.Integration.TlsTest do
     test "mTLS handshake with a trusted client cert authenticates at the transport layer" do
       cluster =
         start_cluster!(
-          name: :"spike_pki_ok_#{System.unique_integer([:positive])}",
+          name: IntegrationSupport.unique_atom("spike_pki_ok"),
           port: @pki_port,
           connect_opts: [
             tls_name: "localhost",
@@ -127,17 +117,8 @@ defmodule Aerospike.Integration.TlsTest do
           ]
         )
 
-      :ok = Tender.tend_now(cluster)
-
-      assert Tender.ready?(cluster),
-             "Tender must be ready after an mTLS handshake against aerospike-ee-pki"
-
-      key =
-        Key.new(
-          @namespace,
-          "spike",
-          "spike_pki_missing_#{System.unique_integer([:positive])}"
-        )
+      IntegrationSupport.wait_for_tender_ready!(cluster, 5_000)
+      key = IntegrationSupport.unique_key(@namespace, "spike", "spike_pki_missing")
 
       assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
     end
@@ -160,11 +141,7 @@ defmodule Aerospike.Integration.TlsTest do
       )
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     name

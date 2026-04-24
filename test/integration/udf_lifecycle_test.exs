@@ -3,8 +3,8 @@ defmodule Aerospike.Integration.UdfLifecycleTest do
 
   @moduletag :integration
 
-  alias Aerospike.Cluster.Tender
   alias Aerospike.RegisterTask
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.UDF
 
   @host "localhost"
@@ -13,12 +13,17 @@ defmodule Aerospike.Integration.UdfLifecycleTest do
   @fixture Path.expand("../support/fixtures/test_udf.lua", __DIR__)
 
   setup_all do
-    probe_aerospike!(@host, @port)
+    IntegrationSupport.probe_aerospike!(
+      @host,
+      @port,
+      "Run `docker compose up -d` in `aerospike_driver_spike/` first."
+    )
+
     :ok
   end
 
   setup do
-    name = :"spike_udf_lifecycle_cluster_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_udf_lifecycle_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -30,21 +35,17 @@ defmodule Aerospike.Integration.UdfLifecycleTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     %{cluster: name}
   end
 
   test "register_udf, list_udfs, and remove_udf expose the package lifecycle", %{cluster: cluster} do
-    server_name = "spike_udf_lifecycle_#{System.unique_integer([:positive])}.lua"
+    server_name = "#{IntegrationSupport.unique_name("spike_udf_lifecycle")}.lua"
 
     on_exit(fn ->
       if Process.whereis(cluster) do
@@ -66,63 +67,17 @@ defmodule Aerospike.Integration.UdfLifecycleTest do
 
     assert :ok = Aerospike.remove_udf(cluster, server_name)
 
-    assert_eventually(
+    IntegrationSupport.assert_eventually(
+      "removed udf disappears from list_udfs",
       fn ->
         case Aerospike.list_udfs(cluster) do
           {:ok, remaining} ->
-            removed? = Enum.all?(remaining, &(&1.filename != server_name))
-            {removed?, "UDF #{inspect(server_name)} still present: #{inspect(remaining)}"}
+            Enum.all?(remaining, &(&1.filename != server_name))
 
-          {:error, error} ->
-            {false, "list_udfs failed after remove: #{inspect(error)}"}
+          {:error, _error} ->
+            false
         end
-      end,
-      timeout: 10_000,
-      interval: 200
+      end
     )
-  end
-
-  defp assert_eventually(fun, opts) when is_function(fun, 0) and is_list(opts) do
-    timeout = Keyword.fetch!(opts, :timeout)
-    interval = Keyword.get(opts, :interval, 200)
-    deadline = System.monotonic_time(:millisecond) + timeout
-    assert_eventually_loop(fun, deadline, interval, nil)
-  end
-
-  defp assert_eventually_loop(fun, deadline, interval, last_message) do
-    case fun.() do
-      true ->
-        :ok
-
-      {true, _message} ->
-        :ok
-
-      false ->
-        await_or_flunk(fun, deadline, interval, last_message || "condition returned false")
-
-      {false, message} when is_binary(message) ->
-        await_or_flunk(fun, deadline, interval, message)
-    end
-  end
-
-  defp await_or_flunk(fun, deadline, interval, message) do
-    if System.monotonic_time(:millisecond) > deadline do
-      flunk("condition did not become true within timeout: #{message}")
-    else
-      Process.sleep(interval)
-      assert_eventually_loop(fun, deadline, interval, message)
-    end
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` in `aerospike_driver_spike/` first."
-    end
   end
 end

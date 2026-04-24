@@ -10,13 +10,19 @@ defmodule Aerospike.Integration.ScanTest do
   alias Aerospike.Key
   alias Aerospike.Record
   alias Aerospike.Scan
+  alias Aerospike.Test.IntegrationSupport
 
   @seeds [{"localhost", 3000}, {"localhost", 3010}, {"localhost", 3020}]
   @namespace "test"
 
   setup do
-    probe_aerospike!(@seeds)
-    name = :"spike_scan_cluster_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(
+      @seeds,
+      "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver_spike/` first."
+    )
+
+    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
+    name = IntegrationSupport.unique_atom("spike_scan_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -28,7 +34,7 @@ defmodule Aerospike.Integration.ScanTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
       try do
@@ -46,7 +52,7 @@ defmodule Aerospike.Integration.ScanTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    set = "spike_scan_#{System.unique_integer([:positive])}"
+    set = IntegrationSupport.unique_name("spike_scan")
     [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
 
     assert {:ok, _} = Aerospike.put(cluster, key_a, %{"node" => node_a, "value" => 11})
@@ -55,16 +61,19 @@ defmodule Aerospike.Integration.ScanTest do
 
     scan = Scan.new(@namespace, set)
 
-    records = Aerospike.scan_stream!(cluster, scan) |> Enum.to_list()
+    IntegrationSupport.assert_eventually("scan fan-out returns all seeded records", fn ->
+      records = Aerospike.scan_stream!(cluster, scan) |> Enum.to_list()
 
-    assert Enum.sort_by(records, & &1.bins["value"]) |> Enum.map(& &1.bins["value"]) == [
-             11,
-             22,
-             33
-           ]
+      Enum.sort_by(records, & &1.bins["value"]) |> Enum.map(& &1.bins["value"]) == [11, 22, 33]
+    end)
 
-    assert {:ok, 3} = Aerospike.scan_count(cluster, scan)
-    assert {:ok, [%Record{}, %Record{}, %Record{}]} = Aerospike.scan_all(cluster, scan)
+    IntegrationSupport.assert_eventually("scan_count reaches the seeded total", fn ->
+      match?({:ok, 3}, Aerospike.scan_count(cluster, scan))
+    end)
+
+    IntegrationSupport.assert_eventually("scan_all returns the seeded total", fn ->
+      match?({:ok, [%Record{}, %Record{}, %Record{}]}, Aerospike.scan_all(cluster, scan))
+    end)
   end
 
   defp keys_for_distinct_nodes(cluster, set, count) when is_integer(count) and count > 0 do
@@ -98,18 +107,4 @@ defmodule Aerospike.Integration.ScanTest do
   end
 
   defp halt_if_complete(node_keys, _count), do: {:cont, node_keys}
-
-  defp probe_aerospike!(seeds) do
-    Enum.each(seeds, fn {host, port} ->
-      case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-        {:ok, sock} ->
-          :gen_tcp.close(sock)
-          :ok
-
-        {:error, reason} ->
-          raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                  "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver/` first."
-      end
-    end)
-  end
 end

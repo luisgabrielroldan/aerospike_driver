@@ -9,13 +9,18 @@ defmodule Aerospike.Integration.BatchGetTest do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Record
+  alias Aerospike.Test.IntegrationSupport
 
   @seeds [{"localhost", 3000}, {"localhost", 3010}, {"localhost", 3020}]
   @namespace "test"
-
   setup do
-    probe_aerospike!(@seeds)
-    name = :"spike_batch_get_cluster_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(
+      @seeds,
+      "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver_spike/` first."
+    )
+
+    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
+    name = IntegrationSupport.unique_atom("spike_batch_get_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -27,7 +32,7 @@ defmodule Aerospike.Integration.BatchGetTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
       try do
@@ -45,7 +50,7 @@ defmodule Aerospike.Integration.BatchGetTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    set = "spike_batch_#{System.unique_integer([:positive])}"
+    set = IntegrationSupport.unique_name("spike_batch")
     [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
     missing_key = key_for_node(cluster, set, node_a, "missing")
 
@@ -80,7 +85,7 @@ defmodule Aerospike.Integration.BatchGetTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    set = "spike_batch_header_#{System.unique_integer([:positive])}"
+    set = IntegrationSupport.unique_name("spike_batch_header")
     [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
     missing_key = key_for_node(cluster, set, node_a, "missing")
 
@@ -110,7 +115,7 @@ defmodule Aerospike.Integration.BatchGetTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    set = "spike_batch_exists_#{System.unique_integer([:positive])}"
+    set = IntegrationSupport.unique_name("spike_batch_exists")
     [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
     missing_key = key_for_node(cluster, set, node_a, "missing")
 
@@ -181,19 +186,5 @@ defmodule Aerospike.Integration.BatchGetTest do
       %Key{} = key -> key
       nil -> flunk("expected to find a key routed to #{node_name}")
     end
-  end
-
-  defp probe_aerospike!(seeds) do
-    Enum.each(seeds, fn {host, port} ->
-      case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-        {:ok, sock} ->
-          :gen_tcp.close(sock)
-          :ok
-
-        {:error, reason} ->
-          raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                  "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver/` first."
-      end
-    end)
   end
 end

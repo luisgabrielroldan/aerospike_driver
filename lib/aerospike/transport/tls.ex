@@ -89,7 +89,7 @@ defmodule Aerospike.Transport.Tls do
     ssl_opts = build_ssl_opts(host, opts)
 
     with {:ok, tcp_socket} <-
-           :gen_tcp.connect(to_charlist(host), port, tcp_opts, connect_timeout_ms),
+           tcp_connect(host, port, tcp_opts, connect_timeout_ms),
          {:ok, ssl_socket} <- ssl_upgrade(tcp_socket, ssl_opts, connect_timeout_ms, host, port) do
       conn = Tcp.wrap_ssl_socket(ssl_socket, opts)
       Tcp.maybe_login_after_handshake(conn, opts, host, port)
@@ -249,6 +249,20 @@ defmodule Aerospike.Transport.Tls do
            code: :connection_error,
            message:
              "TLS handshake failed connecting to #{host}:#{port}: #{format_ssl_reason(reason)}"
+         }}
+    end
+  end
+
+  defp tcp_connect(host, port, tcp_opts, connect_timeout_ms) do
+    case :gen_tcp.connect(to_charlist(host), port, tcp_opts, connect_timeout_ms) do
+      {:ok, socket} ->
+        {:ok, socket}
+
+      {:error, reason} ->
+        {:error,
+         %Error{
+           code: :connection_error,
+           message: "failed to connect to #{host}:#{port}: #{format_ssl_reason(reason)}"
          }}
     end
   end

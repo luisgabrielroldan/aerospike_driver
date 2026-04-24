@@ -2,6 +2,7 @@ defmodule Aerospike.Transport.TcpTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
   alias Aerospike.Telemetry
@@ -522,6 +523,286 @@ defmodule Aerospike.Transport.TcpTest do
     end
   end
 
+  describe "stream_open/4 and stream_read/2" do
+    test "reads plain stream frames until the last-frame marker closes the worker", %{
+      listener: listener,
+      port: port
+    } do
+      first = stream_reply_frame(<<1, 2, 3>>, 0)
+      last = stream_reply_frame(<<>>, AsmMsg.info3_last())
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, first <> last)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+      assert {:ok, ^first} = Tcp.stream_read(stream, 500)
+      assert {:ok, ^last} = Tcp.stream_read(stream, 500)
+      assert :done = Tcp.stream_read(stream, 500)
+      assert :done = Tcp.stream_read(stream, 500)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "inflates compressed stream replies before yielding frames", %{
+      listener: listener,
+      port: port
+    } do
+      frame = stream_reply_frame(<<9, 9>>, 0)
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, wrap_compressed(frame))
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+      assert {:ok, ^frame} = Tcp.stream_read(stream, 500)
+
+      :ok = Tcp.stream_close(stream)
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "maps stream read timeouts into Aerospike errors", %{listener: listener, port: port} do
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :timeout, message: "transport timed out"}} =
+               Tcp.stream_read(stream, 50)
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects stream frames with an unexpected proto version", %{
+      listener: listener,
+      port: port
+    } do
+      bad_frame = typed_header(3, 3, 0)
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, bad_frame)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "proto version"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects compressed stream replies missing their size prefix", %{
+      listener: listener,
+      port: port
+    } do
+      bad_frame = typed_header(2, 4, 3) <> <<1, 2, 3>>
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, bad_frame)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "uncompressed-size prefix"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects compressed stream replies wrapping a non-AS_MSG inner frame", %{
+      listener: listener,
+      port: port
+    } do
+      inner_frame = typed_header(2, 1, 1) <> <<7>>
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, wrap_compressed(inner_frame))
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "proto type"
+      assert msg =~ "got 1"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects stream frames with an unexpected outer proto type", %{
+      listener: listener,
+      port: port
+    } do
+      bad_frame = typed_header(2, 1, 0)
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, bad_frame)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "expected [3, 4]"
+      assert msg =~ "got 1"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects compressed stream replies with a corrupted zlib stream", %{
+      listener: listener,
+      port: port
+    } do
+      bad_frame = typed_header(2, 4, 16) <> <<100::64-big, 0, 0, 0, 0, 0, 0, 0, 0>>
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, bad_frame)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "failed to inflate"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects compressed stream replies advertising the wrong inner size", %{
+      listener: listener,
+      port: port
+    } do
+      inner_frame = typed_header(2, 3, 3) <> <<1, 2, 3>>
+      compressed = :zlib.compress(inner_frame)
+
+      bad_frame =
+        typed_header(2, 4, byte_size(compressed) + 8) <> <<99::64-big, compressed::binary>>
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, bad_frame)
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "size mismatch"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects compressed stream replies whose inflated frame has an incomplete header", %{
+      listener: listener,
+      port: port
+    } do
+      bad_inner = <<1, 2, 3>>
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, wrap_compressed(bad_inner))
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "incomplete proto header"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects compressed stream replies whose inflated frame body is truncated", %{
+      listener: listener,
+      port: port
+    } do
+      truncated_inner = typed_header(2, 3, 3) <> <<1>>
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, wrap_compressed(truncated_inner))
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "truncated body"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+
+    test "rejects compressed stream replies whose inflated frame has the wrong proto version", %{
+      listener: listener,
+      port: port
+    } do
+      bad_inner = typed_header(3, 3, 0)
+
+      server =
+        spawn_server(listener, fn client_sock ->
+          {:ok, _request} = :gen_tcp.recv(client_sock, 0, 1_000)
+          :ok = :gen_tcp.send(client_sock, wrap_compressed(bad_inner))
+          hold_client(client_sock)
+        end)
+
+      {:ok, conn} = Tcp.connect("127.0.0.1", port, connect_timeout_ms: 1_000)
+      assert {:ok, stream} = Tcp.stream_open(conn, <<"req">>, 500)
+
+      assert {:error, %Error{code: :parse_error, message: msg}} = Tcp.stream_read(stream, 500)
+      assert msg =~ "proto version"
+      assert msg =~ "got 3"
+
+      :ok = Tcp.close(conn)
+      stop_server(server)
+    end
+  end
+
   describe "connect/3 TCP tuning opts" do
     # Every public TCP opt documented in the moduledoc must land on the
     # socket via `:inet.getopts/2`. Defaults turn `:nodelay` and
@@ -834,6 +1115,11 @@ defmodule Aerospike.Transport.TcpTest do
   defp compressed_reply_of(inner_body) do
     inner_frame = typed_header(2, 3, byte_size(inner_body)) <> inner_body
     wrap_compressed(inner_frame)
+  end
+
+  defp stream_reply_frame(payload, info3) do
+    body = <<0, 0, 0, info3, payload::binary>>
+    typed_header(2, 3, byte_size(body)) <> body
   end
 
   # Wrap a pre-built inner frame in the compressed-reply envelope: outer

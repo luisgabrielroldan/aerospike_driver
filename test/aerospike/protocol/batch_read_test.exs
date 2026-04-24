@@ -67,6 +67,25 @@ defmodule Aerospike.Protocol.BatchReadTest do
                  orders_set_field::binary
                >>
     end
+
+    test "uses the default timeout when opts are omitted" do
+      key = Key.new("test", "users", "k1")
+
+      request =
+        %NodeRequest{
+          node_name: "A1",
+          entries: [
+            %Entry{index: 0, key: key, kind: :read, dispatch: {:read, :master, 0}, payload: nil}
+          ],
+          payload: nil
+        }
+
+      encoded = BatchRead.encode_request(request)
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert msg.timeout == 0
+    end
   end
 
   describe "parse_batch_read_response/3" do
@@ -187,6 +206,68 @@ defmodule Aerospike.Protocol.BatchReadTest do
                Response.parse_batch_read_response(body, request, mode: :header)
 
       assert message =~ "header-only batch read reply contained 1 operations"
+    end
+
+    test "parse_response/3 maps full records, headers, and errors into RecordResult structs" do
+      key1 = Key.new("test", "users", "k1")
+      key2 = Key.new("test", "users", "k2")
+      key3 = Key.new("test", "users", "k3")
+
+      request =
+        %NodeRequest{
+          node_name: "A1",
+          entries: [
+            %Entry{index: 1, key: key1, kind: :read, dispatch: {:read, :master, 0}, payload: nil},
+            %Entry{
+              index: 2,
+              key: key2,
+              kind: :read_header,
+              dispatch: {:read, :master, 0},
+              payload: nil
+            },
+            %Entry{index: 3, key: key3, kind: :read, dispatch: {:read, :master, 0}, payload: nil}
+          ],
+          payload: nil
+        }
+
+      body =
+        IO.iodata_to_binary([
+          batch_row(1, 0, 3, 120, [
+            %Operation{op_type: 1, particle_type: 3, bin_name: "name", data: "Ada"}
+          ]),
+          batch_row(2, 0, 4, 60, []),
+          batch_row(3, 2, 0, 0, []),
+          last_row()
+        ])
+
+      assert {:ok, %BatchRead.Reply{records: records}} = BatchRead.parse_response(body, request)
+
+      assert [
+               %BatchRead.RecordResult{
+                 index: 1,
+                 key: ^key1,
+                 result: :ok,
+                 generation: 3,
+                 ttl: 120,
+                 bins: %{"name" => "Ada"}
+               },
+               %BatchRead.RecordResult{
+                 index: 2,
+                 key: ^key2,
+                 result: :ok,
+                 generation: 4,
+                 ttl: 60,
+                 bins: nil
+               },
+               %BatchRead.RecordResult{
+                 index: 3,
+                 key: ^key3,
+                 result: {:error, %Error{code: :key_not_found}},
+                 generation: nil,
+                 ttl: nil,
+                 bins: nil
+               }
+             ] = records
     end
   end
 

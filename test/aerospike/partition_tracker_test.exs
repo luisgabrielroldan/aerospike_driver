@@ -41,6 +41,26 @@ defmodule Aerospike.Command.PartitionTrackerTest do
       assert tracker.partition_filter.retry? == true
       assert tracker.partition_filter.done? == false
     end
+
+    test "validates nodes, max_records, replica, and node_filter inputs" do
+      filter = PartitionFilter.by_id(0)
+
+      assert_raise ArgumentError, ~r/nodes list must not be empty/, fn ->
+        PartitionTracker.new(filter, nodes: [])
+      end
+
+      assert_raise ArgumentError, ~r/max_records must be >= 0/, fn ->
+        PartitionTracker.new(filter, nodes: ["A1"], max_records: -1)
+      end
+
+      assert_raise ArgumentError, ~r/replica must be :master, :sequence, or :any/, fn ->
+        PartitionTracker.new(filter, nodes: ["A1"], replica: :bogus)
+      end
+
+      assert_raise ArgumentError, ~r/node_filter must be a binary string or nil/, fn ->
+        PartitionTracker.new(filter, nodes: ["A1"], node_filter: 123)
+      end
+    end
   end
 
   describe "route_partition/3" do
@@ -118,6 +138,14 @@ defmodule Aerospike.Command.PartitionTrackerTest do
       assert %Cursor{partitions: [%{id: 12, digest: <<3::160>>, bval: 44}]} =
                PartitionTracker.cursor(tracker)
     end
+
+    test "cursor returns nil when the tracker has no filter and sleep reports the retry delay" do
+      tracker =
+        PartitionTracker.new(PartitionFilter.by_id(1), nodes: ["A1"], sleep_between_retries: 17)
+
+      assert nil == PartitionTracker.cursor(%{tracker | partition_filter: nil})
+      assert 17 == PartitionTracker.should_sleep_for(tracker)
+    end
   end
 
   describe "completion" do
@@ -129,6 +157,52 @@ defmodule Aerospike.Command.PartitionTrackerTest do
 
       assert PartitionTracker.cursor(updated) == nil
       assert updated.partition_filter.done? == true
+    end
+
+    test "keeps retry metadata when a later iteration completes without unavailable partitions" do
+      tracker =
+        PartitionTracker.new(PartitionFilter.by_id(0), nodes: ["A1"], max_records: 1)
+        |> Map.put(:iteration, 2)
+
+      assert {:complete, %PartitionFilter{done?: false, retry?: true}, _updated} =
+               PartitionTracker.is_complete?(tracker, true)
+    end
+
+    test "completes without marking done when partition queries are unavailable" do
+      tracker = PartitionTracker.new(PartitionFilter.by_id(0), nodes: ["A1"], max_records: 1)
+
+      assert {:complete, %PartitionFilter{done?: false, retry?: false}, _updated} =
+               PartitionTracker.is_complete?(tracker, false)
+    end
+
+    test "returns max_retries_exceeded with sub-errors once retries are exhausted" do
+      err = Error.from_result_code(:timeout, message: "node timed out")
+
+      tracker = %PartitionTracker{
+        PartitionTracker.new(PartitionFilter.by_id(0), nodes: ["A1"])
+        | iteration: 3,
+          max_retries: 2,
+          node_partitions_list: [%NodePartitions{NodePartitions.new("A1") | parts_unavailable: 1}],
+          exceptions: [err]
+      }
+
+      assert {:error, %Error{code: :max_retries_exceeded, message: message}, _tracker} =
+               PartitionTracker.is_complete?(tracker, true)
+
+      assert message =~ "Max retries exceeded: 2"
+      assert message =~ "timeout: node timed out"
+    end
+
+    test "returns timeout once the total timeout budget has expired" do
+      tracker = %PartitionTracker{
+        PartitionTracker.new(PartitionFilter.by_id(0), nodes: ["A1"], total_timeout: 1)
+        | node_partitions_list: [%NodePartitions{NodePartitions.new("A1") | parts_unavailable: 1}],
+          sleep_between_retries: 5,
+          deadline_mono_ms: System.monotonic_time(:millisecond)
+      }
+
+      assert {:error, %Error{code: :timeout, message: "Total timeout exceeded"}, _tracker} =
+               PartitionTracker.is_complete?(tracker, true)
     end
   end
 end

@@ -37,12 +37,14 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
 
   @moduletag :integration
   @moduletag :enterprise
+  @moduletag capture_log: true
 
   alias Aerospike.Cluster
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Telemetry
+  alias Aerospike.Test.IntegrationSupport
 
   @container "aerospike-ee-security-tls"
   @host "localhost"
@@ -142,7 +144,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
         Key.new(
           @namespace,
           "operator_surface_smoke",
-          "missing_#{i}_#{System.unique_integer([:positive])}"
+          IntegrationSupport.unique_name("missing_#{i}")
         )
 
       assert {:error, %Error{code: :key_not_found}} =
@@ -228,7 +230,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
       Key.new(
         @namespace,
         "operator_surface_smoke",
-        "recovered_#{System.unique_integer([:positive])}"
+        IntegrationSupport.unique_name("recovered")
       )
 
     assert {:error, %Error{code: :key_not_found}} =
@@ -277,7 +279,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
   end
 
   defp start_cluster! do
-    name = :"spike_operator_surface_smoke_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_operator_surface_smoke")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -298,11 +300,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
       )
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     name

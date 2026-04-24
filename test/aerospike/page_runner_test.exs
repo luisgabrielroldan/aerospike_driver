@@ -144,6 +144,130 @@ defmodule Aerospike.Command.ScanOps.PageRunnerTest do
     assert message =~ "unexpected stream frame type"
   end
 
+  test "all and all_node follow page cursors until completion", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("page-1"), partition_done_frame("page-1"), last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("page-2"), partition_done_frame("page-2"), last_frame()]}
+    )
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [last_frame()]})
+
+    assert {:ok, records} = PageRunner.all_node(tender, "A1", query, [])
+    assert Enum.map(records, & &1.bins["payload"]) == ["page-1", "page-2"]
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("all-1"), partition_done_frame("all-1"), last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "B1",
+      {:ok, [last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("all-2"), partition_done_frame("all-2"), last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "B1",
+      {:ok, [last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "B1",
+      {:ok, [last_frame()]}
+    )
+
+    assert {:ok, all_records} = PageRunner.all(tender, query, [])
+    assert Enum.map(all_records, & &1.bins["payload"]) == ["all-1", "all-2"]
+  end
+
+  test "page and all validate cursors and max_records before issuing work", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    assert {:error, %Aerospike.Error{code: :parameter_error, message: message}} =
+             PageRunner.page(tender, query, cursor: 123)
+
+    assert message =~ "invalid cursor"
+
+    no_budget_query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+
+    assert {:error, %Aerospike.Error{code: :max_records_required}} =
+             PageRunner.all(tender, no_budget_query, [])
+  end
+
+  test "all and all_node surface recursive page errors from follow-up requests", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("page-1"), partition_done_frame("page-1"), last_frame()]}
+    )
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [{:frame, <<0, 1, 2>>}]})
+
+    assert {:error, %Aerospike.Error{code: :parse_error}} =
+             PageRunner.all_node(tender, "A1", query, [])
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("all-1"), partition_done_frame("all-1"), last_frame()]}
+    )
+
+    Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
+    Fake.script_stream(ctx.fake, "A1", {:ok, [{:frame, <<0, 1, 2>>}]})
+    Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
+
+    assert {:error, %Aerospike.Error{code: :parse_error}} = PageRunner.all(tender, query, [])
+  end
+
   defp start_tender(ctx) do
     {:ok, pid} =
       Tender.start_link(

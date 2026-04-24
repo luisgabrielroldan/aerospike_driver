@@ -20,9 +20,6 @@ defmodule Aerospike.Txn do
   does not serialize concurrent updates around one transaction handle.
   """
 
-  @int64_min -9_223_372_036_854_775_808
-  @int64_range 18_446_744_073_709_551_616
-
   @enforce_keys [:id, :timeout]
   defstruct [:id, :timeout]
 
@@ -49,6 +46,7 @@ defmodule Aerospike.Txn do
   end
 
   defp random_id do
-    @int64_min + :rand.uniform(@int64_range) - 1
+    <<id::64-signed-big>> = :crypto.strong_rand_bytes(8)
+    id
   end
 end

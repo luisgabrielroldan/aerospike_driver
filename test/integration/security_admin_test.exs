@@ -15,6 +15,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
   alias Aerospike.Key
   alias Aerospike.Privilege
   alias Aerospike.Role
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.User
 
   @moduletag :integration
@@ -25,7 +26,12 @@ defmodule Aerospike.Integration.SecurityAdminTest do
   @namespace "test"
 
   setup_all do
-    probe_aerospike!(@host, @port)
+    IntegrationSupport.probe_aerospike!(
+      @host,
+      @port,
+      "Run `docker compose --profile enterprise up -d aerospike-ee-security` first."
+    )
+
     :ok
   end
 
@@ -37,17 +43,15 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
   test "user lifecycle works against the secured cluster", %{conn: conn} do
     user_name = unique_name("sec_user")
-    password = "pw-#{System.unique_integer([:positive, :monotonic])}"
+    password = "pw-#{IntegrationSupport.unique_name("sec_user_pw")}"
 
     on_exit(fn ->
-      if is_pid(Process.whereis(conn)) do
-        _ = Aerospike.drop_user(conn, user_name)
-      end
+      safe_cleanup(fn -> Aerospike.drop_user(conn, user_name) end)
     end)
 
     assert :ok = Aerospike.create_user(conn, user_name, password, ["read"])
 
-    assert_eventually("created user appears with the initial role", fn ->
+    IntegrationSupport.assert_eventually("created user appears with the initial role", fn ->
       case Aerospike.query_user(conn, user_name) do
         {:ok, %User{name: ^user_name, roles: roles}} -> roles == ["read"]
         _ -> false
@@ -56,7 +60,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
     assert :ok = Aerospike.grant_roles(conn, user_name, ["read-write"])
 
-    assert_eventually("grant_roles updates the role list", fn ->
+    IntegrationSupport.assert_eventually("grant_roles updates the role list", fn ->
       case Aerospike.query_user(conn, user_name) do
         {:ok, %User{roles: roles}} -> Enum.sort(roles) == ["read", "read-write"]
         _ -> false
@@ -65,7 +69,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
     assert :ok = Aerospike.revoke_roles(conn, user_name, ["read"])
 
-    assert_eventually("revoke_roles removes the revoked role", fn ->
+    IntegrationSupport.assert_eventually("revoke_roles removes the revoked role", fn ->
       case Aerospike.query_user(conn, user_name) do
         {:ok, %User{roles: roles}} -> roles == ["read-write"]
         _ -> false
@@ -74,7 +78,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
     assert :ok = Aerospike.drop_user(conn, user_name)
 
-    assert_eventually("query_users no longer lists the dropped user", fn ->
+    IntegrationSupport.assert_eventually("query_users no longer lists the dropped user", fn ->
       case Aerospike.query_users(conn) do
         {:ok, users} -> not Enum.any?(users, &(&1.name == user_name))
         _ -> false
@@ -84,8 +88,8 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
   test "self password change rotates the running cluster auth source", %{conn: conn} do
     user_name = unique_name("sec_rotate")
-    initial_password = "pw-#{System.unique_integer([:positive, :monotonic])}"
-    rotated_password = "pw-#{System.unique_integer([:positive, :monotonic])}"
+    initial_password = "pw-#{IntegrationSupport.unique_name("sec_rotate_pw")}"
+    rotated_password = "pw-#{IntegrationSupport.unique_name("sec_rotated_pw")}"
     key = Key.new(@namespace, "spike", unique_name("security_key"))
 
     on_exit(fn ->
@@ -97,12 +101,15 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
     assert :ok = Aerospike.create_user(conn, user_name, initial_password, ["read-write"])
 
-    assert_eventually("created user appears before the self-service flow starts", fn ->
-      case Aerospike.query_user(conn, user_name) do
-        {:ok, %User{name: ^user_name, roles: roles}} -> roles == ["read-write"]
-        _ -> false
+    IntegrationSupport.assert_eventually(
+      "created user appears before the self-service flow starts",
+      fn ->
+        case Aerospike.query_user(conn, user_name) do
+          {:ok, %User{name: ^user_name, roles: roles}} -> roles == ["read-write"]
+          _ -> false
+        end
       end
-    end)
+    )
 
     with_security_cluster(user_name, initial_password, fn user_conn ->
       assert :ok = Aerospike.change_password(user_conn, user_name, rotated_password)
@@ -146,26 +153,29 @@ defmodule Aerospike.Integration.SecurityAdminTest do
                write_quota: 200
              )
 
-    assert_eventually("created role appears with the initial privilege and quotas", fn ->
-      case Aerospike.query_role(conn, role_name) do
-        {:ok,
-         %Role{
-           name: ^role_name,
-           privileges: privileges,
-           whitelist: whitelist,
-           read_quota: 100,
-           write_quota: 200
-         }} ->
-          whitelist == ["127.0.0.1"] and Enum.member?(privileges, scoped_privilege)
+    IntegrationSupport.assert_eventually(
+      "created role appears with the initial privilege and quotas",
+      fn ->
+        case Aerospike.query_role(conn, role_name) do
+          {:ok,
+           %Role{
+             name: ^role_name,
+             privileges: privileges,
+             whitelist: whitelist,
+             read_quota: 100,
+             write_quota: 200
+           }} ->
+            whitelist == ["127.0.0.1"] and Enum.member?(privileges, scoped_privilege)
 
-        _ ->
-          false
+          _ ->
+            false
+        end
       end
-    end)
+    )
 
     assert :ok = Aerospike.grant_privileges(conn, role_name, [granted_privilege])
 
-    assert_eventually("grant_privileges updates the role privilege list", fn ->
+    IntegrationSupport.assert_eventually("grant_privileges updates the role privilege list", fn ->
       case Aerospike.query_role(conn, role_name) do
         {:ok, %Role{privileges: privileges}} ->
           Enum.member?(privileges, scoped_privilege) and
@@ -178,7 +188,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
     assert :ok = Aerospike.revoke_privileges(conn, role_name, [granted_privilege])
 
-    assert_eventually("revoke_privileges removes the granted privilege", fn ->
+    IntegrationSupport.assert_eventually("revoke_privileges removes the granted privilege", fn ->
       case Aerospike.query_role(conn, role_name) do
         {:ok, %Role{privileges: privileges}} ->
           Enum.member?(privileges, scoped_privilege) and
@@ -191,7 +201,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
     assert :ok = Aerospike.drop_role(conn, role_name)
 
-    assert_eventually("dropped role is no longer queryable", fn ->
+    IntegrationSupport.assert_eventually("dropped role is no longer queryable", fn ->
       case Aerospike.query_role(conn, role_name) do
         {:ok, nil} -> true
         {:error, %Error{code: :invalid_role}} -> true
@@ -214,7 +224,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
   end
 
   defp start_cluster!(user, password) do
-    name = :"spike_security_admin_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_security_admin")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -228,15 +238,10 @@ defmodule Aerospike.Integration.SecurityAdminTest do
         password: password
       )
 
-    :ok = Tender.tend_now(name)
-    assert Tender.ready?(name), "security test cluster must become ready after one tend cycle"
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     name
@@ -244,7 +249,7 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
   defp with_security_cluster(user, password, fun)
        when is_binary(user) and is_binary(password) and is_function(fun, 1) do
-    name = :"spike_security_temp_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_security_temp")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -259,53 +264,15 @@ defmodule Aerospike.Integration.SecurityAdminTest do
       )
 
     try do
-      :ok = Tender.tend_now(name)
-      assert Tender.ready?(name), "temporary security cluster must become ready"
+      IntegrationSupport.wait_for_tender_ready!(name, 5_000)
       fun.(name)
     after
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end
   end
 
   defp unique_name(prefix) do
-    "#{prefix}_#{System.system_time(:microsecond)}_#{System.unique_integer([:positive, :monotonic])}"
-  end
-
-  defp assert_eventually(message, fun, timeout \\ 10_000, interval \\ 200)
-       when is_binary(message) and is_function(fun, 0) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    assert_eventually_loop(message, fun, deadline, interval)
-  end
-
-  defp assert_eventually_loop(message, fun, deadline, interval) do
-    cond do
-      fun.() ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("condition did not become true within timeout: #{message}")
-
-      true ->
-        Process.sleep(interval)
-        assert_eventually_loop(message, fun, deadline, interval)
-    end
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike EE security profile not reachable at #{host}:#{port} " <>
-                "(#{inspect(reason)}). Run `docker compose --profile enterprise " <>
-                "up -d aerospike-ee-security` first."
-    end
+    IntegrationSupport.unique_name(prefix)
   end
 
   defp safe_cleanup(fun) when is_function(fun, 0) do

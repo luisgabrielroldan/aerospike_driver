@@ -174,11 +174,13 @@ functions when you only want part of the contract.
 
 Run commands from this directory unless the command explicitly says otherwise.
 
-The repo exposes explicit test categories so the command surface matches the
-environments the suite actually needs:
+The repo keeps the Mix aliases explicit because the environments are genuinely
+different:
 
 - `mix test.unit` — deterministic default suite, no live Aerospike required
 - `mix test.coverage` — deterministic suite with the configured coverage gate
+- `mix test.coverage.live` — unit + CE + cluster coverage in one run
+- `mix test.coverage.all` — unit + CE + cluster + EE coverage in one run
 - `mix test.integration.ce` — live Community Edition single-node proofs
 - `mix test.integration.cluster` — live three-node cluster proofs
 - `mix test.integration.enterprise` — live Enterprise Edition proofs
@@ -186,50 +188,62 @@ environments the suite actually needs:
 - `mix test.live` — CE single-node + cluster live proofs, but not EE
 - `mix validate` — format, compile, credo, unit, and coverage gate
 
-If you prefer one operator-facing entry point, the repo-local `Makefile` wraps
-the same categories:
+For day-to-day use, prefer the repo-local `Makefile`, which minimizes the
+operator-facing surface to three entry points:
 
-- `make test-unit`, `make test-coverage`, `make validate`
-- `make deps-up`, `make deps-cluster-up`, `make deps-enterprise-up`
-- `make test-ce`, `make test-cluster`, `make test-enterprise`
-- `make test-live`, `make test-all`, `make deps-down`
+- `make test PROFILE=unit|ce|cluster|enterprise|live|all`
+- `make coverage PROFILE=unit|live|all`
+- `make deps PROFILE=ce|cluster|enterprise|all`
+- `make validate`, `make deps-down`
+
+The older per-suite targets still exist as compatibility shims:
+
+- `make test-unit`, `make test-coverage`, `make test-coverage-live`, `make test-coverage-all`
+- `make test-ce`, `make test-cluster`, `make test-enterprise`, `make test-live`, `make test-all`
+- `make deps-up`, `make deps-cluster-up`, `make deps-enterprise-up`, `make deps-all-up`
 
 Deterministic baseline:
 
 ```bash
-mix test.unit
-mix test.coverage
-mix validate
+make test PROFILE=unit
+make coverage PROFILE=unit
+make validate
 mix dialyzer
 ```
 
 Community Edition single-node live proofs:
 
 ```bash
-docker compose up -d
-mix test.integration.ce
+make deps PROFILE=ce
+make test PROFILE=ce
 ```
 
 Community Edition three-node cluster proofs:
 
 ```bash
-docker compose -f ../aerospike_driver/docker-compose.yml --profile cluster down -v
-docker compose -f ../aerospike_driver/docker-compose.yml --profile cluster up -d aerospike aerospike2 aerospike3
-mix test.integration.cluster
+make deps PROFILE=cluster
+make test PROFILE=cluster
 ```
 
 Enterprise Edition proofs:
 
 ```bash
-docker compose --profile enterprise down -v
-docker compose --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki aerospike-ee-security aerospike-ee-security-tls
-mix test.integration.enterprise
+make deps PROFILE=enterprise
+make test PROFILE=enterprise
 ```
 
 All live proofs:
 
 ```bash
-mix test.integration.all
+make deps PROFILE=all
+make test PROFILE=all
+```
+
+Coverage with live suites folded into the same run:
+
+```bash
+make coverage PROFILE=live
+make coverage PROFILE=all
 ```
 
 If `mix test.coverage` fails, the review gate is still open.

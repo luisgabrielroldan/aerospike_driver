@@ -7,6 +7,7 @@ defmodule Aerospike.Integration.WriteFamilyTest do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Record
+  alias Aerospike.Test.IntegrationSupport
 
   @host "localhost"
   @port 3000
@@ -14,8 +15,9 @@ defmodule Aerospike.Integration.WriteFamilyTest do
   @set "spike"
 
   setup do
-    probe_aerospike!(@host, @port)
-    name = :"spike_write_family_cluster_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(@host, @port)
+    IntegrationSupport.wait_for_seed_ready!(@host, @port, @namespace, 5_000)
+    name = IntegrationSupport.unique_atom("spike_write_family_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -27,7 +29,7 @@ defmodule Aerospike.Integration.WriteFamilyTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
       try do
@@ -45,7 +47,7 @@ defmodule Aerospike.Integration.WriteFamilyTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    user_key = "spike_write_family_#{System.unique_integer([:positive])}"
+    user_key = IntegrationSupport.unique_name("spike_write_family")
     key = Key.new(@namespace, @set, user_key)
 
     assert {:ok, %{generation: generation}} =
@@ -113,17 +115,5 @@ defmodule Aerospike.Integration.WriteFamilyTest do
     assert {:ok, true} = Aerospike.delete(cluster, key)
     assert {:ok, false} = Aerospike.exists(cluster, key)
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` first."
-    end
   end
 end

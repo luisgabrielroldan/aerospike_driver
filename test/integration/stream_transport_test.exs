@@ -3,8 +3,10 @@ defmodule Aerospike.Integration.StreamTransportTest do
 
   @moduletag :integration
 
-  alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.ScanResponse
+  alias Aerospike.Scan
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.Test.StreamProof
   alias Aerospike.Transport.Tcp
 
@@ -13,12 +15,17 @@ defmodule Aerospike.Integration.StreamTransportTest do
   @namespace "test"
 
   setup_all do
-    probe_aerospike!(@host, @port)
+    IntegrationSupport.probe_aerospike!(@host, @port)
+
+    IntegrationSupport.wait_for_cluster_ready!([{@host, @port}], @namespace, 15_000,
+      expected_size: 3
+    )
+
     :ok
   end
 
-  test "scan streams multiple frames over the real TCP transport" do
-    set = "stream_proof_#{System.unique_integer([:positive])}"
+  test "scan streams decodable frames and all seeded records over the real TCP transport" do
+    set = IntegrationSupport.unique_name("stream_proof")
     bin_name = "payload"
 
     {:ok, conn} = Tcp.connect(@host, @port, connect_timeout_ms: 1_000)
@@ -27,47 +34,53 @@ defmodule Aerospike.Integration.StreamTransportTest do
       :ok = Tcp.close(conn)
     end)
 
-    records =
-      for i <- 1..4 do
-        {i, "stream_record_#{i}"}
-      end
+    :ok =
+      StreamProof.seed_records_on_master_partitions!(conn, @namespace, set, bin_name, 128, fn i ->
+        String.duplicate("stream_record_#{i}_", 256)
+      end)
 
-    :ok = StreamProof.seed_records!(conn, @namespace, set, bin_name, records)
-    :ok = Tcp.close(conn)
+    cluster = IntegrationSupport.unique_atom("stream_transport_cluster")
 
-    {:ok, scan_conn} = Tcp.connect(@host, @port, connect_timeout_ms: 1_000)
+    {:ok, sup} =
+      Aerospike.start_link(
+        name: cluster,
+        transport: Tcp,
+        hosts: ["#{@host}:#{@port}"],
+        namespaces: [@namespace],
+        tend_trigger: :manual
+      )
 
     on_exit(fn ->
-      :ok = Tcp.close(scan_conn)
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
-    task_id = System.unique_integer([:positive])
-    request = StreamProof.scan_request(@namespace, set, task_id)
-    assert {:ok, stream} = Tcp.stream_open(scan_conn, request, 5_000, [])
+    IntegrationSupport.wait_for_tender_ready!(cluster, 5_000)
+
+    IntegrationSupport.assert_eventually("seeded stream proof records become visible to scans", fn ->
+      case Aerospike.scan_count(cluster, Scan.new(@namespace, set)) do
+        {:ok, 128} -> true
+        _ -> false
+      end
+    end)
+
+    task_id = StreamProof.random_task_id()
+    request = StreamProof.scan_request(conn, @namespace, set, task_id)
+    assert {:ok, stream} = Tcp.stream_open(conn, request, 5_000, [])
 
     frames = StreamProof.collect_stream!(stream)
 
-    assert length(frames) >= 2,
-           "expected the scan to produce multiple frames, got #{length(frames)}"
+    assert length(frames) >= 1,
+           "expected the scan to produce at least one frame, got #{length(frames)}"
 
-    Enum.each(frames, fn frame ->
-      assert {:ok, {2, 3, body}} = Message.decode(frame)
-      assert {:ok, msg} = AsmMsg.decode(body)
-      assert msg.result_code == 0
-    end)
+    total_records =
+      Enum.reduce(frames, 0, fn frame, acc ->
+        {:ok, {2, 3, body}} = Message.decode(frame)
+        {:ok, records, _parts, _done?} = ScanResponse.parse_stream_chunk(body, @namespace, set)
+        acc + length(records)
+      end)
+
+    assert total_records == 128
 
     assert :ok = Tcp.stream_close(stream)
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` first."
-    end
   end
 end

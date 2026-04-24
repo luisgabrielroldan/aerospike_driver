@@ -29,9 +29,9 @@ defmodule Aerospike.Integration.CompressionTest do
   import Bitwise
 
   alias Aerospike.Error
-  alias Aerospike.Cluster.Tender
   alias Aerospike.Key
   alias Aerospike.Protocol.Message
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.Test.ReplicasFixture
 
   @namespace "test"
@@ -59,7 +59,7 @@ defmodule Aerospike.Integration.CompressionTest do
     received_ref = make_ref()
     stub = spawn_stub(listener, self(), received_ref, features: "compression;pipelining")
 
-    name = :"compression_cluster_on_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("compression_cluster_on")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -73,10 +73,8 @@ defmodule Aerospike.Integration.CompressionTest do
         use_compression: true
       )
 
-    on_exit(fn -> stop_supervisor(sup) end)
-
-    :ok = Tender.tend_now(name)
-    assert Tender.ready?(name)
+    on_exit(fn -> IntegrationSupport.stop_supervisor_quietly(sup) end)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     key = Key.new(@namespace, @long_set, "missing")
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(name, key)
@@ -95,7 +93,7 @@ defmodule Aerospike.Integration.CompressionTest do
     received_ref = make_ref()
     stub = spawn_stub(listener, self(), received_ref, features: "compression")
 
-    name = :"compression_cluster_off_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("compression_cluster_off")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -109,10 +107,8 @@ defmodule Aerospike.Integration.CompressionTest do
         use_compression: false
       )
 
-    on_exit(fn -> stop_supervisor(sup) end)
-
-    :ok = Tender.tend_now(name)
-    assert Tender.ready?(name)
+    on_exit(fn -> IntegrationSupport.stop_supervisor_quietly(sup) end)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     key = Key.new(@namespace, "spike", "missing")
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(name, key)
@@ -129,7 +125,7 @@ defmodule Aerospike.Integration.CompressionTest do
     received_ref = make_ref()
     stub = spawn_stub(listener, self(), received_ref, features: "pipelining")
 
-    name = :"compression_feature_off_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("compression_feature_off")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -143,10 +139,8 @@ defmodule Aerospike.Integration.CompressionTest do
         use_compression: true
       )
 
-    on_exit(fn -> stop_supervisor(sup) end)
-
-    :ok = Tender.tend_now(name)
-    assert Tender.ready?(name)
+    on_exit(fn -> IntegrationSupport.stop_supervisor_quietly(sup) end)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     key = Key.new(@namespace, "spike", "missing")
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(name, key)
@@ -280,11 +274,5 @@ defmodule Aerospike.Integration.CompressionTest do
   defp typed_header(version, type, length) do
     proto_word = length ||| version <<< 56 ||| type <<< 48
     <<proto_word::64-big>>
-  end
-
-  defp stop_supervisor(sup) do
-    Supervisor.stop(sup)
-  catch
-    :exit, _ -> :ok
   end
 end

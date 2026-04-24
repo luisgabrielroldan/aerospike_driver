@@ -180,6 +180,69 @@ defmodule Aerospike.Command.ScanOpsTest do
              Aerospike.query_page(tender, query)
   end
 
+  test "query collection and aggregate helpers route through the public scan ops wrappers", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("all-node-1"), partition_done_frame("all-node-1"), last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("all-node-2"), partition_done_frame("all-node-2"), last_frame()]}
+    )
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [last_frame()]})
+
+    assert {:ok, node_records} = ScanOps.query_all_node(tender, "A1", query, [])
+    assert Enum.map(node_records, & &1.bins["payload"]) == ["all-node-1", "all-node-2"]
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("all-1"), partition_done_frame("all-1"), last_frame()]}
+    )
+
+    Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("all-2"), partition_done_frame("all-2"), last_frame()]}
+    )
+
+    Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
+    Fake.script_stream(ctx.fake, "A1", {:ok, [last_frame()]})
+    Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
+
+    assert {:ok, all_records} = ScanOps.query_all(tender, query, [])
+    assert Enum.map(all_records, & &1.bins["payload"]) == ["all-1", "all-2"]
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("count-node"), last_frame()]})
+    assert {:ok, 1} = ScanOps.count_node(tender, "A1", Scan.new(@namespace, "scan_ops"), [])
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("query-count"), last_frame()]})
+    assert {:ok, 1} = ScanOps.query_count_node(tender, "A1", query, [])
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [aggregate_frame("42"), last_frame()]})
+    Fake.script_stream(ctx.fake, "B1", {:ok, [last_frame()]})
+
+    assert {:ok, aggregate_stream} =
+             ScanOps.query_aggregate(tender, query, "pkg", "fun", [], node: "A1")
+
+    assert Enum.to_list(aggregate_stream) == ["42"]
+  end
+
   test "stream, page, and background query helpers validate node opts through the short form",
        ctx do
     script_two_node_cluster(ctx.fake)
@@ -199,6 +262,95 @@ defmodule Aerospike.Command.ScanOpsTest do
 
     assert {:error, %Aerospike.Error{code: :invalid_node}} =
              Aerospike.query_execute(tender, query, [], node: "missing")
+  end
+
+  test "scan ops reject non-binary node options before dispatch", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    scan = Scan.new(@namespace, "scan_ops")
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    assert {:error, %Aerospike.Error{code: :parameter_error, message: message}} =
+             ScanOps.stream(tender, scan, node: 123)
+
+    assert message =~ "invalid node option"
+
+    assert {:error, %Aerospike.Error{code: :parameter_error}} =
+             ScanOps.query_execute(tender, query, [], node: 123)
+  end
+
+  test "node helper variants reject conflicting node opts", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    scan = Scan.new(@namespace, "scan_ops")
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    assert {:error, %Aerospike.Error{code: :parameter_error, message: stream_message}} =
+             ScanOps.stream_node(tender, "A1", scan, node: "B1")
+
+    assert stream_message =~ "conflicts with the positional node argument"
+
+    assert {:error, %Aerospike.Error{code: :parameter_error}} =
+             ScanOps.all_node(tender, "A1", scan, node: "B1")
+
+    assert {:error, %Aerospike.Error{code: :parameter_error}} =
+             ScanOps.count_node(tender, "A1", scan, node: "B1")
+
+    assert {:error, %Aerospike.Error{code: :parameter_error}} =
+             ScanOps.query_page_node(tender, "A1", query, node: "B1")
+
+    assert {:error, %Aerospike.Error{code: :parameter_error}} =
+             ScanOps.query_execute_node(tender, "A1", query, [], node: "B1")
+
+    assert {:error, %Aerospike.Error{code: :parameter_error}} =
+             ScanOps.query_udf_node(tender, "A1", query, "pkg", "fun", [], node: "B1")
+  end
+
+  test "query node helper variants route work through the positional node argument", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+      |> Query.max_records(1)
+
+    Fake.script_stream(ctx.fake, "A1", {:ok, [frame("node-stream"), last_frame()]})
+
+    assert {:ok, stream} = ScanOps.query_stream_node(tender, "A1", query, [])
+    assert Enum.map(stream, & &1.bins["payload"]) == ["node-stream"]
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("node-page"), partition_done_frame("node-page"), last_frame()]}
+    )
+
+    assert {:ok, %{records: [%{bins: %{"payload" => "node-page"}}]}} =
+             ScanOps.query_page_node(tender, "A1", query, [])
+
+    Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
+
+    assert {:ok, %Aerospike.ExecuteTask{kind: :query_execute}} =
+             ScanOps.query_execute_node(tender, "A1", query, [], [])
+
+    Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
+
+    assert {:ok, %Aerospike.ExecuteTask{kind: :query_udf}} =
+             ScanOps.query_udf_node(tender, "A1", query, "pkg", "fun", [], [])
   end
 
   test "background query helpers use command replies over the shared node preparation seam",
@@ -352,6 +504,10 @@ defmodule Aerospike.Command.ScanOpsTest do
     {:frame, encode_bin(record_msg(payload))}
   end
 
+  defp aggregate_frame(result) do
+    {:frame, encode_bin(aggregate_msg(result))}
+  end
+
   defp partition_done_frame(payload) do
     {:frame, encode_bin(partition_done_msg(payload))}
   end
@@ -377,6 +533,22 @@ defmodule Aerospike.Command.ScanOpsTest do
           particle_type: 3,
           bin_name: "payload",
           data: payload
+        }
+      ]
+    }
+  end
+
+  defp aggregate_msg(result) do
+    %AsmMsg{
+      info1: AsmMsg.info1_read(),
+      result_code: 0,
+      fields: [],
+      operations: [
+        %Operation{
+          op_type: Operation.op_read(),
+          particle_type: 3,
+          bin_name: "SUCCESS",
+          data: result
         }
       ]
     }

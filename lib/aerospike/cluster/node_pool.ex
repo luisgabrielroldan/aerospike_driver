@@ -284,9 +284,9 @@ defmodule Aerospike.Cluster.NodePool do
       {:error, %Error{} = err} ->
         RuntimeMetrics.record_connection_failure(cluster_name, node_name)
 
-        Logger.warning(
+        Logger.debug(fn ->
           "Aerospike.Cluster.NodePool: connect failed for #{node_name} at #{host}:#{port}: #{err.message}"
-        )
+        end)
 
         {:remove, {:connect_failed, err}}
     end

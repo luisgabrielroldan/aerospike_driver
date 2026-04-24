@@ -83,6 +83,8 @@ defmodule Aerospike.MixProject do
       docs: :dev,
       "test.unit": :test,
       "test.coverage": :test,
+      "test.coverage.live": :test,
+      "test.coverage.all": :test,
       "test.integration.ce": :test,
       "test.integration.cluster": :test,
       "test.integration.enterprise": :test,
@@ -98,6 +100,9 @@ defmodule Aerospike.MixProject do
       "bench.clean": &bench_clean/1,
       "test.unit": "test --seed 0",
       "test.coverage": "test --cover --seed 0",
+      "test.coverage.live": "test --cover --include integration --include cluster --seed 0",
+      "test.coverage.all":
+        "test --cover --include integration --include cluster --include enterprise --seed 0",
       "test.integration.ce":
         integration_alias(@ce_integration_files, "--include integration --seed 0"),
       "test.integration.cluster":

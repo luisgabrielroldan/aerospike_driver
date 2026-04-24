@@ -5,15 +5,16 @@ defmodule Aerospike.Integration.GetTest do
 
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
-  alias Aerospike.Key
+  alias Aerospike.Test.IntegrationSupport
 
   @host "localhost"
   @port 3000
   @namespace "test"
 
   setup do
-    probe_aerospike!(@host, @port)
-    name = :"spike_get_cluster_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(@host, @port)
+    IntegrationSupport.wait_for_seed_ready!(@host, @port, @namespace, 5_000)
+    name = IntegrationSupport.unique_atom("spike_get_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -25,7 +26,7 @@ defmodule Aerospike.Integration.GetTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
       try do
@@ -43,15 +44,13 @@ defmodule Aerospike.Integration.GetTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    missing_user_key = "spike_missing_#{System.unique_integer([:positive])}"
-    key = Key.new(@namespace, "spike", missing_user_key)
+    key = IntegrationSupport.unique_key(@namespace, "spike", "spike_missing")
 
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
   end
 
   test "GET_HEADER returns metadata with empty bins for an existing record", %{cluster: cluster} do
-    user_key = "spike_header_#{System.unique_integer([:positive])}"
-    key = Key.new(@namespace, "spike", user_key)
+    key = IntegrationSupport.unique_key(@namespace, "spike", "spike_header")
 
     assert {:ok, %{generation: 1}} = Aerospike.put(cluster, key, %{"name" => "header-only"})
 
@@ -60,17 +59,5 @@ defmodule Aerospike.Integration.GetTest do
 
     assert generation >= 1
     assert ttl >= 0
-  end
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` first."
-    end
   end
 end

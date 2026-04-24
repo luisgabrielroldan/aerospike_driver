@@ -3,6 +3,7 @@ defmodule Aerospike.Integration.BatchTest do
 
   @moduletag :integration
   @moduletag :cluster
+  @moduletag capture_log: true
 
   alias Aerospike.Cluster.Router
   alias Aerospike.Cluster.Tender
@@ -13,6 +14,7 @@ defmodule Aerospike.Integration.BatchTest do
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Record
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.Transport.Tcp
 
   @seeds [{"localhost", 3000}, {"localhost", 3010}, {"localhost", 3020}]
@@ -22,11 +24,15 @@ defmodule Aerospike.Integration.BatchTest do
     3010 => "aerospike2",
     3020 => "aerospike3"
   }
-  @probe_interval_ms 100
 
   setup do
-    probe_aerospike!(@seeds)
-    name = :"spike_batch_cluster_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(
+      @seeds,
+      "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver_spike/` first."
+    )
+
+    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
+    name = IntegrationSupport.unique_atom("spike_batch_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -38,7 +44,7 @@ defmodule Aerospike.Integration.BatchTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
     seed_nodes = seed_nodes!(@seeds)
 
     on_exit(fn ->
@@ -49,8 +55,7 @@ defmodule Aerospike.Integration.BatchTest do
       end
 
       Enum.each(Map.values(@seed_containers), &docker_start/1)
-      probe_aerospike!(@seeds)
-      wait_for_cluster_stable!(10_000)
+      IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
     end)
 
     %{cluster: name, seed_nodes: seed_nodes}
@@ -62,7 +67,7 @@ defmodule Aerospike.Integration.BatchTest do
   } do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 
-    set = "spike_batch_mixed_#{System.unique_integer([:positive])}"
+    set = IntegrationSupport.unique_name("spike_batch_mixed")
 
     [{node_a, key_put}, {_node_b, key_operate}, {node_c, key_read}] =
       keys_for_distinct_nodes(cluster, set, 3)
@@ -233,20 +238,6 @@ defmodule Aerospike.Integration.BatchTest do
     flunk("expected a transport-class batch error for the dead node, got #{inspect(other)}")
   end
 
-  defp probe_aerospike!(seeds) do
-    Enum.each(seeds, fn {host, port} ->
-      case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-        {:ok, sock} ->
-          :gen_tcp.close(sock)
-          :ok
-
-        {:error, reason} ->
-          raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                  "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver_spike/` first."
-      end
-    end)
-  end
-
   defp wait_for_tcp_down!(host, port, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
@@ -266,33 +257,6 @@ defmodule Aerospike.Integration.BatchTest do
     )
   end
 
-  defp wait_for_cluster_stable!(timeout_ms) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-
-    wait_until!(
-      deadline,
-      fn ->
-        case System.cmd("docker", ["exec", "aerospike1", "asinfo", "-v", "cluster-stable:"],
-               stderr_to_stdout: true
-             ) do
-          {output, 0} ->
-            output
-            |> String.trim()
-            |> String.split("\t", parts: 2)
-            |> List.last()
-            |> case do
-              value when is_binary(value) -> value != "false" and value != ""
-              _ -> false
-            end
-
-          {_output, _status} ->
-            false
-        end
-      end,
-      "expected the local Aerospike cluster to restabilize after restarting the stopped node"
-    )
-  end
-
   defp wait_until!(deadline, predicate, error_message) do
     cond do
       predicate.() ->
@@ -302,7 +266,7 @@ defmodule Aerospike.Integration.BatchTest do
         flunk(error_message)
 
       true ->
-        Process.sleep(@probe_interval_ms)
+        Process.sleep(100)
         wait_until!(deadline, predicate, error_message)
     end
   end

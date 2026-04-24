@@ -107,6 +107,46 @@ defmodule Aerospike.Command.AdminTest do
     assert :ok = Aerospike.drop_index(conn, @namespace, index_name)
   end
 
+  test "index task status treats blank and missing load_pct replies as complete", %{
+    conn: conn,
+    fake: fake
+  } do
+    blank_task = %IndexTask{conn: conn, namespace: @namespace, index_name: "blank_idx"}
+    missing_task = %IndexTask{conn: conn, namespace: @namespace, index_name: "missing_pct_idx"}
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+
+    Fake.script_info(fake, "A1", ["sindex-stat:namespace=test;indexname=blank_idx"], %{
+      "sindex-stat:namespace=test;indexname=blank_idx" => ""
+    })
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+
+    Fake.script_info(fake, "A1", ["sindex-stat:namespace=test;indexname=missing_pct_idx"], %{
+      "sindex-stat:namespace=test;indexname=missing_pct_idx" => "state=RW"
+    })
+
+    assert {:ok, :complete} = IndexTask.status(blank_task)
+    assert {:ok, :complete} = IndexTask.status(missing_task)
+  end
+
+  test "index task status surfaces in-progress and admin lookup errors", %{conn: conn, fake: fake} do
+    progress_task = %IndexTask{conn: conn, namespace: @namespace, index_name: "progress_idx"}
+    missing_task = %IndexTask{conn: conn, namespace: @namespace, index_name: "missing_idx"}
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+
+    Fake.script_info(fake, "A1", ["sindex-stat:namespace=test;indexname=progress_idx"], %{
+      "sindex-stat:namespace=test;indexname=progress_idx" => "load_pct=47;state=RW"
+    })
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+    Fake.script_info(fake, "A1", ["sindex-stat:namespace=test;indexname=missing_idx"], %{})
+
+    assert {:ok, :in_progress} = IndexTask.status(progress_task)
+    assert {:ok, :complete} = IndexTask.status(missing_task)
+  end
+
   test "admin helpers reject invalid checkout policy values before issuing info commands", %{
     conn: conn
   } do

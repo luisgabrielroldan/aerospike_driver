@@ -2,7 +2,7 @@ defmodule Aerospike.Integration.NodeKillTest do
   @moduledoc """
   Integration test — node killed mid-traffic and brought back.
 
-  Kills the local `aerospike-driver` docker container while a cluster
+  Kills the local `aerospike1` docker container while a cluster
   runs against it, then asserts that the cluster substrate behaves
   correctly:
 
@@ -27,13 +27,17 @@ defmodule Aerospike.Integration.NodeKillTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag capture_log: true
 
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Test.IntegrationSupport
   alias Aerospike.Transport.Tcp
 
-  @container "aerospike-driver"
+  @container "aerospike1"
+  @peer_containers ["aerospike2", "aerospike3"]
+  @peer_ports [3010, 3020]
   @host "localhost"
   @port 3000
   @namespace "test"
@@ -53,12 +57,15 @@ defmodule Aerospike.Integration.NodeKillTest do
   @probe_interval_ms 100
 
   setup do
+    Enum.each(@peer_containers, &docker_stop_if_running/1)
+    Enum.each(@peer_ports, &wait_for_tcp_down(@host, &1, 15_000))
     docker_start(@container)
     probe_aerospike_tcp!(@host, @port)
     wait_for_aerospike_status(@container, 15_000)
     wait_for_client_ready(@host, @port, 15_000)
+    wait_for_cluster_stable(1, 15_000)
 
-    name = :"spike_node_kill_cluster_#{System.unique_integer([:positive])}"
+    name = IntegrationSupport.unique_atom("spike_node_kill_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -75,20 +82,18 @@ defmodule Aerospike.Integration.NodeKillTest do
       )
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
 
       # Always leave the shared container running — and *serving*
       # `asinfo -v status ok` — so sibling integration tests that
       # rely on the container being up (GetTest / GetPoolTest) see a
       # ready server regardless of file-ordering in the suite.
       docker_start(@container)
+      Enum.each(@peer_containers, &docker_start/1)
       wait_for_tcp(@host, @port, 15_000)
       wait_for_aerospike_status(@container, 15_000)
       wait_for_client_ready(@host, @port, 15_000)
+      wait_for_cluster_stable(3, 15_000)
     end)
 
     wait_for_ready!(name, 10_000)
@@ -134,6 +139,13 @@ defmodule Aerospike.Integration.NodeKillTest do
         {:error, :cluster_not_ready} ->
           :ok
 
+        {:error, :no_master} ->
+          # Single-node race: the dying node's replicas were cleared
+          # from the owners table before the top-level `ready?/1` flipped
+          # to false, so the router refuses the partition lookup while
+          # the cluster still reports as ready. Same outage signal.
+          :ok
+
         {:error, :unknown_node} ->
           # Retry exhaustion where every attempt resolved a node via
           # `Router.pick_for_read/4` that `Tender.node_handle/2`
@@ -158,21 +170,19 @@ defmodule Aerospike.Integration.NodeKillTest do
       end
     end)
 
-    # The Tender must observe enough failing cycles to flip the node
-    # to :inactive. The transition is the single observable acceptance
-    # criterion: lifecycle moves off :active, the pool is stopped
-    # (node_handle rejects), and owners clears for the node.
-    assert_status_transition!(cluster, node_name, :inactive, @inactive_timeout_ms)
+    # In the isolated single-node case the final failing cycle can
+    # clear the node quickly enough that polling never samples the
+    # intermediate `:inactive` state. Both observations prove the
+    # same outage semantics: the node left `:active`, its pool is no
+    # longer usable, and the owners table cleared.
+    assert_transitioned_or_dropped!(cluster, node_name, @inactive_timeout_ms)
 
     assert {:error, :unknown_node} = Tender.node_handle(cluster, node_name),
-           "Tender.node_handle must refuse an :inactive node"
+           "Tender.node_handle must refuse a demoted or dropped node"
 
     assert {:error, :unknown_node} = Tender.pool_pid(cluster, node_name),
-           "Tender.pool_pid must refuse an :inactive node"
+           "Tender.pool_pid must refuse a demoted or dropped node"
 
-    # One more failing cycle drops the node entry entirely (notes.md
-    # Task 1: "any failure while :inactive" removes it). After the
-    # drop, ready? must reflect the empty topology.
     assert_node_dropped!(cluster, node_name, @drop_timeout_ms)
     refute Tender.ready?(cluster), "ready? must flip to false once all nodes are dropped"
 
@@ -192,12 +202,7 @@ defmodule Aerospike.Integration.NodeKillTest do
     # Fresh GETs against the recovered cluster must succeed — proves the
     # pool was re-started under the new node entry and the routing
     # substrate can dispatch again.
-    key =
-      Key.new(
-        @namespace,
-        "kill_test",
-        "recovery_#{System.unique_integer([:positive])}"
-      )
+    key = IntegrationSupport.unique_key(@namespace, "kill_test", "recovery")
 
     assert {:error, %Error{code: :key_not_found}} =
              Aerospike.get(cluster, key, :all, timeout: 2_000),
@@ -253,25 +258,30 @@ defmodule Aerospike.Integration.NodeKillTest do
     end
   end
 
-  defp assert_status_transition!(cluster, node_name, expected, timeout_ms) do
+  defp assert_transitioned_or_dropped!(cluster, node_name, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    wait_for_status(cluster, node_name, expected, deadline)
+    wait_for_inactive_or_drop(cluster, node_name, deadline)
   end
 
-  defp wait_for_status(cluster, node_name, expected, deadline) do
-    case Tender.nodes_status(cluster) do
-      %{^node_name => %{status: ^expected}} ->
+  defp wait_for_inactive_or_drop(cluster, node_name, deadline) do
+    status = Tender.nodes_status(cluster)
+
+    cond do
+      match?(%{^node_name => %{status: :inactive}}, status) ->
         :ok
 
-      status ->
+      not Map.has_key?(status, node_name) ->
+        :ok
+
+      true ->
         if System.monotonic_time(:millisecond) >= deadline do
           flunk(
-            "node #{node_name} never reached :#{expected} within the budget " <>
+            "node #{node_name} never reached :inactive or dropped within the budget " <>
               "(last nodes_status=#{inspect(status)})"
           )
         else
           Process.sleep(@probe_interval_ms)
-          wait_for_status(cluster, node_name, expected, deadline)
+          wait_for_inactive_or_drop(cluster, node_name, deadline)
         end
     end
   end
@@ -324,6 +334,20 @@ defmodule Aerospike.Integration.NodeKillTest do
     :ok
   end
 
+  defp docker_stop_if_running(container) do
+    case System.cmd("docker", ["stop", container], stderr_to_stdout: true) do
+      {_, 0} ->
+        :ok
+
+      {out, _code} ->
+        if String.contains?(out, "is not running") do
+          :ok
+        else
+          flunk("docker stop #{container} failed: #{out}")
+        end
+    end
+  end
+
   defp docker_start(container) do
     case System.cmd("docker", ["start", container], stderr_to_stdout: true) do
       {_, 0} ->
@@ -337,6 +361,50 @@ defmodule Aerospike.Integration.NodeKillTest do
   defp wait_for_aerospike_status(container, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for_aerospike_status(container, deadline)
+  end
+
+  defp wait_for_cluster_stable(expected_size, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_cluster_stable(expected_size, deadline)
+  end
+
+  defp do_wait_for_cluster_stable(expected_size, deadline) do
+    case System.cmd(
+           "docker",
+           [
+             "exec",
+             @container,
+             "asinfo",
+             "-v",
+             "cluster-stable:size=#{expected_size};ignore-migrations=true"
+           ],
+           stderr_to_stdout: true
+         ) do
+      {out, 0} ->
+        value =
+          out
+          |> String.trim()
+          |> String.split("\t", parts: 2)
+          |> List.last()
+
+        if is_binary(value) and value != "" and value != "false" do
+          :ok
+        else
+          retry_cluster_stable(expected_size, deadline)
+        end
+
+      _ ->
+        retry_cluster_stable(expected_size, deadline)
+    end
+  end
+
+  defp retry_cluster_stable(expected_size, deadline) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      :error
+    else
+      Process.sleep(@probe_interval_ms)
+      do_wait_for_cluster_stable(expected_size, deadline)
+    end
   end
 
   defp do_wait_for_aerospike_status(container, deadline) do
@@ -363,6 +431,28 @@ defmodule Aerospike.Integration.NodeKillTest do
     else
       Process.sleep(@probe_interval_ms)
       do_wait_for_aerospike_status(container, deadline)
+    end
+  end
+
+  defp wait_for_tcp_down(host, port, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_tcp_down(host, port, deadline)
+  end
+
+  defp do_wait_for_tcp_down(host, port, deadline) do
+    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 250) do
+      {:ok, sock} ->
+        :gen_tcp.close(sock)
+
+        if System.monotonic_time(:millisecond) >= deadline do
+          flunk("expected #{host}:#{port} to stop accepting TCP connections")
+        else
+          Process.sleep(@probe_interval_ms)
+          do_wait_for_tcp_down(host, port, deadline)
+        end
+
+      {:error, _reason} ->
+        :ok
     end
   end
 

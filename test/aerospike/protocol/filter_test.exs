@@ -76,4 +76,30 @@ defmodule Aerospike.Protocol.FilterTest do
     assert is_binary(encoded)
     assert byte_size(encoded) > 0
   end
+
+  test "collection index filters use integer particles and ctx preserves strings, bytes, and integers" do
+    for filter <- [
+          Filter.contains("items", :list, "x"),
+          Filter.contains("items", :mapkeys, "x"),
+          Filter.contains("items", :mapvalues, "x")
+        ] do
+      <<1::8, 5::8, "items", 1::8, begin_size::32-big, "x", end_size::32-big, "x">> =
+        FilterCodec.encode(filter)
+
+      assert begin_size == 1
+      assert end_size == 1
+    end
+
+    encoded =
+      FilterCodec.encode_ctx([Ctx.map_key("roles"), {0x22, {:bytes, <<1, 2>>}}, {0x10, 7}])
+
+    assert Aerospike.Protocol.MessagePack.unpack!(encoded) == [
+             34,
+             "roles",
+             34,
+             <<4, 1, 2>>,
+             16,
+             7
+           ]
+  end
 end

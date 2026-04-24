@@ -304,12 +304,22 @@ defmodule Aerospike.Policy do
   end
 
   defp fetch_task_id(opts) do
-    case Keyword.get(opts, :task_id, System.unique_integer([:positive])) do
+    case Keyword.get(opts, :task_id, random_task_id()) do
       value when is_integer(value) and value > 0 ->
         {:ok, value}
 
       value ->
         invalid_argument(":task_id must be a positive integer, got: #{inspect(value)}")
+    end
+  end
+
+  # Aerospike foreground/background scan and query task ids are uint64 values.
+  # Official clients generate random 64-bit ids because reusing a small
+  # per-process/per-VM counter can be rejected by the server across rounds.
+  defp random_task_id do
+    case :crypto.strong_rand_bytes(8) do
+      <<0::64>> -> random_task_id()
+      <<task_id::64-unsigned-big>> -> task_id
     end
   end
 

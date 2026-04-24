@@ -43,6 +43,19 @@ defmodule Aerospike.Transport.TlsTest do
   end
 
   describe "connect/3 standard TLS" do
+    test "wraps plain TCP connect refusal as :connection_error" do
+      port = unused_port()
+
+      assert {:error, %Error{code: :connection_error, message: msg}} =
+               Tls.connect("127.0.0.1", port,
+                 connect_timeout_ms: 200,
+                 tls_name: "localhost",
+                 tls_cacertfile: @ca_cert
+               )
+
+      assert msg =~ "failed to connect to 127.0.0.1:#{port}"
+    end
+
     test "succeeds with a valid CA bundle and matching server name", %{
       listener: listener,
       port: port
@@ -227,6 +240,7 @@ defmodule Aerospike.Transport.TlsTest do
       assert {:ok, stream} = Tls.stream_open(conn, <<"req">>, 1_000, [])
       assert {:ok, ^first_frame} = Tls.stream_read(stream, 500)
       assert {:ok, ^second_frame} = Tls.stream_read(stream, 500)
+      assert {:ok, ^terminal_frame} = Tls.stream_read(stream, 500)
       assert :done = Tls.stream_read(stream, 500)
       assert :ok = Tls.stream_close(stream)
 
@@ -280,6 +294,13 @@ defmodule Aerospike.Transport.TlsTest do
   end
 
   ## helpers
+
+  defp unused_port do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, {:active, false}, {:packet, :raw}])
+    {:ok, {_addr, port}} = :inet.sockname(socket)
+    :ok = :gen_tcp.close(socket)
+    port
+  end
 
   defp listen_tls(opts) do
     require_client_cert? = Keyword.fetch!(opts, :require_client_cert)

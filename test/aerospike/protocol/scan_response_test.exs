@@ -113,6 +113,19 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     assert record.bins == %{"age" => 42}
   end
 
+  test "parse/3 rejects incomplete and fatal terminal responses" do
+    digest = digest_fixture("incomplete")
+    incomplete_body = encode_bin(record_msg(digest: digest))
+    fatal_body = encode_bin(last_msg(rc: 213))
+
+    assert {:error, %{code: :parse_error, message: incomplete_message}} =
+             ScanResponse.parse(incomplete_body, @namespace, @set)
+
+    assert incomplete_message =~ "incomplete scan response"
+
+    assert {:error, %{code: :query_generic}} = ScanResponse.parse(fatal_body, @namespace, @set)
+  end
+
   test "parse/3 captures partition_done metadata" do
     digest = digest_fixture("part")
     body = encode_bin(partition_done_msg(digest)) <> encode_bin(last_msg())
@@ -121,6 +134,44 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     assert info.digest == digest
     assert info.unavailable? == false
     assert info.bval == nil
+  end
+
+  test "parse_frame/3 decodes partition unavailable metadata including bval" do
+    digest = digest_fixture("unavailable")
+    body = encode_bin(partition_done_msg(digest, partition_id: 42, rc: 11, bval: 7))
+
+    assert {:ok, %{records: [], partition_done: [info], last?: false}} =
+             ScanResponse.parse_frame(body, @namespace, @set)
+
+    assert info.id == 42
+    assert info.digest == digest
+    assert info.bval == 7
+    assert info.unavailable? == true
+  end
+
+  test "parse_frame/3 rejects short headers" do
+    assert {:error, %{code: :parse_error, message: ":short_header"}} =
+             ScanResponse.parse_frame(<<1, 2, 3>>, @namespace, @set)
+  end
+
+  test "parse_stream_chunk/3 rejects record frames missing a digest" do
+    body =
+      encode_bin(%AsmMsg{
+        info1: AsmMsg.info1_read(),
+        result_code: 0,
+        fields: [Field.namespace(@namespace), Field.set(@set)],
+        operations: [
+          %Operation{
+            op_type: Operation.op_read(),
+            particle_type: 1,
+            bin_name: "age",
+            data: <<42::64-signed-big>>
+          }
+        ]
+      })
+
+    assert {:error, %{code: :parse_error, message: "scan record missing DIGEST_RIPE"}} =
+             ScanResponse.parse_stream_chunk(body, @namespace, @set)
   end
 
   test "parse_frame/3 rejects trailing bytes" do
@@ -140,6 +191,27 @@ defmodule Aerospike.Protocol.ScanResponseTest do
              ScanResponse.parse_aggregate_stream_chunk(fail_body, @namespace, @set)
   end
 
+  test "parse_aggregate_stream_chunk/3 rejects unexpected aggregate bins" do
+    body = encode_bin(aggregate_msg("42", bin_name: "OTHER")) <> encode_bin(last_msg())
+
+    assert {:error, %{code: :query_generic, message: %Aerospike.Error{} = nested}} =
+             ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+
+    assert nested.code == :parse_error
+    assert nested.message =~ "expected SUCCESS bin"
+  end
+
+  test "parse_aggregate_stream_chunk/3 rejects aggregate frames with no result operations" do
+    body =
+      encode_bin(%AsmMsg{info1: AsmMsg.info1_read(), result_code: 0, fields: [], operations: []}) <>
+        encode_bin(last_msg())
+
+    assert {:error, %{code: :parse_error, message: message}} =
+             ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+
+    assert message =~ "exactly one operation"
+  end
+
   test "lazy_stream_chunk_terminal?/1 treats terminal frames and malformed input as terminal" do
     assert ScanResponse.lazy_stream_chunk_terminal?(encode_bin(last_msg())) == true
     assert ScanResponse.lazy_stream_chunk_terminal?(encode_bin(record_msg())) == false
@@ -155,5 +227,17 @@ defmodule Aerospike.Protocol.ScanResponseTest do
         encode_bin(last_msg())
 
     assert {:ok, 1} = ScanResponse.count_records(body)
+  end
+
+  test "count_records/1 rejects incomplete and malformed responses" do
+    digest = digest_fixture("count-incomplete")
+
+    assert {:error, %{code: :parse_error, message: incomplete_message}} =
+             ScanResponse.count_records(encode_bin(record_msg(digest: digest)))
+
+    assert incomplete_message =~ "incomplete scan response"
+
+    assert {:error, %{code: :parse_error, message: ":short_header"}} =
+             ScanResponse.count_records(<<1, 2, 3>>)
   end
 end

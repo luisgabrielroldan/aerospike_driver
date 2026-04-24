@@ -3,17 +3,18 @@ defmodule Aerospike.Integration.AdminTruncateTest do
 
   @moduletag :integration
 
-  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Test.IntegrationSupport
 
   @host "localhost"
   @port 3000
   @namespace "test"
 
   setup do
-    probe_aerospike!(@host, @port)
-    name = :"spike_admin_truncate_cluster_#{System.unique_integer([:positive])}"
+    IntegrationSupport.probe_aerospike!(@host, @port)
+    IntegrationSupport.wait_for_seed_ready!(@host, @port, @namespace, 5_000)
+    name = IntegrationSupport.unique_atom("spike_admin_truncate_cluster")
 
     {:ok, sup} =
       Aerospike.start_link(
@@ -25,21 +26,17 @@ defmodule Aerospike.Integration.AdminTruncateTest do
         pool_size: 2
       )
 
-    :ok = Tender.tend_now(name)
+    IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     on_exit(fn ->
-      try do
-        Supervisor.stop(sup)
-      catch
-        :exit, _ -> :ok
-      end
+      IntegrationSupport.stop_supervisor_quietly(sup)
     end)
 
     %{cluster: name}
   end
 
   test "truncate/3 respects the optional before cutoff", %{cluster: cluster} do
-    older_set = "truncate_ns_#{System.unique_integer([:positive, :monotonic])}"
+    older_set = IntegrationSupport.unique_name("truncate_ns")
     newer_set = "#{older_set}_new"
     older_key = Key.new(@namespace, older_set, "older")
     newer_key = Key.new(@namespace, newer_set, "newer")
@@ -52,25 +49,22 @@ defmodule Aerospike.Integration.AdminTruncateTest do
 
     assert :ok = Aerospike.truncate(cluster, @namespace, before: before)
 
-    assert_eventually(
+    IntegrationSupport.assert_eventually(
+      "namespace truncate cutoff applied",
       fn ->
         older_state = Aerospike.get(cluster, older_key)
         newer_state = Aerospike.get(cluster, newer_key)
 
-        condition? =
-          match?({:error, %Error{code: :key_not_found}}, older_state) and
-            match?({:ok, _}, newer_state)
-
-        {condition?,
-         "namespace truncate cutoff mismatch: older=#{inspect(older_state)} newer=#{inspect(newer_state)}"}
+        match?({:error, %Error{code: :key_not_found}}, older_state) and
+          match?({:ok, _}, newer_state)
       end,
-      timeout: truncate_wait_timeout_ms(),
-      interval: 200
+      truncate_wait_timeout_ms(),
+      200
     )
   end
 
   test "truncate/4 truncates only the targeted set", %{cluster: cluster} do
-    set = "truncate_set_#{System.unique_integer([:positive, :monotonic])}"
+    set = IntegrationSupport.unique_name("truncate_set")
     other_set = "#{set}_keep"
     trunc_key = Key.new(@namespace, set, "trunc")
     keep_key = Key.new(@namespace, other_set, "keep")
@@ -80,66 +74,19 @@ defmodule Aerospike.Integration.AdminTruncateTest do
 
     assert :ok = Aerospike.truncate(cluster, @namespace, set)
 
-    assert_eventually(
+    IntegrationSupport.assert_eventually(
+      "set truncate applied",
       fn ->
         trunc_state = Aerospike.get(cluster, trunc_key)
         keep_state = Aerospike.get(cluster, keep_key)
 
-        condition? =
-          match?({:error, %Error{code: :key_not_found}}, trunc_state) and
-            match?({:ok, _}, keep_state)
-
-        {condition?,
-         "set truncate mismatch: trunc=#{inspect(trunc_state)} keep=#{inspect(keep_state)}"}
+        match?({:error, %Error{code: :key_not_found}}, trunc_state) and
+          match?({:ok, _}, keep_state)
       end,
-      timeout: truncate_wait_timeout_ms(),
-      interval: 200
+      truncate_wait_timeout_ms(),
+      200
     )
   end
 
-  defp assert_eventually(fun, opts) when is_function(fun, 0) and is_list(opts) do
-    timeout = Keyword.fetch!(opts, :timeout)
-    interval = Keyword.get(opts, :interval, 200)
-    deadline = System.monotonic_time(:millisecond) + timeout
-    assert_eventually_loop(fun, deadline, interval, nil)
-  end
-
-  defp assert_eventually_loop(fun, deadline, interval, last_message) do
-    case fun.() do
-      true ->
-        :ok
-
-      {true, _message} ->
-        :ok
-
-      false ->
-        await_or_flunk(fun, deadline, interval, last_message || "condition returned false")
-
-      {false, message} when is_binary(message) ->
-        await_or_flunk(fun, deadline, interval, message)
-    end
-  end
-
-  defp await_or_flunk(fun, deadline, interval, message) do
-    if System.monotonic_time(:millisecond) > deadline do
-      flunk("condition did not become true within timeout: #{message}")
-    else
-      Process.sleep(interval)
-      assert_eventually_loop(fun, deadline, interval, message)
-    end
-  end
-
   defp truncate_wait_timeout_ms, do: 15_000
-
-  defp probe_aerospike!(host, port) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false], 1_000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
-
-      {:error, reason} ->
-        raise "Aerospike not reachable at #{host}:#{port} (#{inspect(reason)}). " <>
-                "Run `docker compose up -d` first."
-    end
-  end
 end
