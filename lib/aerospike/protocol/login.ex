@@ -1,39 +1,5 @@
 defmodule Aerospike.Protocol.Login do
-  @moduledoc """
-  Wire encoder/decoder for Aerospike's admin-protocol login and authenticate
-  commands.
-
-  Admin frames use a dedicated proto type (`2`) distinct from info (`1`) and
-  AS_MSG (`3`). A login request is a 24-byte header (8-byte proto + 16-byte
-  admin header) followed by zero or more typed fields:
-
-      +--------+--------+--------+--------+--------+--------+--------+--------+
-      | version|  type  |                 length (6 bytes)                    |
-      | =  2   |  = 2   |                                                     |
-      +--------+--------+--------+--------+--------+--------+--------+--------+
-      |  0     |  0     | command|  fc    |           padding (12 bytes)      |
-      |        |        |        |        |                                   |
-      +--------+--------+--------+--------+-----------------------------------+
-      |                             fields...                                 |
-
-  Each field is 4-byte BE `uint32 = len(value) + 1` followed by a 1-byte
-  field id followed by `len(value)` value bytes. The 16-byte admin header
-  reserves bytes 2 and 3 for command id and field count respectively; the
-  remaining 14 bytes are zero-filled.
-
-  Replies carry the same frame shape. Byte 9 of the reply (offset 1 of the
-  admin header) is the result code: `0` on success, `52`
-  (`:security_not_enabled`) when the server has security disabled, and any
-  other code flows through `Aerospike.Protocol.ResultCode.from_integer/1`.
-  On a zero result code a populated reply contains `_SESSION_TOKEN` (id 5)
-  and optionally `_SESSION_TTL` (id 6, seconds until the server-side
-  session expires).
-
-  Reference: `official_libs/aerospike-client-go/admin_command.go` and
-  `official_libs/aerospike-client-go/login_command.go`. Constants here use
-  the same numeric values so wire captures from the Go client round-trip
-  through this module unchanged.
-  """
+  @moduledoc false
 
   alias Aerospike.Protocol.ResultCode
 

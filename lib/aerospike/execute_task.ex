@@ -29,6 +29,10 @@ defmodule Aerospike.ExecuteTask do
   use Aerospike.Runtime.AsyncTask
 
   @impl Aerospike.Runtime.AsyncTask
+  @doc """
+  Returns the current background query status across the target nodes.
+  """
+  @spec status(t()) :: {:ok, :complete | :in_progress} | {:error, Error.t()}
   def status(%__MODULE__{} = task) do
     case poll_state(task, MapSet.new(), 0) do
       {:ok, status, _observed, _not_found_polls} -> {:ok, status}
@@ -37,6 +41,17 @@ defmodule Aerospike.ExecuteTask do
   end
 
   @impl Aerospike.Runtime.AsyncTask
+  @doc """
+  Blocks until the background query completes or the timeout is exceeded.
+
+  Supported options:
+
+    * `:poll_interval` — milliseconds to sleep between status checks.
+      Defaults to `1_000`.
+    * `:timeout` — maximum milliseconds to wait. When omitted, polling
+      continues until the operation completes or returns an error.
+  """
+  @spec wait(t(), keyword()) :: :ok | {:error, Error.t()}
   def wait(%__MODULE__{} = task, opts) do
     poll_interval = Keyword.get(opts, :poll_interval, @default_poll_interval)
     timeout_ms = Keyword.get(opts, :timeout, nil)

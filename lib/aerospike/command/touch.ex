@@ -1,10 +1,5 @@
 defmodule Aerospike.Command.Touch do
-  @moduledoc """
-  TOUCH command adapter for the spike.
-
-  Touch updates record metadata without reading bins and returns the
-  server-reported header metadata on success.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

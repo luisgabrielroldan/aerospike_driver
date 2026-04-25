@@ -1,7 +1,5 @@
 defmodule Aerospike.Command.WriteOp do
-  @moduledoc """
-  Unary write adapter for simple add/append/prepend bin mutations.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

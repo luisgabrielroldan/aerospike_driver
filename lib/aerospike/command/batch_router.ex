@@ -1,10 +1,5 @@
 defmodule Aerospike.Command.BatchRouter do
-  @moduledoc """
-  Pure batch grouping on top of published routing state.
-
-  The batch executor consumes grouped node requests plus any indexed routing
-  failures that were discovered before transport dispatch.
-  """
+  @moduledoc false
 
   alias Aerospike.Cluster.Router
   alias Aerospike.Command.BatchCommand.Entry

@@ -96,7 +96,7 @@ defmodule Aerospike do
   The repo README names the supported validation profiles:
 
     * Community Edition single-node on `localhost:3000`
-    * Community Edition three-node cluster from `../aerospike_driver/`
+    * Community Edition three-node cluster from this repo's `docker-compose.yml`
     * Enterprise Edition variants from this repo's `docker-compose.yml`
 
   The public `Stream` helpers are lazy only at the API boundary. The
@@ -107,10 +107,9 @@ defmodule Aerospike do
   Additional expression-builder families and the wider policy surface remain
   out of scope until supported command paths prove them.
 
-  Caller-facing policy validation and default materialization now lives
-  under `Aerospike.Policy`. Public command functions still accept
-  keyword opts, but command paths no longer merge or validate those
-  policy families ad hoc.
+  Caller-facing policy validation and default materialization is shared across
+  command families. Public command functions still accept keyword opts, but
+  command paths no longer merge or validate those policy families ad hoc.
   """
 
   alias Aerospike.Batch
@@ -184,6 +183,17 @@ defmodule Aerospike do
   @typedoc "Security privilege metadata used by role administration APIs."
   @type privilege :: Privilege.t()
 
+  @typedoc "Operation input accepted by `operate/4`."
+  @type operate_operation ::
+          {:write, String.t() | atom(), term()}
+          | {:read, String.t() | atom()}
+          | {:add, String.t() | atom(), integer() | float()}
+          | {:append, String.t() | atom(), String.t()}
+          | {:prepend, String.t() | atom(), String.t()}
+          | :touch
+          | :delete
+          | Aerospike.Op.t()
+
   @doc """
   Starts a supervised cluster.
 
@@ -213,9 +223,9 @@ defmodule Aerospike do
   Pool-level knobs (forwarded internally on each node-pool start):
 
     * `:pool_size` — workers per node. Positive integer.
-    * `:idle_timeout_ms` — milliseconds a worker may sit idle before
-      `NimblePool.handle_ping/2` evicts it. Positive integer. Defaults
-      stay under Aerospike's `proto-fd-idle-ms`.
+    * `:idle_timeout_ms` — milliseconds a worker may sit idle before the
+      pool verification step evicts it. Positive integer. Defaults stay under
+      Aerospike's `proto-fd-idle-ms`.
     * `:max_idle_pings` — bound on how many idle workers NimblePool
       may drop per verification cycle. Positive integer.
 
@@ -243,8 +253,8 @@ defmodule Aerospike do
     * `:user` / `:password` — cluster-wide credentials. Must be passed
       together or omitted together.
 
-  TCP-level tuning knobs (passed verbatim to
-  `Aerospike.Transport.Tcp.connect/3` via the `:connect_opts` keyword):
+  TCP-level tuning knobs (passed verbatim to the TCP transport via the
+  `:connect_opts` keyword):
 
     * `:connect_timeout_ms` — handshake + write-buffer drain deadline.
     * `:info_timeout` — read deadline applied to every `info/2` call.
@@ -265,8 +275,8 @@ defmodule Aerospike do
   @doc """
   Returns a child specification for one supervised cluster.
 
-  This delegates to `Aerospike.Cluster.Supervisor.child_spec/1`, so the
-  accepted options and validation boundary match `start_link/1`.
+  This delegates to the same cluster-supervisor implementation as
+  `start_link/1`, so the accepted options and validation boundary match.
   """
   @spec child_spec([ClusterSupervisor.option()]) :: Supervisor.child_spec()
   def child_spec(opts) when is_list(opts) do
@@ -1604,9 +1614,9 @@ defmodule Aerospike do
   @doc """
   Writes `bins` for `key` to `cluster`.
 
-  The spike accepts only a non-empty bin map and only the narrow value
-  subset supported by `Aerospike.Protocol.AsmMsg.Value`. Supported write
-  opts are:
+  The spike accepts only a non-empty bin map and only scalar, list, map,
+  bytes, geo, and HyperLogLog values supported by the command encoder.
+  Supported write opts are:
 
     * `:timeout`
     * `:max_retries`
@@ -1859,7 +1869,7 @@ defmodule Aerospike do
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec operate(cluster(), Key.key_input(), [Operate.operation_input()], keyword()) ::
+  @spec operate(cluster(), Key.key_input(), [operate_operation()], keyword()) ::
           {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}

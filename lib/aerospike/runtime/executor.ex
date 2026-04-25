@@ -1,12 +1,5 @@
 defmodule Aerospike.Runtime.Executor do
-  @moduledoc """
-  Internal per-attempt runtime shared by unary and grouped batch dispatch.
-
-  This module owns the retry lifecycle and node-scoped operational flow:
-  deadline budgeting, retry exhaustion, retry sleep, retry classification,
-  rebalance hooks, retry telemetry, node-handle resolution, breaker checks,
-  pool checkout, and transport handoff.
-  """
+  @moduledoc false
 
   alias Aerospike.Cluster.CircuitBreaker
   alias Aerospike.Cluster.NodePool

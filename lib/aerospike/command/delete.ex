@@ -1,10 +1,5 @@
 defmodule Aerospike.Command.Delete do
-  @moduledoc """
-  DELETE command adapter for the spike.
-
-  Successful deletes return whether the record existed before removal.
-  Missing-record replies stay distinguishable from successful deletes.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

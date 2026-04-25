@@ -1,23 +1,5 @@
 defmodule Aerospike.Cluster.Router do
-  @moduledoc """
-  Stateless partition router.
-
-  Given a `%Aerospike.Key{}`, resolves the node name that should serve a read
-  or write under the selected replica policy. Pure ETS reads — no GenServer
-  call and no process state.
-
-  Reads refuse to return a node while the cluster is not ready: if the
-  Tender has not yet filled every configured namespace's partition map, the
-  router returns `{:error, :cluster_not_ready}` instead of best-effort
-  routing against a stale map.
-
-  Writes always target the master. Reads use the supplied policy:
-
-    * `:master` — only the master replica; attempt index is ignored.
-    * `:sequence` — walks the replica list by `rem(attempt, length(replicas))`,
-      skipping `nil` slots. The caller owns the `attempt` counter so the
-      router stays stateless.
-  """
+  @moduledoc false
 
   alias Aerospike.Cluster.PartitionMap
   alias Aerospike.Cluster.PartitionMap.PartitionOwners

@@ -1,26 +1,5 @@
 defmodule Aerospike.Cluster.PartitionMapMerge do
-  @moduledoc """
-  Pure accumulation for partition-map segments reported by a single node.
-
-  This module is the merge half of the partition-map refresh stage. It
-  consumes the `[{namespace, regime, ownership}]` segments a node reports
-  (see `Aerospike.Cluster.Node.refresh_partitions/2`) and folds them into the
-  owners ETS table using the regime guard: a stored entry with a strictly
-  higher regime rejects the incoming segment, an equal regime overwrites
-  idempotently, a strictly lower (or absent) regime is replaced.
-
-  It also owns the cluster-stable agreement check: given a per-cycle
-  `%{node_name => hash}` map of `cluster-stable` values captured this
-  cycle, `verify_cluster_stable/1` decides whether the cluster view is
-  consistent enough to merge partition maps onto. The caller (the tend
-  orchestrator) is responsible for filtering the map down to active
-  nodes that produced a hash this cycle.
-
-  The module is pure with respect to BEAM process model: it reads from
-  and writes to the supplied ETS table but owns no process. Writes run
-  in whatever process called in; the single-writer invariant for the
-  owners table is an invariant of the caller, not of this module.
-  """
+  @moduledoc false
 
   alias Aerospike.Cluster.PartitionMap
 

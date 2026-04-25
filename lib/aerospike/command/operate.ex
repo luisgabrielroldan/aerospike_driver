@@ -1,24 +1,5 @@
 defmodule Aerospike.Command.Operate do
-  @moduledoc """
-  OPERATE command adapter for the spike.
-
-  The supported surface stays intentionally narrow:
-
-    * `{:write, bin, value}` for simple bin writes
-    * `{:read, bin}` for bin reads that follow those writes
-    * `{:add, bin, delta}` for integer or float increments
-    * `{:append, bin, suffix}` for string suffix writes
-    * `{:prepend, bin, prefix}` for string prefix writes
-    * `:touch` for header-only metadata refresh
-    * `:delete` for record removal
-
-  The spike also accepts the `Aerospike.Op` helpers for read-only and
-  CDT-style operations that share the same unary substrate.
-
-  Routing is chosen per call from the built operations. Read-only
-  batches route as read traffic; any batch that contains a write routes
-  as write traffic.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

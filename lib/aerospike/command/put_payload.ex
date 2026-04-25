@@ -1,10 +1,5 @@
 defmodule Aerospike.Command.PutPayload do
-  @moduledoc """
-  Raw single-record write/delete payload command adapter.
-
-  The caller supplies a complete wire frame. This command only uses the key for
-  write routing and response parsing; the request bytes are forwarded unchanged.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

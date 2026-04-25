@@ -1,39 +1,5 @@
 defmodule Aerospike.Transport.Fake do
-  @moduledoc """
-  Scripted `Aerospike.Cluster.NodeTransport` implementation for deterministic tests.
-
-  A fake instance is a `GenServer` that holds scripted replies keyed by
-  `{node_id, kind}` where `kind` is either an info-command list or the atom
-  `:command` for AS_MSG requests. Each script entry is a queue: the first
-  call consumes the head of the queue for that key, the next call gets the
-  next entry, and so on. When a queue is empty, the instance's configured
-  default reply is returned (by default, an `:no_script` error so tests
-  surface missing scripting).
-
-  The fake does not parse wire bytes. `info/2` matches on the exact list of
-  info commands passed by the caller; `command/4` and the streaming callbacks
-  do not inspect request bytes at all. Tests drive the fake at the protocol
-  seam the Tender and Router actually use, not a deeper wire-level
-  simulation.
-
-  Streaming is scripted as an ordered queue of events per node. Each opened
-  stream gets its own opaque handle and yields `{:frame, bytes}` items until
-  it hits `:done` or a scripted `{:error, error}`.
-
-  ### Usage
-
-      {:ok, fake} = Fake.start_link(nodes: [{"A1", "10.0.0.1", 3000}])
-      Fake.script_info(fake, "A1", ["node"], %{"node" => "BB9A1..."})
-      Fake.script_command(fake, "A1", {:ok, <<0, 1, 2>>})
-
-      # Hand `fake: fake` to code under test via connect opts:
-      {:ok, conn} = Fake.connect("10.0.0.1", 3000, fake: fake)
-      {:ok, %{"node" => _}} = Fake.info(conn, ["node"])
-
-  `node_id` is the caller-chosen symbolic name the test asserts against
-  (typically the Aerospike node id like `"BB9A1..."`, but any unique term
-  works).
-  """
+  @moduledoc false
 
   @behaviour Aerospike.Cluster.NodeTransport
 

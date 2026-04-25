@@ -1,19 +1,5 @@
 defmodule Aerospike.Command.Get do
-  @moduledoc """
-  GET command adapter for the spike.
-
-  `Aerospike.Runtime.Executor` owns the shared unary control flow:
-  routing, node-handle resolution, breaker checks, pool checkout,
-  transport dispatch, reply classification, and retry budgeting.
-
-  This module stays intentionally narrow. Its responsibilities are:
-
-    * reject spike-unsupported GET shapes such as named-bin requests
-    * build the read request for a `%Aerospike.Key{}`
-    * parse the reply body into the GET result surface
-    * trigger an asynchronous tend when the shared retry driver sees a
-      rebalance response
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

@@ -1,50 +1,5 @@
 defmodule Aerospike.Cluster.NodeCounters do
-  @moduledoc """
-  Per-node `:counters` reference holding lock-free cluster-health metrics.
-
-  The Tender allocates one `:counters` reference when it registers a node
-  and releases it (by dropping the reference) when the node is dropped or
-  marked `:inactive`. Slots are:
-
-    * `@in_flight` (1) — number of commands currently holding a pooled
-      connection for this node. Incremented by `Aerospike.Cluster.NodePool`
-      inside `handle_checkout/4` before the caller's `fun.(conn)` runs;
-      decremented in `handle_checkin/4` (both `:ok` and `:remove`
-      branches) and in `handle_cancelled/2` when a caller dies while a
-      worker is checked out. `terminate_worker/3` does not touch the
-      slot because it cannot distinguish an abandoned checkout from an
-      idle worker being torn down.
-
-    * `@queued` (2) — reserved. No writer currently maintains this slot.
-      NimblePool's queue length is available via `:sys.get_state/1`,
-      which is a GenServer call. Until the circuit breaker proves it
-      needs a lock-free read, the slot stays at zero.
-
-    * `@failed` (3) — number of transport-class command failures
-      observed against this node. Incremented by `Aerospike.Cluster.NodePool`
-      when `Aerospike.RetryPolicy.classify/1` marks the outcome as a
-      node-health failure.
-      Rebalance-class errors (`Aerospike.Error.rebalance?/1`) are a
-      routing cue, not a node-health signal, so they never bump this
-      slot. Pool-level errors that occur before `fun` runs
-      (`:pool_timeout`, `:invalid_node`) likewise do not bump this slot.
-      The Tender zeroes the slot on a successful tend cycle for the
-      node; the circuit breaker reads it.
-
-  Writer discipline:
-
-    * `@in_flight` — single writer = `Aerospike.Cluster.NodePool` (`handle_checkout/4`,
-      `handle_checkin/4`, and `handle_cancelled/2` run inside the pool's
-      own process).
-    * `@queued` — no writer.
-    * `@failed` — two writers: `Aerospike.Cluster.NodePool` (increment on
-      transport-class failure) and `Aerospike.Cluster.Tender` (zero on tend
-      success, clear on node drop). `:counters` is atomic so this is
-      safe, but only these two processes may write.
-
-  Tests that construct counters directly must use `new/0` so the slot
-  layout stays internal to this module.
-  """
+  @moduledoc false
 
   alias Aerospike.RetryPolicy
 

@@ -1,31 +1,5 @@
 defmodule Aerospike.Cluster.PartitionMapWriter do
-  @moduledoc """
-  Sole writer for the published cluster-state ETS tables (`owners`,
-  `node_gens`, `meta.:ready`, `meta.:retry_opts`, `meta.:active_nodes`).
-
-  The invariant this process exists to name is single-writer by
-  construction: every mutation of the partition-map tables runs inside
-  this PID. Callers submit synchronous `handle_call` requests; the
-  handler forwards them to `Aerospike.Cluster.PartitionMap` (for `put_node_gen`,
-  `drop_node`, `delete_node_gen`) or `Aerospike.Cluster.PartitionMapMerge` (for
-  `apply_segments/4`, which in turn calls `PartitionMap.update/5`).
-  `meta.:ready`, `meta.:retry_opts`, and `meta.:active_nodes` are
-  published `:meta` rows this module issues directly.
-
-  Reads stay lock-free and direct — any process may call
-  `PartitionMap.owners/3`, `PartitionMap.get_node_gen/2`,
-  `PartitionMap.complete?/2`, `Aerospike.RetryPolicy.load/1`, or read
-  the `meta` rows directly. The
-  single-writer invariant is about mutation, not observation.
-
-  The writer does not own the ETS tables. `Aerospike.Cluster.TableOwner` creates
-  them and keeps them alive across Tender restarts; the writer receives
-  the table names at `start_link/1` and holds them in its state.
-
-  Call semantics are synchronous so that a caller waiting on
-  `Aerospike.Cluster.Tender.tend_now/1` sees a fully-committed cycle: when the
-  call returns the ETS write is visible to every reader.
-  """
+  @moduledoc false
 
   use GenServer
 

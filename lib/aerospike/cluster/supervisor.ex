@@ -2,35 +2,21 @@ defmodule Aerospike.Cluster.Supervisor do
   @moduledoc """
   Top-level supervisor for one named Aerospike cluster.
 
-  Starts four children under `rest_for_one` so the blast radius of a
-  crash matches which process owns what state:
-
-    1. `Aerospike.Cluster.TableOwner` — creates and owns the ETS tables backing
-       the cluster. Must start first so every later child can read the
-       table names.
-    2. `Aerospike.Cluster.NodeSupervisor` — `DynamicSupervisor` for per-node
-       `NimblePool` children. Lives independently of the Tender so the
-       Tender can restart without losing already-started pools; the
-       Tender's restart path sweeps orphans to reconcile.
-    3. `Aerospike.Cluster.PartitionMapWriter` — sole writer for the published
-       cluster-state ETS tables. Promotes the single-writer invariant
-       from convention to a process boundary: every mutation of
-       `owners`, `node_gens`, and the published `meta` rows runs inside
-       this PID.
-    4. `Aerospike.Cluster.Tender` — the tend-cycle orchestrator. Started last so
-       its `init/1` can read the TableOwner's tables and reference the
-       NodeSupervisor and Writer by name.
+  Starts the table owner, per-node pool supervisor, partition-map writer,
+  and tend-cycle worker under `rest_for_one` so the blast radius of a crash
+  matches which process owns what state.
 
   Crash semantics under `rest_for_one`:
 
-    * Tender crash → only the Tender restarts. ETS tables survive, the
-      NodeSupervisor and Writer survive, and the restarted Tender
-      rehydrates its `:ready` flag from the `:meta` table.
-    * Writer crash → Tender also restarts (it is after the Writer). The
+    * Tend-cycle crash → only the tend-cycle worker restarts. ETS tables
+      survive, the pool supervisor and writer survive, and the restarted
+      worker rehydrates its `:ready` flag from the `:meta` table.
+    * Writer crash → the tend-cycle worker also restarts (it is after the
+      writer). The
       next tend-cycle write would target a dead writer anyway; taking
-      the Tender with it keeps the cycle consistent.
-    * NodeSupervisor crash → Writer and Tender also restart.
-    * TableOwner crash → the whole subtree restarts with fresh tables.
+      the worker with it keeps the cycle consistent.
+    * Pool-supervisor crash → writer and tend-cycle worker also restart.
+    * Table-owner crash → the whole subtree restarts with fresh tables.
 
   This module only supervises. It does not start pools, does not run
   tend cycles, and does not own any application state.
@@ -46,8 +32,7 @@ defmodule Aerospike.Cluster.Supervisor do
   Start options.
 
     * `:name` — atom used as the cluster identity (required). Becomes
-      the Tender's registered name, the TableOwner's table prefix, and
-      the NodeSupervisor's registered name.
+      the cluster process name, table prefix, and pool-supervisor name.
     * `:transport` — module implementing `Aerospike.Cluster.NodeTransport`
       (required).
     * `:hosts` — list of `"host:port"` or `"host"` seed strings
@@ -56,10 +41,10 @@ defmodule Aerospike.Cluster.Supervisor do
       before `Aerospike.Cluster.ready?/1` returns `true` (required,
       non-empty).
 
-  Every other option is forwarded verbatim to `Aerospike.Cluster.Tender` (for
-  example `:connect_opts`, `:failure_threshold`, `:tend_interval_ms`,
-  `:tend_trigger`, `:use_compression`, `:use_services_alternate`,
-  `:pool_size`, `:idle_timeout_ms`, `:max_idle_pings`).
+  Every other option is forwarded verbatim to the runtime worker (for example
+  `:connect_opts`, `:failure_threshold`, `:tend_interval_ms`, `:tend_trigger`,
+  `:use_compression`, `:use_services_alternate`, `:pool_size`,
+  `:idle_timeout_ms`, `:max_idle_pings`).
 
   ## Auth opts
 
@@ -74,22 +59,22 @@ defmodule Aerospike.Cluster.Supervisor do
   Pool-level knobs live at the top level of the keyword list because
   the pool supervisor — not the transport — applies them:
 
-    * `:idle_timeout_ms` — milliseconds a pooled worker may sit idle
-      before `NimblePool.handle_ping/2` evicts it. Must be a positive
-      integer when set.
+    * `:idle_timeout_ms` — milliseconds a pooled worker may sit idle before
+      the pool verification step evicts it. Must be a positive integer when
+      set.
     * `:max_idle_pings` — positive integer bounding how many idle
       workers NimblePool may drop per verification cycle.
 
   TCP-level tuning knobs live inside `:connect_opts` because
-  `Aerospike.Transport.Tcp.connect/3` is where they take effect. See
-  its moduledoc for the public keys and how they map to
+  the TCP transport is where they take effect. See
+  `Aerospike.Transport.Tcp` for the public keys and how they map to
   `:inet.setopts/2` spellings.
   """
   @type option ::
           {:name, atom()}
           | {:transport, module()}
           | {:hosts, [String.t(), ...]}
-          | {:namespaces, [Tender.namespace(), ...]}
+          | {:namespaces, [String.t(), ...]}
           | {atom(), term()}
 
   @doc false

@@ -1,21 +1,22 @@
 # Aerospike Driver
 
-`aerospike_driver_spike/` is the active Aerospike Elixir client library.
-Internally this codebase may still be called "the spike", but the public
-package identity is `aerospike_driver`: the intended replacement for the older
-driver that remains in this workspace as a migration/reference repo.
+`aerospike_driver` is an Aerospike client library for Elixir.
 
 The goal is a production-grade, OTP-native Aerospike client with a sharper
-runtime foundation than the legacy driver: supervised cluster ownership,
-deterministic routing, reusable unary execution, explicit streaming paths, and
-a concrete test matrix tied to real Aerospike environments.
+runtime foundation: supervised cluster ownership, deterministic routing,
+reusable unary execution, explicit streaming paths, and a concrete test matrix
+tied to real Aerospike environments.
 
 ## Current Surface
 
 The library currently proves these command families through the public
 `Aerospike` entry point:
 
-- Unary CRUD: `get/3`, `put/4`, `exists/2`, `touch/2`, `delete/2`
+- Unary CRUD: `get/3`, `get_header/3`, `put/4`, `exists/3`, `touch/3`,
+  `delete/3`
+- Unary write helpers: `add/4`, `append/4`, `prepend/4`
+- Record UDFs and package lifecycle: `apply_udf/6`, `list_udfs/2`,
+  `register_udf/4`, and `remove_udf/3`
 - Raw single-record write/delete payloads: `put_payload/4` and
   `put_payload!/4`
 - Unary operate: `operate/4` with the currently admitted write/read subset plus
@@ -28,8 +29,9 @@ The library currently proves these command families through the public
   `key_digest/3`
 - Scans: `scan_stream/3`, `scan_stream!/3`, `scan_all/3`, `scan_all!/3`,
   `scan_count/3`, `scan_count!/3`
-- Secondary-index queries: `query_stream!/3`, `query_all/3`, `query_count/3`,
-  `query_page/3`
+- Secondary-index queries: `query_stream/3`, `query_stream!/3`,
+  `query_all/3`, `query_all!/3`, `query_count/3`, `query_count!/3`,
+  `query_page/3`, `query_page!/3`
 - Unary and write-family commands (`get`, `put`, `delete`, `touch`, `exists`,
   `operate`, `apply_udf`, `add`, `append`, `prepend`) support
   `%Aerospike.Exp{}` via `:filter`.
@@ -40,6 +42,8 @@ The library currently proves these command families through the public
   `query_aggregate_result!/6`, `query_execute/4`, `query_udf/6`
 - Operator info helpers: `info/3`, `info_node/4`, `nodes/1`, and
   `node_names/1`
+- Operator maintenance and runtime helpers: `truncate/4`, `metrics_enabled?/1`,
+  `enable_metrics/2`, `disable_metrics/1`, `stats/1`, and `warm_up/2`
 - Typed geo values through `Aerospike.Geo` and geo secondary-index filters
   through `Aerospike.Filter.geo_within/2` and `Aerospike.Filter.geo_contains/2`
 - Enterprise XDR filter management through `set_xdr_filter/4`
@@ -86,6 +90,19 @@ Required startup options are `:name`, `:transport`, `:hosts`, and
 are validated synchronously by `Aerospike.start_link/1` before the cluster
 runtime boots. Use `Aerospike.Cluster.ready?/1` to observe when the published
 cluster view is ready to route commands.
+
+## Guides
+
+- [Getting Started](guides/getting-started.md)
+- [Record Operations](guides/record-operations.md)
+- [Batch Operations](guides/batch-operations.md)
+- [Operate, CDT, And Geo](guides/operate-cdt-and-geo.md)
+- [Queries And Scans](guides/queries-and-scans.md)
+- [Expressions And Server Features](guides/expressions-and-server-features.md)
+- [UDFs And Aggregates](guides/udfs-and-aggregates.md)
+- [Security And XDR](guides/security-and-xdr.md)
+- [Transactions](guides/transactions.md)
+- [Telemetry And Runtime Metrics](guides/telemetry-and-runtime-metrics.md)
 
 ## Raw Payload Writes
 
@@ -340,15 +357,14 @@ finalization returns `{:ok, nil}`; multiple final values return
 This client is deliberately OTP-first. These runtime modules are internal
 implementation details, not additional public entry points:
 
-- `Aerospike.Cluster.Supervisor` owns cluster startup and validation
-- `Aerospike.Cluster.Tender` is the single writer for mutable cluster topology state
-- `Aerospike.Cluster.NodeSupervisor` and `Aerospike.Cluster.NodePool` own
-  per-node transport pools
+- the cluster supervisor owns cluster startup and validation
+- the tend-cycle worker is the single writer for mutable cluster topology state
+- the per-node pool supervisor and pools own transport connections
 - routing decisions are derived from published cluster state rather than hidden
   mutable command-local state
 
-That separation is the main architectural difference from the legacy driver the
-workspace still carries as a reference implementation.
+That separation keeps runtime state isolated behind supervised owners while the
+public API remains a thin facade over cluster operations.
 
 ## Supported Validation Profiles
 
@@ -360,7 +376,7 @@ validation.
 | Profile | Purpose | Where it runs |
 | --- | --- | --- |
 | CE single-node | default local proof for unary, write-family, and index-query flows | `docker compose up -d` in this repo |
-| CE three-node cluster | cluster routing, batch, and scan proofs | `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `../aerospike_driver/` |
+| CE three-node cluster | cluster routing, batch, and scan proofs | `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in this repo |
 | EE single-node variants | transactions, TLS, auth, and combined operator-surface smoke | `docker compose --profile enterprise up -d ...` in this repo |
 
 Reviewers should record the resolved image ids when they run the final gate.
@@ -385,8 +401,8 @@ This library is not yet claiming full Aerospike feature parity.
 - expression-backed secondary indexes require Aerospike 8.1 or newer
 - `set_xdr_filter/4` requires an Enterprise server with XDR configured; it can
   set a `%Aerospike.Exp{}` filter or clear the existing filter with `nil`
-- broader expression-builder families, general UDF package management, and a
-  wider policy surface remain deferred
+- broader expression-builder families, UDF tooling beyond list/register/remove
+  and record/query execution, and a wider policy surface remain deferred
 - scan/query streams are lazy at the outer `Enumerable` boundary only; the
   current runtime still buffers each node before yielding that node's records
 - `query_all/3` and `query_page/3` require `query.max_records`
@@ -493,9 +509,12 @@ that limit when the server is configured to support quotas.
 
 The library emits a fixed telemetry taxonomy under `[:aerospike, ...]`. Use
 `Aerospike.Telemetry` as the contract source instead of copying raw event lists
-into handlers or metrics modules.
+into handlers or metrics modules. See the
+[Telemetry And Runtime Metrics](guides/telemetry-and-runtime-metrics.md) guide
+for measurements, metadata, caveats, and the difference between telemetry
+handlers and opt-in runtime metrics.
 
-- Pool checkout: `[:aerospike, :pool, :checkout, :start | :stop]`
+- Pool checkout: `[:aerospike, :pool, :checkout, :start | :stop | :exception]`
 - Command transport: `[:aerospike, :command, :send, ...]` and
   `[:aerospike, :command, :recv, ...]`
 - Info and login RPCs: `[:aerospike, :info, :rpc, ...]`
@@ -511,7 +530,8 @@ Common metadata:
 - `:attempt` and `:deadline_ms` on command send/recv spans
 - `:commands` on info/login spans (`[:login]` for auth handshakes)
 - `:from`, `:to`, and `:reason` on node-transition events
-- `:classification` and `:remaining_budget_ms` on retry events
+- `:classification`, `:attempt`, and `:node_name` on retry events
+- `:remaining_budget_ms` as the retry-event measurement
 - `:bytes` on command-recv `:stop`
 
 ```elixir

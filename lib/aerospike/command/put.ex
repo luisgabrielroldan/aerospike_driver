@@ -1,11 +1,5 @@
 defmodule Aerospike.Command.Put do
-  @moduledoc """
-  PUT command adapter for the spike.
-
-  This module builds a simple unary write from a key plus bin map and
-  delegates routing, checkout, retry, and transport flow to
-  `Aerospike.Runtime.Executor`.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

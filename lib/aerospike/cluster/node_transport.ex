@@ -62,8 +62,8 @@ defmodule Aerospike.Cluster.NodeTransport do
       (`AS_MSG_COMPRESSED`) proto frame before being sent. Smaller requests
       are sent plain even when the flag is set, matching the Go and Java
       clients (`_COMPRESS_THRESHOLD = 128`). Implementations that ignore
-      compression (e.g. `Aerospike.Transport.Fake`) must still accept the
-      option without error. Defaults to `false`.
+      compression must still accept the option without error. Defaults to
+      `false`.
     * `:message_type` — `:as_msg` (default) or `:admin`. `:admin` is the
       Aerospike admin-protocol reply type used by security commands.
   """
@@ -73,9 +73,8 @@ defmodule Aerospike.Cluster.NodeTransport do
   Sends a pre-encoded request and returns the full reply bytes.
 
   The request is expected to be complete wire bytes (proto header + body)
-  produced by `Aerospike.Protocol.Message` plus the relevant protocol codec.
-  The reply is the full response payload; framing/parsing is the caller's
-  responsibility.
+  produced by the command encoder. The reply is the full response payload;
+  framing/parsing is the caller's responsibility.
 
   `deadline_ms` is a per-socket-read deadline in milliseconds applied to
   each `:gen_tcp.recv/3` call (header and body are read separately on

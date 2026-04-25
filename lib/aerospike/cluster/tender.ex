@@ -1,55 +1,5 @@
 defmodule Aerospike.Cluster.Tender do
-  @moduledoc """
-  Tend-cycle orchestrator plus operational runtime surface.
-
-  Each cycle composes the following stages, one after the other, through a
-  single process so every observable transition is serialised:
-
-    1. Seed the node set from `:seeds` when the cluster view is empty.
-    2. Refresh every known node's `partition-generation`, `cluster-stable`,
-       and `peers-generation` in one combined info round trip via
-       `Aerospike.Cluster.Node.refresh/2`.
-    3. Run peer discovery via `Aerospike.Cluster.Node.refresh_peers/3` only when at
-       least one node's `peers-generation` advanced this cycle (matches the
-       reference C/Go/Java trigger).
-    4. Verify `cluster-stable` agreement across contributing nodes via
-       `Aerospike.Cluster.PartitionMapMerge.verify_cluster_stable/1`. On
-       disagreement, skip the partition-map refresh for this cycle.
-    5. When the cluster is stable and a node's `partition-generation`
-       advanced past its last applied value, fetch its `replicas` reply via
-       `Aerospike.Cluster.Node.refresh_partitions/2` and merge the segments via
-       `Aerospike.Cluster.PartitionMapMerge.apply_segments/4`.
-    6. Recompute the `:ready` meta flag — `true` only when every configured
-       namespace has a complete partition map.
-
-  Per-node I/O (info-socket probes, login, peer discovery, partition-map
-  fetch) runs through `Aerospike.Cluster.Node`, which owns the `%Node{}` struct
-  plus the pure (given a transport) operations. The Tender retains the
-  lifecycle state around each node (status, failures, recoveries, pool,
-  counters, histograms) and the cycle orchestration; the Node struct
-  carries only the observables the info socket sees.
-
-  Partition-map accumulation (regime guard, ownership merge, agreement
-  check) lives in `Aerospike.Cluster.PartitionMapMerge`. The Tender calls it; it
-  never open-codes the merge.
-
-  ETS writes against the cluster-state tables (`owners`, `node_gens`,
-  published `meta` rows such as `:ready`, `:retry_opts`, and
-  `:active_nodes`) are routed through `Aerospike.Cluster.PartitionMapWriter`.
-  The Tender never mutates those tables itself; every per-node
-  `put_node_gen`, `drop_node`, `delete_node_gen`, `apply_segments`,
-  active-node snapshot publication, and `recompute_ready` is a
-  synchronous call into the writer so a `tend_now/1` observer sees a
-  fully-committed cycle.
-
-  All I/O goes through the `Aerospike.Cluster.NodeTransport` behaviour module
-  supplied via the `:transport` option. Production code uses
-  `Aerospike.Transport.Tcp`; tests substitute `Aerospike.Transport.Fake`
-  with scripted replies.
-
-  Tests drive the cycle deterministically with `tend_now/1`, which blocks
-  until the cycle's ETS writes are visible.
-  """
+  @moduledoc false
 
   use GenServer
 

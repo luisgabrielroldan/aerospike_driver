@@ -36,42 +36,44 @@ defmodule Aerospike.Telemetry do
   `handler_events/0`, which expands the current taxonomy into concrete
   event names suitable for `:telemetry.attach_many/4`.
 
-  For the operator-facing reference, including emitter locations and the
-  supported metadata/measurement contract for each family, see
-  `spike-docs/telemetry.md` in the workspace root.
+  The Telemetry And Runtime Metrics guide provides the operator-facing
+  metadata and measurement contract for each family.
 
   ## Taxonomy
 
   Span events (prefix + `:start | :stop | :exception`):
 
-    * `[:aerospike, :pool, :checkout]` — wraps every
-      `Aerospike.Cluster.NodePool.checkout!/3`. Metadata: `:node_name`,
-      `:pool_pid`, `:telemetry_span_context`. Measurements:
-      `:system_time` and `:monotonic_time` on start; `:duration` on
-      stop.
+    * `[:aerospike, :pool, :checkout]` — wraps every per-node pool checkout.
+      Metadata: `:node_name`, `:pool_pid`, `:telemetry_span_context`.
+      Measurements: `:system_time` and `:monotonic_time` on start;
+      `:duration` on stop and exception.
 
     * `[:aerospike, :command, :send]` — wraps the send side of a
       per-attempt command on the transport. Metadata: `:node_name`,
       `:attempt` (0-indexed, matching the retry driver), `:deadline_ms`.
-      Measurements: `:system_time` on start; `:duration` on stop.
+      Measurements: `:system_time` on start; `:duration` on stop and
+      exception.
 
     * `[:aerospike, :command, :recv]` — wraps the receive side of a
       per-attempt command. Metadata: `:node_name`, `:attempt`,
-      `:deadline_ms`. Measurements: `:duration` and `:bytes` on stop.
+      `:deadline_ms`. Measurements: `:duration` on stop and exception,
+      plus `:bytes` metadata on stop.
 
     * `[:aerospike, :info, :rpc]` — wraps every info RPC (Tender cycles
       and transport login/authenticate handshakes). Metadata:
       `:node_name`, `:commands` (the list of info keys requested, or
-      `[:login]` for auth). Measurements: `:duration` on stop.
+      `[:login]` for auth). Measurements: `:system_time` on start;
+      `:duration` on stop and exception.
 
-    * `[:aerospike, :tender, :tend_cycle]` — wraps one full
-      `Aerospike.Cluster.Tender` cycle. Cluster-wide (one pair per cycle).
-      Metadata: none. Measurements: `:duration` on stop.
+    * `[:aerospike, :tender, :tend_cycle]` — wraps one full tend cycle.
+      Cluster-wide (one pair per cycle). Metadata: none. Measurements:
+      `:system_time` on start; `:duration` on stop and exception.
 
     * `[:aerospike, :tender, :partition_map_refresh]` — wraps the
       partition-map refresh stage of the tend cycle (the most expensive
       sub-step). Cluster-wide, nested inside a `:tend_cycle` span.
-      Metadata: none. Measurements: `:duration` on stop.
+      Metadata: none. Measurements: `:system_time` on start; `:duration`
+      on stop and exception.
 
   Instant events (dispatched via `:telemetry.execute/3`):
 
@@ -140,8 +142,8 @@ defmodule Aerospike.Telemetry do
   @doc """
   Event prefix for the tend-cycle span.
 
-  Wraps one invocation of `Aerospike.Cluster.Tender.run_tend/1`. The partition
-  map refresh is a nested span — both fire during a normal cycle.
+  Wraps one tend-cycle invocation. The partition map refresh is a nested span;
+  both fire during a normal cycle.
   """
   @spec tend_cycle_span() :: [:aerospike | :tender | :tend_cycle, ...]
   def tend_cycle_span, do: @tend_cycle_span

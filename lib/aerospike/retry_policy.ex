@@ -2,21 +2,20 @@ defmodule Aerospike.RetryPolicy do
   @moduledoc """
   Retry configuration and error classification for the command path.
 
-  The retry driver in `Aerospike.Command.Get` consumes a `t:t/0` value per command
-  and decides, based on the classification helpers below, whether to
-  re-dispatch an attempt against the next replica (on a rebalance-class
-  error), re-dispatch against a fresh pool worker (on a transport-class
-  error), or return the error verbatim (on anything else).
+  The retry driver consumes a `t:t/0` value per command and decides, based on
+  the classification helpers below, whether to re-dispatch an attempt against
+  the next replica (on a rebalance-class error), re-dispatch against a fresh
+  pool worker (on a transport-class error), or return the error verbatim (on
+  anything else).
 
   ## Writer discipline
 
   The retry policy is cluster-scoped, not per-node, and is established
   once at `Aerospike.start_link/1` time. The Tender computes the
-  effective policy and publishes it through `Aerospike.Cluster.PartitionMapWriter`
-  to the `:meta` ETS table under the key `:retry_opts`; the command path
-  reads it lock-free via `load/1`. Runtime mutation still stays behind
-  the single-writer boundary that governs every other published `:meta`
-  entry.
+  effective policy and publishes it to the `:meta` ETS table under the key
+  `:retry_opts`; the command path reads it lock-free via `load/1`. Runtime
+  mutation still stays behind the single-writer boundary that governs every
+  other published `:meta` entry.
 
   Per-command overrides (`:timeout`, `:max_retries`,
   `:sleep_between_retries_ms`, `:replica_policy`) may be passed through
@@ -150,9 +149,9 @@ defmodule Aerospike.RetryPolicy do
   @doc """
   Writes `policy` to `meta_tab` under the ETS key used by `load/1`.
 
-  Runtime publication flows through `Aerospike.Cluster.PartitionMapWriter`; the
-  TableOwner also uses this helper once at table creation to seed the
-  default row before the Tender starts.
+  Runtime publication flows through the cluster-state writer; table creation
+  also uses this helper once to seed the default row before the tend-cycle
+  worker starts.
   """
   @spec put(atom(), t()) :: true
   def put(

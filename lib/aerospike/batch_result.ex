@@ -33,7 +33,7 @@ defmodule Aerospike.BatchResult do
         }
 
   @doc false
-  @spec from_command_result(Result.t()) :: t()
+  @spec from_command_result(term()) :: t()
   def from_command_result(%Result{
         key: key,
         status: :ok,

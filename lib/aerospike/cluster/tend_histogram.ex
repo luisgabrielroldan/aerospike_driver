@@ -1,31 +1,5 @@
 defmodule Aerospike.Cluster.TendHistogram do
-  @moduledoc """
-  Lock-free per-node histogram for tend-cycle latency samples.
-
-  Each reference is an `:atomics` array with 33 slots:
-
-    * Slots 1..32 — `Log2` buckets. A sample of `duration_us` increments
-      slot `clamp(floor(log2(duration_us)), 0, 31) + 1`. Slot 1 covers
-      samples up to 1 µs, slot 11 covers ~1 ms (log2 10 ≈ 10), slot 21
-      covers ~1 s, slot 32 is saturation (≥ 2^31 µs ≈ 35 minutes).
-    * Slot 33 — total sample count, kept in parallel so a reader does
-      not have to sum buckets to know how many samples were taken.
-
-  Writer discipline: every slot is updated via `:atomics.add/3`, which
-  is lock-free across writers. In this driver the Tender is the sole
-  process that calls `record/2`; the lock-free property is kept so a
-  future cross-process writer (e.g. a pool worker) is safe without
-  reshaping the module.
-
-  Readers (percentile computation, total count) touch the same slots
-  with `:atomics.get/2`. A reader racing a writer observes either the
-  old or the new bucket count — both are valid histogram states, so
-  the race is harmless. `percentile/2` walks buckets in order and
-  returns a coarse mid-bucket estimate; operators who need finer
-  resolution attach a `telemetry_metrics.Summary` handler to the
-  tend-cycle span and aggregate the raw `:duration` measurements
-  themselves.
-  """
+  @moduledoc false
 
   @num_buckets 32
   @count_slot @num_buckets + 1

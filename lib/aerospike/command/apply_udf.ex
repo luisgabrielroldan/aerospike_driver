@@ -1,11 +1,5 @@
 defmodule Aerospike.Command.ApplyUdf do
-  @moduledoc """
-  Unary single-record UDF execution adapter for the spike.
-
-  This keeps record UDF apply on the same routed unary execution seam as the
-  write family, while isolating UDF-specific request encoding and reply parsing
-  from ordinary CRUD responses.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

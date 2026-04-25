@@ -1,26 +1,5 @@
 defmodule Aerospike.Cluster.TableOwner do
-  @moduledoc """
-  Dedicated process that creates and holds the ETS tables backing one
-  named cluster's state.
-
-  By separating ETS ownership from the Tender, a Tender crash (and
-  restart under `rest_for_one`) does not drop the partition map. The
-  TableOwner outlives the Tender within the same supervision subtree;
-  the restarted Tender reads table names from the TableOwner and resumes
-  writing to the same tables.
-
-  The TableOwner creates four named tables with a `name`-derived prefix:
-
-    * `owners` — partition ownership, keyed by `{namespace, partition_id}`.
-    * `node_gens` — per-node `partition-generation` values.
-    * `meta` — lock-free published cluster state (`:ready`,
-      `:retry_opts`, `:active_nodes`).
-    * `txn_tracking` - transaction state for explicit multi-record transactions.
-
-  After `init/1`, the TableOwner has no state beyond the `:name` and the
-  four table names, and handles no messages. Its sole purpose is to own
-  the tables so they share its lifetime.
-  """
+  @moduledoc false
 
   use GenServer
 

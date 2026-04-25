@@ -1,23 +1,5 @@
 defmodule Aerospike.Command.UnaryCommand do
-  @moduledoc """
-  Internal contract for unary command-local hooks.
-
-  The shared executor boundary is narrower than `Aerospike.Command.Get`'s
-  current end-to-end control flow suggests. The retry driver, routing,
-  node-handle resolution, breaker checks, pool checkout, retry budget, and
-  retry classification stay shared concerns. The command-specific variation
-  exposed by the current implementation is limited to:
-
-    * choosing read or write dispatch
-    * building the wire request from command input
-    * parsing the reply body into the command result/error surface
-
-  This module codifies that boundary without extracting the shared retry
-  loop yet. `Aerospike.Command.Get` can delegate its transport edge here today,
-  and future executor work can move the surrounding retry/dispatch
-  orchestration into a reusable executor without re-deciding what a unary
-  command is allowed to own.
-  """
+  @moduledoc false
 
   alias Aerospike.Cluster.Router
   alias Aerospike.Error

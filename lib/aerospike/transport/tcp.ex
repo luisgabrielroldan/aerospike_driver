@@ -26,10 +26,10 @@ defmodule Aerospike.Transport.Tcp do
   per-connection read buffer would only pay off for pipelined in-flight
   requests, which this transport does not support.
 
-  The read deadline is supplied per `command/3` call by the caller rather
+  The read deadline is supplied per command call by the caller rather
   than stored on the connection, so a retry layer can budget each attempt
-  independently (see `Aerospike.Cluster.NodeTransport.command/3`). `info/2` still
-  uses the default connect-time timeout because it is only issued from the
+  independently. `info/2` still uses the default connect-time timeout because it
+  is only issued from the
   Tender path, which has no per-call deadline of its own.
 
   Failures are returned as `{:error, %Aerospike.Error{}}` — sockets are not

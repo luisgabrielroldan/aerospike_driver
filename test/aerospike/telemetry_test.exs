@@ -27,6 +27,7 @@ defmodule Aerospike.TelemetryTest do
   ]
 
   @telemetry_doc Path.expand("../../../spike-docs/telemetry.md", __DIR__)
+  @telemetry_guide Path.expand("../../guides/telemetry-and-runtime-metrics.md", __DIR__)
   @doc_emitters [
     "Aerospike.Runtime.PoolCheckout",
     "Aerospike.Transport.Tcp",
@@ -81,6 +82,16 @@ defmodule Aerospike.TelemetryTest do
       for emitter <- @doc_emitters do
         assert doc =~ emitter
       end
+    end
+
+    test "published telemetry guide names the supported taxonomy" do
+      guide = File.read!(@telemetry_guide)
+
+      for {_fun, _event, doc_heading} <- @span_events ++ @instant_events do
+        assert guide =~ doc_heading
+      end
+
+      assert guide =~ "Aerospike.Telemetry.handler_events()"
     end
   end
 

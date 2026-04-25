@@ -1,11 +1,5 @@
 defmodule Aerospike.Command.BatchCommand do
-  @moduledoc """
-  Internal contract for grouped batch command hooks.
-
-  Batch execution owns node-level dispatch, retry, and bounded fan-out.
-  Command modules supply only the per-node request builder, reply parser,
-  and final merge step back into caller-facing order.
-  """
+  @moduledoc false
 
   alias Aerospike.Cluster.Router
   alias Aerospike.Error

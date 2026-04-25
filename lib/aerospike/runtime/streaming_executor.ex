@@ -1,11 +1,5 @@
 defmodule Aerospike.Runtime.StreamingExecutor do
-  @moduledoc """
-  Internal executor for node-scoped streaming commands.
-
-  This module owns the shared operational flow around streaming command
-  hooks: node-handle resolution, breaker checks, connect/open/read/close,
-  stream frame decoding, and common invalid-node shaping.
-  """
+  @moduledoc false
 
   alias Aerospike.Cluster.CircuitBreaker
   alias Aerospike.Cluster.Tender

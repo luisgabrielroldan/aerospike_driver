@@ -18,6 +18,9 @@ defmodule Aerospike.IndexTask do
   use Aerospike.Runtime.AsyncTask
 
   @impl Aerospike.Runtime.AsyncTask
+  @doc """
+  Returns the current secondary-index build status.
+  """
   @spec status(t()) :: {:ok, :complete | :in_progress} | {:error, Error.t()}
   def status(%__MODULE__{conn: conn, namespace: namespace, index_name: index_name}) do
     case Admin.index_status(conn, namespace, index_name, []) do

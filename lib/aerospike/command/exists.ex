@@ -1,10 +1,5 @@
 defmodule Aerospike.Command.Exists do
-  @moduledoc """
-  EXISTS command adapter for the spike.
-
-  This is a header-only read. It proves record existence without
-  fetching bins and returns a boolean instead of a full record.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.UnaryCommand
   alias Aerospike.Command.UnarySupport

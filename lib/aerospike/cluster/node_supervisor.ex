@@ -1,17 +1,5 @@
 defmodule Aerospike.Cluster.NodeSupervisor do
-  @moduledoc """
-  `DynamicSupervisor` that owns the per-node `NimblePool` children for one
-  named cluster.
-
-  This module is a shell: it accepts `start_pool/2` and `stop_pool/2`
-  calls from the Tender but makes no autonomous decisions about cluster
-  membership. The Tender decides when a pool starts or stops; this
-  supervisor just holds the pool children.
-
-  Pool children are started with `restart: :temporary` so a dead pool is
-  not automatically resurrected. The Tender re-adds the node (and starts
-  a fresh pool) on the next tend cycle when the node is reachable again.
-  """
+  @moduledoc false
 
   @default_pool_size 10
 

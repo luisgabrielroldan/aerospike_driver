@@ -1,13 +1,5 @@
 defmodule Aerospike.Policy do
-  @moduledoc """
-  Canonical policy entry point for the spike's current command families.
-
-  This module owns family-specific validation, defaults, and effective
-  per-call policy materialization. Retry classification remains in the
-  pure `Aerospike.RetryPolicy` sibling module; callers should ask
-  `Aerospike.Policy` for effective policy data instead of merging raw
-  keywords themselves.
-  """
+  @moduledoc false
 
   alias Aerospike.Error
   alias Aerospike.Exp

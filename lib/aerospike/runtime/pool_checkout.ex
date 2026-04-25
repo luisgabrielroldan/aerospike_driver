@@ -1,13 +1,5 @@
 defmodule Aerospike.Runtime.PoolCheckout do
-  @moduledoc """
-  Internal helper that owns the public checkout wrapper around
-  `Aerospike.Cluster.NodePool`.
-
-  The NimblePool callback module stays focused on worker lifecycle.
-  This helper emits checkout span events and translates pool-level exits
-  into the public `Aerospike.Error` contract returned by
-  `Aerospike.Cluster.NodePool.checkout!/3` and `/4`.
-  """
+  @moduledoc false
 
   alias Aerospike.Error
   alias Aerospike.Telemetry

@@ -23,6 +23,9 @@ defmodule Aerospike.RegisterTask do
   use Aerospike.Runtime.AsyncTask
 
   @impl Aerospike.Runtime.AsyncTask
+  @doc """
+  Returns whether the UDF package is visible on every active cluster node.
+  """
   @spec status(t()) :: {:ok, :complete | :in_progress} | {:error, Error.t()}
   def status(%__MODULE__{conn: conn, package_name: package_name}) do
     with {:ok, node_names} <- target_node_names(conn) do

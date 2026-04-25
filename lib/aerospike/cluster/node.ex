@@ -1,27 +1,5 @@
 defmodule Aerospike.Cluster.Node do
-  @moduledoc """
-  Per-node struct plus pure (given a transport) info-socket operations for
-  one cluster member.
-
-  A `%Aerospike.Cluster.Node{}` captures the observable facts the tend cycle reads
-  from a node's info socket: the registered name, host/port, the socket
-  handle, the cached login session, the feature set advertised at
-  bootstrap, and the generation markers (`partition-generation`,
-  `applied_gen`, `cluster-stable`) that drive the tend scheduler's fetch
-  decisions.
-
-  This module is intentionally not a process. Per-node state lives inside
-  `Aerospike.Cluster.Tender`'s node map; the functions here take and return a
-  `%Node{}` struct explicitly so the caller remains in control of when
-  state transitions are committed. I/O runs through the
-  `Aerospike.Cluster.NodeTransport` behaviour module supplied as an argument — the
-  same module the Tender uses — so tests can substitute
-  `Aerospike.Transport.Fake` with scripted replies.
-
-  Lifecycle concerns (failures, recoveries, status, pool, counters,
-  histograms) do not belong on the struct; they live on the Tender's
-  lifecycle map alongside the `%Node{}`.
-  """
+  @moduledoc false
 
   alias Aerospike.Error
   alias Aerospike.Protocol.Info, as: InfoParser

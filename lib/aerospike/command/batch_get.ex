@@ -1,19 +1,5 @@
 defmodule Aerospike.Command.BatchGet do
-  @moduledoc """
-  Narrow public batch read helper for the spike.
-
-  The helper fans out grouped batch read-style requests through the
-  shared batch substrate and merges node replies back into the caller's
-  key order. Each key keeps its own outcome, so routing misses,
-  per-record server errors, and node-request failures stay scoped to the
-  affected indices.
-
-  The spike currently exposes four narrow public shapes over that
-  substrate: full-record reads, header-only reads, existence probes, and
-  read-only operation lists. All of them currently support only the
-  `:timeout` option. Retries remain disabled at the public policy surface
-  even though grouped execution can now regroup retries internally.
-  """
+  @moduledoc false
 
   alias Aerospike.Command.Batch, as: MixedBatch
   alias Aerospike.Command.BatchCommand

@@ -1,13 +1,13 @@
 defmodule Aerospike.Cluster do
   @moduledoc """
-  Thin read-side seam over published cluster state.
+  Read-side helpers over published cluster state.
 
   `ready?/1`, routing, retry policy, and active-node helpers read the
   cluster's ETS tables directly when the caller passes the cluster atom
-  or a pid registered under that atom. Operational APIs such as
-  transports and node handles remain on `Aerospike.Cluster.Tender`.
-  `warm_up/2` is the one explicit operator helper this module
-  aggregates over the published active-node view.
+  or a pid registered under that atom. Transport sockets, tend-cycle state,
+  and node handles remain implementation details. `warm_up/2` is the one
+  explicit operator helper this module aggregates over the published
+  active-node view.
   """
 
   alias Aerospike.Cluster.NodePool
@@ -18,8 +18,13 @@ defmodule Aerospike.Cluster do
   alias Aerospike.RetryPolicy
 
   @type cluster :: atom() | pid()
-  @type tables :: Router.tables()
-  @type replica_policy :: Router.replica_policy()
+  @type tables :: %{
+          owners: atom(),
+          node_gens: atom(),
+          meta: atom(),
+          txn_tracking: atom()
+        }
+  @type replica_policy :: :master | :sequence
   @type route_result :: {:ok, String.t()} | {:error, :cluster_not_ready | :no_master}
   @type node_info :: %{name: String.t(), host: String.t(), port: :inet.port_number()}
 

@@ -1,12 +1,5 @@
 defmodule Aerospike.Runtime.AsyncTask do
-  @moduledoc """
-  Behaviour for pollable async server operations.
-
-  Some Aerospike operations complete asynchronously on the server side.
-  `Aerospike.Runtime.AsyncTask` provides the shared `status/1` and `wait/2`
-  contract for those task handles without embedding a bespoke polling loop
-  in each feature module.
-  """
+  @moduledoc false
 
   @doc """
   Blocks until the async operation completes or the timeout is exceeded.
@@ -26,6 +19,16 @@ defmodule Aerospike.Runtime.AsyncTask do
       @behaviour AsyncTask
 
       @impl AsyncTask
+      @doc """
+      Blocks until the async operation completes or the timeout is exceeded.
+
+      Supported options:
+
+        * `:poll_interval` — milliseconds to sleep between status checks.
+          Defaults to `1_000`.
+        * `:timeout` — maximum milliseconds to wait. When omitted, polling
+          continues until the operation completes or returns an error.
+      """
       def wait(task, opts \\ []) do
         AsyncTask.poll(__MODULE__, task, opts)
       end

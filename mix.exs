@@ -8,6 +8,7 @@ defmodule Aerospike.MixProject do
     "--full" => "full"
   }
   @version "0.1.0"
+  @source_url "https://github.com/luisgabrielroldan/aerospike_driver"
   @description "Aerospike driver for Elixir with an OTP-native cluster runtime"
   @ce_integration_files [
     "test/integration/compression_test.exs",
@@ -43,6 +44,8 @@ defmodule Aerospike.MixProject do
       deps: deps(),
       description: @description,
       package: package(),
+      name: "Aerospike Driver",
+      source_url: @source_url,
       docs: docs(),
       preferred_cli_env: preferred_cli_env(),
       aliases: aliases(),
@@ -66,14 +69,34 @@ defmodule Aerospike.MixProject do
   defp package do
     [
       name: "aerospike_driver",
-      files: ~w(lib priv .formatter.exs mix.exs mix.lock README.md)
+      maintainers: ["Gabriel Roldan"],
+      licenses: ["Apache-2.0"],
+      links: %{
+        "GitHub" => @source_url
+      },
+      files: ~w(lib priv guides .formatter.exs mix.exs mix.lock README.md)
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      extras: ["README.md"]
+      extras: [
+        {"README.md", [title: "Overview"]},
+        {"guides/getting-started.md", [title: "Getting Started"]},
+        {"guides/record-operations.md", [title: "Record Operations"]},
+        {"guides/batch-operations.md", [title: "Batch Operations"]},
+        {"guides/operate-cdt-and-geo.md", [title: "Operate, CDT, And Geo"]},
+        {"guides/queries-and-scans.md", [title: "Queries And Scans"]},
+        {"guides/expressions-and-server-features.md", [title: "Expressions And Server Features"]},
+        {"guides/udfs-and-aggregates.md", [title: "UDFs And Aggregates"]},
+        {"guides/security-and-xdr.md", [title: "Security And XDR"]},
+        {"guides/transactions.md", [title: "Transactions"]},
+        {"guides/telemetry-and-runtime-metrics.md", [title: "Telemetry And Runtime Metrics"]}
+      ],
+      groups_for_extras: [
+        Guides: ~r/guides\/.*/
+      ]
     ]
   end
 

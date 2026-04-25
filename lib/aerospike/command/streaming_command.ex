@@ -1,18 +1,5 @@
 defmodule Aerospike.Command.StreamingCommand do
-  @moduledoc """
-  Internal contract for node-scoped streaming command hooks.
-
-  Streaming scan/query work in the spike already shares its bootstrap and
-  node preparation path. What still varies per command is narrower:
-
-    * building the node-scoped wire request
-    * folding each decoded stream frame into command-local state
-    * finishing or shaping command-local results
-
-  This module freezes that boundary so shared node-handle resolution,
-  breaker checks, connect/open/read/close orchestration, and stream frame
-  decoding can live in one executor.
-  """
+  @moduledoc false
 
   alias Aerospike.Error
 
