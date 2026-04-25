@@ -48,9 +48,7 @@ defmodule Aerospike.Integration.UdfLifecycleTest do
     server_name = "#{IntegrationSupport.unique_name("spike_udf_lifecycle")}.lua"
 
     on_exit(fn ->
-      if Process.whereis(cluster) do
-        _ = Aerospike.remove_udf(cluster, server_name)
-      end
+      cleanup_udf(server_name)
     end)
 
     assert {:ok, %RegisterTask{package_name: ^server_name} = task} =
@@ -79,5 +77,32 @@ defmodule Aerospike.Integration.UdfLifecycleTest do
         end
       end
     )
+  end
+
+  defp cleanup_udf(server_name) do
+    name = IntegrationSupport.unique_atom("spike_udf_lifecycle_cleanup")
+
+    case Aerospike.start_link(
+           name: name,
+           transport: Aerospike.Transport.Tcp,
+           hosts: ["#{@host}:#{@port}"],
+           namespaces: [@namespace],
+           tend_trigger: :manual,
+           pool_size: 1
+         ) do
+      {:ok, sup} ->
+        try do
+          IntegrationSupport.wait_for_tender_ready!(name, 5_000)
+          _ = Aerospike.remove_udf(name, server_name)
+          :ok
+        after
+          IntegrationSupport.stop_supervisor_quietly(sup)
+        end
+
+      {:error, _reason} ->
+        :ok
+    end
+  catch
+    :exit, _reason -> :ok
   end
 end
