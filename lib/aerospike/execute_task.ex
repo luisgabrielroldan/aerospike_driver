@@ -4,9 +4,9 @@ defmodule Aerospike.ExecuteTask do
   """
 
   alias Aerospike.Cluster
-  alias Aerospike.Error
   alias Aerospike.Cluster.NodePool
   alias Aerospike.Cluster.Tender
+  alias Aerospike.Error
 
   @type kind :: :query_execute | :query_udf
 

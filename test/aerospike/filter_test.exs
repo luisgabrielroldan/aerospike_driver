@@ -3,6 +3,7 @@ defmodule Aerospike.FilterTest do
 
   alias Aerospike.Ctx
   alias Aerospike.Filter
+  alias Aerospike.Geo
 
   describe "range/3" do
     test "builds integer range filter" do
@@ -79,6 +80,62 @@ defmodule Aerospike.FilterTest do
 
       assert_raise ArgumentError, ~r/contains\/3 value must be integer or string/, fn ->
         Filter.contains("tags", :list, :vip)
+      end
+    end
+  end
+
+  describe "geo filters" do
+    test "geo_within/2 builds a GeoJSON region filter" do
+      region = ~s({"type":"Polygon","coordinates":[[[0,0],[0,1],[1,1],[1,0],[0,0]]]})
+      filter = Filter.geo_within("loc", region)
+
+      assert filter.bin_name == "loc"
+      assert filter.index_type == :geo_within
+      assert filter.particle_type == :string
+      assert filter.begin == region
+      assert filter.end == region
+    end
+
+    test "geo_contains/2 builds a GeoJSON point filter" do
+      point = ~s({"type":"Point","coordinates":[0,0]})
+      filter = Filter.geo_contains("region", point)
+
+      assert filter.bin_name == "region"
+      assert filter.index_type == :geo_contains
+      assert filter.particle_type == :string
+      assert filter.begin == point
+      assert filter.end == point
+    end
+
+    test "geo filters accept typed geo values" do
+      polygon = Geo.polygon([[{-122.0, 45.0}, {-122.1, 45.1}, {-122.2, 45.2}]])
+      point = Geo.point(-122.0, 45.0)
+
+      assert Filter.geo_within("loc", polygon).begin == Geo.to_json(polygon)
+      assert Filter.geo_contains("region", point).begin == Geo.to_json(point)
+    end
+
+    test "geo convenience helpers build typed geometry filters" do
+      within = Filter.geo_within_radius("loc", -122.0, 45.0, 5_000)
+      contains = Filter.geo_contains_point("region", -122.0, 45.0)
+
+      assert within.index_type == :geo_within
+      assert within.begin == Geo.to_json(Geo.circle(-122.0, 45.0, 5_000))
+      assert contains.index_type == :geo_contains
+      assert contains.begin == Geo.to_json(Geo.point(-122.0, 45.0))
+    end
+
+    test "rejects empty GeoJSON strings and empty bin names" do
+      assert_raise ArgumentError, ~r/geo_within\/2 region must be a non-empty GeoJSON/, fn ->
+        Filter.geo_within("loc", "")
+      end
+
+      assert_raise ArgumentError, ~r/geo_contains\/2 point must be a non-empty GeoJSON/, fn ->
+        Filter.geo_contains("loc", "")
+      end
+
+      assert_raise ArgumentError, ~r/bin_name must be a non-empty string/, fn ->
+        Filter.geo_within("", ~s({"type":"Point","coordinates":[0,0]}))
       end
     end
   end

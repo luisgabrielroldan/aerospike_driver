@@ -2,14 +2,14 @@ defmodule Aerospike.Command.UnarySupport do
   @moduledoc false
 
   alias Aerospike.Cluster
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.UnaryCommand
   alias Aerospike.Error
-  alias Aerospike.Runtime.Executor
-  alias Aerospike.RuntimeMetrics
   alias Aerospike.Key
   alias Aerospike.Policy
   alias Aerospike.Protocol.Response
-  alias Aerospike.Cluster.Tender
-  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Runtime.Executor
+  alias Aerospike.RuntimeMetrics
 
   @type unary_policy :: Policy.UnaryRead.t() | Policy.UnaryWrite.t()
 

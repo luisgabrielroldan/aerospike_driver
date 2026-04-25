@@ -49,10 +49,10 @@ defmodule Aerospike.Integration.NodeKillTest do
   # pre-kill tend state machine).
   @inactive_timeout_ms 8_000
   @drop_timeout_ms 4_000
-  # `docker start` + partition-settlement lag runs ~1.7 s in practice
-  # (notes.md Task 8 finding); the Tender still needs another tend
-  # cycle to re-dial the seed and apply the partition map. Budget
-  # generously so CI noise does not flake the recovery half.
+  # `docker start` + partition-settlement lag runs ~1.7 s in practice;
+  # the Tender still needs another tend cycle to re-dial the seed and apply
+  # the partition map. Budget generously so CI noise does not flake the
+  # recovery half.
   @recovery_timeout_ms 10_000
   @probe_interval_ms 100
 
@@ -186,12 +186,11 @@ defmodule Aerospike.Integration.NodeKillTest do
     assert_node_dropped!(cluster, node_name, @drop_timeout_ms)
     refute Tender.ready?(cluster), "ready? must flip to false once all nodes are dropped"
 
-    # Recovery half (Task 9): restart the container and wait for the
-    # cluster-state subsystem to converge. The Tender's
-    # `bootstrap_if_needed/1` re-enters on the next tend cycle because
-    # `state.nodes == %{}`; the scheduled-seed dial re-registers the
-    # node and the subsequent `replicas` fetch re-applies the partition
-    # map within one cycle.
+    # Recovery half: restart the container and wait for the cluster-state
+    # subsystem to converge. The Tender's `bootstrap_if_needed/1` re-enters
+    # on the next tend cycle because `state.nodes == %{}`; the scheduled-seed
+    # dial re-registers the node and the subsequent `replicas` fetch re-applies
+    # the partition map within one cycle.
     docker_start(@container)
     wait_for_tcp(@host, @port, 15_000)
     wait_for_aerospike_status(@container, 15_000)

@@ -276,11 +276,9 @@ defmodule Aerospike.Integration.SecurityAdminTest do
   end
 
   defp safe_cleanup(fun) when is_function(fun, 0) do
-    try do
-      _ = fun.()
-      :ok
-    catch
-      :exit, _ -> :ok
-    end
+    _ = fun.()
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 end

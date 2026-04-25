@@ -6,14 +6,14 @@ defmodule Aerospike.Command.Exists do
   fetching bins and returns a boolean instead of a full record.
   """
 
+  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Runtime.TxnSupport
-  alias Aerospike.Command.UnaryCommand
-  alias Aerospike.Command.UnarySupport
 
   @type option ::
           {:timeout, non_neg_integer()}

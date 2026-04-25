@@ -1,25 +1,25 @@
 defmodule Aerospike.Command.ScanOps.PageRunner do
   @moduledoc false
 
-  alias Aerospike.Cursor
   alias Aerospike.Cluster
-  alias Aerospike.Error
+  alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.Router
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Command.NodePartitions
+  alias Aerospike.Command.PartitionTracker
+  alias Aerospike.Command.ScanOps
+  alias Aerospike.Command.StreamingCommand
+  alias Aerospike.Cursor
+  alias Aerospike.Error
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
-  alias Aerospike.Cluster.PartitionMap
-  alias Aerospike.Command.PartitionTracker
   alias Aerospike.Policy
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
   alias Aerospike.Record
-  alias Aerospike.Cluster.Router
-  alias Aerospike.Scan
-  alias Aerospike.Command.ScanOps
-  alias Aerospike.Command.StreamingCommand
   alias Aerospike.Runtime.StreamingExecutor
-  alias Aerospike.Cluster.Tender
+  alias Aerospike.Scan
 
   @typep runtime :: %{
            tender: GenServer.server(),

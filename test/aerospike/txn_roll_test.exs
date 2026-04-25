@@ -3,13 +3,13 @@ defmodule Aerospike.Runtime.TxnRollTest do
 
   import Bitwise
 
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Message
-  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
-  alias Aerospike.Cluster.Tender
   alias Aerospike.Runtime.TxnOps
   alias Aerospike.Runtime.TxnRoll
   alias Aerospike.Test.ReplicasFixture

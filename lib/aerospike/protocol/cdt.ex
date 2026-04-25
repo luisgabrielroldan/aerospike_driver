@@ -41,6 +41,50 @@ defmodule Aerospike.Protocol.CDT do
     %{list_modify_op(bin_name, op_code, args, ctx) | map_cdt: true}
   end
 
+  @spec bit_read_op(String.t(), integer(), [term()], [tuple()] | nil) :: Operation.t()
+  def bit_read_op(bin_name, op_code, args, ctx \\ nil)
+      when is_binary(bin_name) and is_integer(op_code) and is_list(args) do
+    %Operation{
+      op_type: Operation.op_bit_read(),
+      particle_type: @particle_blob,
+      bin_name: bin_name,
+      data: encode_payload(op_code, args, ctx)
+    }
+  end
+
+  @spec bit_modify_op(String.t(), integer(), [term()], [tuple()] | nil) :: Operation.t()
+  def bit_modify_op(bin_name, op_code, args, ctx \\ nil)
+      when is_binary(bin_name) and is_integer(op_code) and is_list(args) do
+    %Operation{
+      op_type: Operation.op_bit_modify(),
+      particle_type: @particle_blob,
+      bin_name: bin_name,
+      data: encode_payload(op_code, args, ctx)
+    }
+  end
+
+  @spec hll_read_op(String.t(), integer(), [term()]) :: Operation.t()
+  def hll_read_op(bin_name, op_code, args)
+      when is_binary(bin_name) and is_integer(op_code) and is_list(args) do
+    %Operation{
+      op_type: Operation.op_hll_read(),
+      particle_type: @particle_blob,
+      bin_name: bin_name,
+      data: encode_simple_array(op_code, args)
+    }
+  end
+
+  @spec hll_modify_op(String.t(), integer(), [term()]) :: Operation.t()
+  def hll_modify_op(bin_name, op_code, args)
+      when is_binary(bin_name) and is_integer(op_code) and is_list(args) do
+    %Operation{
+      op_type: Operation.op_hll_modify(),
+      particle_type: @particle_blob,
+      bin_name: bin_name,
+      data: encode_simple_array(op_code, args)
+    }
+  end
+
   @spec cdt_pack_arg(term()) :: term()
   def cdt_pack_arg({:bytes, _} = bytes), do: bytes
   def cdt_pack_arg(s) when is_binary(s), do: {:particle_string, s}
@@ -69,5 +113,9 @@ defmodule Aerospike.Protocol.CDT do
 
         MessagePack.pack!([@context_eval, ctx_elems, inner])
     end
+  end
+
+  defp encode_simple_array(op_code, args) do
+    MessagePack.pack!([op_code | Enum.map(args, &cdt_pack_arg/1)])
   end
 end

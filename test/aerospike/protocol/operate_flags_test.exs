@@ -27,5 +27,43 @@ defmodule Aerospike.Protocol.OperateFlagsTest do
     end
   end
 
+  describe "scan_ops/1 bit and HLL operation classification" do
+    test "bit read is read-like and asks for all operation results" do
+      result = OperateFlags.scan_ops([op(Operation.op_bit_read())])
+
+      assert (result.info1 &&& AsmMsg.info1_read()) != 0
+      assert result.read_bin? == true
+      assert result.has_write? == false
+      assert result.respond_all? == true
+    end
+
+    test "HLL read is read-like and asks for all operation results" do
+      result = OperateFlags.scan_ops([op(Operation.op_hll_read())])
+
+      assert (result.info1 &&& AsmMsg.info1_read()) != 0
+      assert result.read_bin? == true
+      assert result.has_write? == false
+      assert result.respond_all? == true
+    end
+
+    test "bit modify is write-like and asks for all operation results" do
+      result = OperateFlags.scan_ops([op(Operation.op_bit_modify())])
+
+      assert result.info1 == 0
+      assert result.read_bin? == false
+      assert result.has_write? == true
+      assert result.respond_all? == true
+    end
+
+    test "HLL modify is write-like and asks for all operation results" do
+      result = OperateFlags.scan_ops([op(Operation.op_hll_modify())])
+
+      assert result.info1 == 0
+      assert result.read_bin? == false
+      assert result.has_write? == true
+      assert result.respond_all? == true
+    end
+  end
+
   defp op(type), do: %Operation{op_type: type, bin_name: "result"}
 end

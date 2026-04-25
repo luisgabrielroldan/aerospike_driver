@@ -3,10 +3,10 @@ defmodule Aerospike.Test.StreamProof do
 
   alias Aerospike.Key
   alias Aerospike.Policy
-  alias Aerospike.Protocol.PartitionMap, as: PartitionMapParser
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.PartitionMap, as: PartitionMapParser
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Scan
   alias Aerospike.Transport.Tcp
@@ -57,42 +57,59 @@ defmodule Aerospike.Test.StreamProof do
       when is_binary(namespace) and is_binary(set) and is_integer(count) and count > 0 and
              is_function(value_fun, 1) do
     allowed = MapSet.new(master_partitions!(conn, namespace))
+    records = records_on_master_partitions!(allowed, namespace, set, count, value_fun)
 
+    Enum.each(records, fn {%Key{} = key, value} ->
+      write_seed_record!(conn, key, bin_name, value)
+    end)
+
+    :ok
+  end
+
+  defp records_on_master_partitions!(allowed, namespace, set, count, value_fun) do
     0..100_000
     |> Enum.reduce_while({0, []}, fn suffix, {found, acc} ->
       key = Key.new(namespace, set, "stream-record-#{suffix}")
 
-      if MapSet.member?(allowed, Key.partition_id(key)) do
-        next_found = found + 1
-        next_acc = [{key, value_fun.(next_found)} | acc]
-
-        if next_found == count do
-          {:halt, Enum.reverse(next_acc)}
-        else
-          {:cont, {next_found, next_acc}}
-        end
-      else
-        {:cont, {found, acc}}
-      end
+      maybe_keep_master_key(allowed, count, value_fun, key, found, acc)
     end)
     |> case do
       records when is_list(records) and length(records) == count ->
-        Enum.each(records, fn {%Key{} = key, value} ->
-          request = put_request(key, bin_name, value)
-
-          case Tcp.command(conn, request, @write_timeout_ms, []) do
-            {:ok, reply} ->
-              assert_write_ok!(reply, key, bin_name, value)
-
-            {:error, error} ->
-              raise "seed write failed for #{inspect(key)}: #{inspect(error)}"
-          end
-        end)
-
-        :ok
+        records
 
       _ ->
         raise "stream scan proof could not derive #{count} keys on master partitions"
+    end
+  end
+
+  defp maybe_keep_master_key(allowed, count, value_fun, key, found, acc) do
+    if MapSet.member?(allowed, Key.partition_id(key)) do
+      maybe_halt_master_key_search(count, value_fun, key, found, acc)
+    else
+      {:cont, {found, acc}}
+    end
+  end
+
+  defp maybe_halt_master_key_search(count, value_fun, key, found, acc) do
+    next_found = found + 1
+    next_acc = [{key, value_fun.(next_found)} | acc]
+
+    if next_found == count do
+      {:halt, Enum.reverse(next_acc)}
+    else
+      {:cont, {next_found, next_acc}}
+    end
+  end
+
+  defp write_seed_record!(conn, key, bin_name, value) do
+    request = put_request(key, bin_name, value)
+
+    case Tcp.command(conn, request, @write_timeout_ms, []) do
+      {:ok, reply} ->
+        assert_write_ok!(reply, key, bin_name, value)
+
+      {:error, error} ->
+        raise "seed write failed for #{inspect(key)}: #{inspect(error)}"
     end
   end
 

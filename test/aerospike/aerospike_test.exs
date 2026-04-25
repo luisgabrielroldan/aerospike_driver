@@ -2,11 +2,13 @@ defmodule Aerospike.PublicApiTest do
   use ExUnit.Case, async: false
 
   alias Aerospike.Cluster
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Cursor
   alias Aerospike.ExecuteTask
   alias Aerospike.Filter
   alias Aerospike.Key
   alias Aerospike.PartitionFilter
+  alias Aerospike.Privilege
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
@@ -20,8 +22,6 @@ defmodule Aerospike.PublicApiTest do
   alias Aerospike.Txn
   alias Aerospike.UDF
   alias Aerospike.User
-  alias Aerospike.Privilege
-  alias Aerospike.Cluster.Tender
 
   @namespace "test"
 
@@ -469,7 +469,7 @@ defmodule Aerospike.PublicApiTest do
     Fake.script_stream(fake, "A1", {:ok, [frame("alias-stream"), last_frame()]})
 
     alias_stream =
-      apply(Aerospike, :stream!, [conn, scan, [node: "A1"]])
+      :erlang.apply(Aerospike, :stream!, [conn, scan, [node: "A1"]])
       |> Enum.map(& &1.bins["payload"])
 
     assert ["alias-stream"] = alias_stream
@@ -482,13 +482,13 @@ defmodule Aerospike.PublicApiTest do
     Fake.script_stream(fake, "A1", {:ok, [frame("alias-all"), last_frame()]})
 
     assert {:ok, [%{bins: %{"payload" => "alias-all"}}]} =
-             apply(Aerospike, :all, [conn, scan, [node: "A1"]])
+             :erlang.apply(Aerospike, :all, [conn, scan, [node: "A1"]])
 
     Fake.script_stream(fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
     assert 1 = Aerospike.scan_count!(conn, scan, node: "A1")
 
     Fake.script_stream(fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
-    assert 1 = apply(Aerospike, :count!, [conn, scan, [node: "A1"]])
+    assert 1 = :erlang.apply(Aerospike, :count!, [conn, scan, [node: "A1"]])
   end
 
   test "bang wrappers raise the underlying public errors", %{conn: conn} do
@@ -500,7 +500,7 @@ defmodule Aerospike.PublicApiTest do
     end
 
     assert_raise Aerospike.Error, fn ->
-      apply(Aerospike, :stream!, [conn, scan, [node: "missing"]]) |> Enum.to_list()
+      :erlang.apply(Aerospike, :stream!, [conn, scan, [node: "missing"]]) |> Enum.to_list()
     end
 
     assert_raise Aerospike.Error, ~r/max_records_required/i, fn ->

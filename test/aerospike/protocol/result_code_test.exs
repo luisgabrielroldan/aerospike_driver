@@ -5,7 +5,7 @@ defmodule Aerospike.Protocol.ResultCodeTest do
 
   test "converts between integer and atom codes" do
     assert ResultCode.from_integer(-18) == {:ok, :network_error}
-    assert ResultCode.from_integer(99999) == {:error, 99999}
+    assert ResultCode.from_integer(99_999) == {:error, 99_999}
 
     assert ResultCode.to_integer(:ok) == {:ok, 0}
     assert ResultCode.to_integer(:key_not_found) == {:ok, 2}

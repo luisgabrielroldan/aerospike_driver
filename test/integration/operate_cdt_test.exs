@@ -3,6 +3,8 @@ defmodule Aerospike.Integration.OperateCdtTest do
 
   @moduletag :integration
 
+  alias Aerospike.Op.Bit, as: BitOp
+  alias Aerospike.Op.HLL, as: HLLOp
   alias Aerospike.Op.List, as: ListOp
   alias Aerospike.Op.Map, as: MapOp
   alias Aerospike.Record
@@ -55,5 +57,84 @@ defmodule Aerospike.Integration.OperateCdtTest do
 
     assert {:ok, %Record{bins: %{"prefs" => "dark"}}} =
              Aerospike.operate(cluster, key, [MapOp.get_by_key("prefs", "theme")])
+
+    assert {:ok, %Record{}} =
+             Aerospike.operate(cluster, key, [
+               MapOp.put_items("scores", %{"ada" => 10, "grace" => 20}, policy: %{attr: 1})
+             ])
+
+    assert {:ok, %Record{bins: %{"scores" => 20}}} =
+             Aerospike.operate(cluster, key, [
+               MapOp.get_by_rank("scores", -1, return_type: MapOp.return_value())
+             ])
+  end
+
+  test "bit helpers modify and read byte-array bins on the shared unary path", %{
+    cluster: cluster
+  } do
+    key = IntegrationSupport.unique_key(@namespace, @set, "operate-bit")
+
+    assert {:ok, _} = Aerospike.put(cluster, key, %{"bits" => {:blob, <<0>>}})
+
+    try do
+      assert {:ok, %Record{}} =
+               Aerospike.operate(cluster, key, [
+                 BitOp.set("bits", 0, 8, <<0b1010_0000>>)
+               ])
+
+      assert {:ok, %Record{bins: %{"bits" => 2}}} =
+               Aerospike.operate(cluster, key, [
+                 BitOp.count("bits", 0, 8)
+               ])
+
+      assert {:ok, %Record{bins: %{"bits" => 0b1010_0000}}} =
+               Aerospike.operate(cluster, key, [
+                 BitOp.get_int("bits", 0, 8)
+               ])
+    after
+      _ = Aerospike.delete(cluster, key)
+    end
+  end
+
+  test "HLL helpers modify and read cardinality on the shared unary path", %{
+    cluster: cluster
+  } do
+    key = IntegrationSupport.unique_key(@namespace, @set, "operate-hll")
+
+    assert {:ok, _} = Aerospike.put(cluster, key, %{"seed" => 0})
+
+    try do
+      assert {:ok, %Record{}} =
+               Aerospike.operate(cluster, key, [
+                 HLLOp.init("visitors", 14, 0)
+               ])
+
+      assert {:ok, %Record{bins: %{"visitors" => added}}} =
+               Aerospike.operate(cluster, key, [
+                 HLLOp.add("visitors", ["ada", "grace", "katherine"], 14, 0)
+               ])
+
+      assert is_integer(added)
+      assert added >= 0
+
+      assert {:ok, %Record{bins: %{"visitors" => count}}} =
+               Aerospike.operate(cluster, key, [
+                 HLLOp.get_count("visitors")
+               ])
+
+      assert count == 3
+
+      assert {:ok, %Record{bins: %{"visitors" => description}}} =
+               Aerospike.operate(cluster, key, [
+                 HLLOp.describe("visitors")
+               ])
+
+      assert is_list(description)
+      assert [index_bit_count, min_hash_bit_count] = description
+      assert is_integer(index_bit_count)
+      assert is_integer(min_hash_bit_count)
+    after
+      _ = Aerospike.delete(cluster, key)
+    end
   end
 end

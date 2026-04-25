@@ -1,6 +1,7 @@
 defmodule Aerospike.Test.IntegrationSupport do
   @moduledoc false
 
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Key
   alias Aerospike.Transport.Tcp
 
@@ -26,11 +27,9 @@ defmodule Aerospike.Test.IntegrationSupport do
   end
 
   def stop_supervisor_quietly(sup) do
-    try do
-      Supervisor.stop(sup)
-    catch
-      :exit, _ -> :ok
-    end
+    Supervisor.stop(sup)
+  catch
+    :exit, _ -> :ok
   end
 
   def probe_aerospike!(host, port, message_suffix)
@@ -198,10 +197,10 @@ defmodule Aerospike.Test.IntegrationSupport do
   end
 
   defp do_wait_for_tender_ready(cluster, deadline, interval_ms) do
-    :ok = Aerospike.Cluster.Tender.tend_now(cluster)
+    :ok = Tender.tend_now(cluster)
 
     cond do
-      Aerospike.Cluster.Tender.ready?(cluster) ->
+      Tender.ready?(cluster) ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->

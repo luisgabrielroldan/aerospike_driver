@@ -2,19 +2,19 @@ defmodule Aerospike.Command.ScanOps.StreamRunner do
   @moduledoc false
 
   alias Aerospike.Cluster.CircuitBreaker
+  alias Aerospike.Cluster.NodePool
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.ScanOps.PageRunner
+  alias Aerospike.Command.StreamingCommand
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
-  alias Aerospike.Cluster.NodePool
   alias Aerospike.Policy
   alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
-  alias Aerospike.Scan
-  alias Aerospike.Command.ScanOps.PageRunner
-  alias Aerospike.Command.StreamingCommand
   alias Aerospike.Runtime.StreamingExecutor
-  alias Aerospike.Cluster.Tender
+  alias Aerospike.Scan
 
   @spec stream(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}

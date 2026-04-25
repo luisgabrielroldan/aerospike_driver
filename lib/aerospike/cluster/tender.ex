@@ -55,18 +55,18 @@ defmodule Aerospike.Cluster.Tender do
 
   require Logger
 
-  alias Aerospike.Error
   alias Aerospike.Cluster.Node, as: ClusterNode
   alias Aerospike.Cluster.NodeCounters
   alias Aerospike.Cluster.NodeSupervisor
   alias Aerospike.Cluster.PartitionMap
   alias Aerospike.Cluster.PartitionMapMerge
   alias Aerospike.Cluster.PartitionMapWriter
-  alias Aerospike.Policy
   alias Aerospike.Cluster.TableOwner
-  alias Aerospike.Telemetry
   alias Aerospike.Cluster.TendHistogram
+  alias Aerospike.Error
+  alias Aerospike.Policy
   alias Aerospike.RuntimeMetrics
+  alias Aerospike.Telemetry
 
   @default_tend_interval_ms 1_000
   @default_failure_threshold 5
@@ -612,28 +612,26 @@ defmodule Aerospike.Cluster.Tender do
   ## Tend cycle
 
   defp run_tend(state) do
-    try do
-      new_state =
-        :telemetry.span(Telemetry.tend_cycle_span(), %{}, fn ->
-          next_state =
-            %{state | peers_refresh_needed?: false}
-            |> bootstrap_seeds()
-            |> refresh_nodes()
-            |> maybe_discover_peers()
-            |> maybe_refresh_partition_maps()
-            |> publish_active_nodes()
-            |> recompute_ready()
+    new_state =
+      :telemetry.span(Telemetry.tend_cycle_span(), %{}, fn ->
+        next_state =
+          %{state | peers_refresh_needed?: false}
+          |> bootstrap_seeds()
+          |> refresh_nodes()
+          |> maybe_discover_peers()
+          |> maybe_refresh_partition_maps()
+          |> publish_active_nodes()
+          |> recompute_ready()
 
-          {next_state, %{}}
-        end)
+        {next_state, %{}}
+      end)
 
-      RuntimeMetrics.record_tend(state.name, :ok)
-      new_state
-    catch
-      kind, reason ->
-        RuntimeMetrics.record_tend(state.name, :error)
-        :erlang.raise(kind, reason, __STACKTRACE__)
-    end
+    RuntimeMetrics.record_tend(state.name, :ok)
+    new_state
+  catch
+    kind, reason ->
+      RuntimeMetrics.record_tend(state.name, :error)
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   # Calls `discover_peers/1` only when any event this cycle flagged that a
@@ -877,10 +875,10 @@ defmodule Aerospike.Cluster.Tender do
   # future transitions. Also stamps `last_tend_at`/`last_tend_result`.
   #
   # Zeroes the per-node `:failed` counter as the tender-side "failure
-  # window decay" for the Task 6 circuit breaker. The info socket just
-  # answered cleanly, which is the Tender's strongest statement about
-  # node health — any pool-path transport failures recorded before this
-  # cycle are stale relative to that statement. The breaker in
+  # window decay" for the circuit breaker. The info socket just answered
+  # cleanly, which is the Tender's strongest statement about node health —
+  # any pool-path transport failures recorded before this cycle are stale
+  # relative to that statement. The breaker in
   # `Aerospike.Cluster.CircuitBreaker.allow?/2` re-reads `:failed` on every
   # command so the reset is observed immediately by the next caller.
   defp register_success(state, name) do

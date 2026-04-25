@@ -9,13 +9,13 @@ defmodule Aerospike.Runtime.Executor do
   """
 
   alias Aerospike.Cluster.CircuitBreaker
-  alias Aerospike.Error
   alias Aerospike.Cluster.NodePool
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Error
   alias Aerospike.Policy
   alias Aerospike.RetryPolicy
-  alias Aerospike.Telemetry
-  alias Aerospike.Cluster.Tender
   alias Aerospike.RuntimeMetrics
+  alias Aerospike.Telemetry
 
   defmodule Outcome do
     @moduledoc false
@@ -277,7 +277,7 @@ defmodule Aerospike.Runtime.Executor do
          node_name,
          attempt,
          result,
-         last_error
+         _last_error
        ) do
     case result do
       {:no_retry, inner_result} ->
@@ -291,8 +291,7 @@ defmodule Aerospike.Runtime.Executor do
           callbacks,
           node_name,
           attempt,
-          result,
-          last_error
+          result
         )
     end
   end
@@ -304,8 +303,7 @@ defmodule Aerospike.Runtime.Executor do
          callbacks,
          node_name,
          attempt,
-         result,
-         last_error
+         result
        ) do
     case RetryPolicy.classify(result) do
       %{bucket: :ok} ->
@@ -326,9 +324,7 @@ defmodule Aerospike.Runtime.Executor do
           node_name,
           attempt,
           result,
-          last_error,
-          :transport,
-          classification
+          {:transport, classification}
         )
 
       %{bucket: :rebalance, retry_classification: classification} ->
@@ -342,9 +338,7 @@ defmodule Aerospike.Runtime.Executor do
           node_name,
           attempt,
           result,
-          last_error,
-          :rebalance,
-          classification
+          {:rebalance, classification}
         )
     end
   end
@@ -357,9 +351,7 @@ defmodule Aerospike.Runtime.Executor do
          node_name,
          attempt,
          result,
-         _last_error,
-         reroute_kind,
-         classification
+         {reroute_kind, classification}
        ) do
     maybe_sleep(executor.policy.retry)
     next_attempt = attempt + 1

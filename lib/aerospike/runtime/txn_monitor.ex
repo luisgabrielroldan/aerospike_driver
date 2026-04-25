@@ -3,6 +3,8 @@ defmodule Aerospike.Runtime.TxnMonitor do
 
   import Bitwise
 
+  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
@@ -13,10 +15,8 @@ defmodule Aerospike.Runtime.TxnMonitor do
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ResultCode
-  alias Aerospike.Txn
   alias Aerospike.Runtime.TxnOps
-  alias Aerospike.Command.UnaryCommand
-  alias Aerospike.Command.UnarySupport
+  alias Aerospike.Txn
 
   @monitor_set "<ERO~MRT"
   @list_append_op 1

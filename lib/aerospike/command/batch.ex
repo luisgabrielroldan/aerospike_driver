@@ -1,6 +1,8 @@
 defmodule Aerospike.Command.Batch do
   @moduledoc false
 
+  alias Aerospike.Cluster
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Command.BatchCommand
   alias Aerospike.Command.BatchCommand.Entry
   alias Aerospike.Command.BatchCommand.NodeRequest
@@ -8,14 +10,12 @@ defmodule Aerospike.Command.Batch do
   alias Aerospike.Command.BatchCommand.Regroup
   alias Aerospike.Command.BatchCommand.Result
   alias Aerospike.Command.BatchRouter
-  alias Aerospike.Cluster
   alias Aerospike.Error
-  alias Aerospike.Runtime.Executor
-  alias Aerospike.RuntimeMetrics
   alias Aerospike.Policy
   alias Aerospike.Protocol.Batch, as: BatchProtocol
   alias Aerospike.Protocol.Response
-  alias Aerospike.Cluster.Tender
+  alias Aerospike.Runtime.Executor
+  alias Aerospike.RuntimeMetrics
 
   @default_max_concurrency max(System.schedulers_online(), 1)
 

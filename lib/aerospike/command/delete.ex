@@ -6,6 +6,8 @@ defmodule Aerospike.Command.Delete do
   Missing-record replies stay distinguishable from successful deletes.
   """
 
+  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Policy
@@ -13,8 +15,6 @@ defmodule Aerospike.Command.Delete do
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Runtime.TxnSupport
-  alias Aerospike.Command.UnaryCommand
-  alias Aerospike.Command.UnarySupport
 
   @type option ::
           {:timeout, non_neg_integer()}

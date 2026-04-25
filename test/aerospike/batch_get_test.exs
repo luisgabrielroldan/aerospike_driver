@@ -6,6 +6,7 @@ defmodule Aerospike.Command.BatchGetTest do
   alias Aerospike.Cluster.PartitionMapWriter
   alias Aerospike.Cluster.TableOwner
   alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.BatchGet
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
@@ -151,7 +152,7 @@ defmodule Aerospike.Command.BatchGetTest do
       key = Key.new("test", "batch", "k1")
 
       assert {:error, %Error{code: :invalid_argument, message: message}} =
-               Aerospike.Command.BatchGet.execute(:unused_tender, [key], :bins, [])
+               BatchGet.execute(:unused_tender, [key], :bins, [])
 
       assert message =~ "supports only :all bins in the spike"
     end

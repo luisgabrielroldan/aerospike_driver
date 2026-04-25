@@ -6,6 +6,7 @@ defmodule Aerospike.Integration.IndexQueryTest do
   alias Aerospike.Cursor
   alias Aerospike.Exp
   alias Aerospike.Filter
+  alias Aerospike.Geo
   alias Aerospike.Key
   alias Aerospike.Page
   alias Aerospike.Query
@@ -174,9 +175,105 @@ defmodule Aerospike.Integration.IndexQueryTest do
     end
   end
 
+  test "creates temporary geo indexes and queries point and region bins", %{cluster: cluster} do
+    set = IntegrationSupport.unique_name("geo_idx_query")
+    point_index = IntegrationSupport.unique_name("geo_point_idx")
+    region_index = IntegrationSupport.unique_name("geo_region_idx")
+    keys = seed_geo_records(cluster, set)
+
+    try do
+      assert {:ok, point_task} =
+               Aerospike.create_index(cluster, @namespace, set,
+                 bin: "loc",
+                 name: point_index,
+                 type: :geo2dsphere
+               )
+
+      assert {:ok, region_task} =
+               Aerospike.create_index(cluster, @namespace, set,
+                 bin: "region",
+                 name: region_index,
+                 type: :geo2dsphere
+               )
+
+      assert :ok = Aerospike.IndexTask.wait(point_task, timeout: 30_000, poll_interval: 200)
+      assert :ok = Aerospike.IndexTask.wait(region_task, timeout: 30_000, poll_interval: 200)
+
+      pnw_region =
+        Geo.polygon([
+          [
+            {-125.0, 44.0},
+            {-120.0, 44.0},
+            {-120.0, 49.0},
+            {-125.0, 49.0},
+            {-125.0, 44.0}
+          ]
+        ])
+
+      within_query =
+        Query.new(@namespace, set)
+        |> Query.where(Filter.geo_within("loc", pnw_region))
+        |> Query.max_records(20)
+
+      IntegrationSupport.assert_eventually("geo_within query returns matching points", fn ->
+        assert {:ok, records_stream} = Aerospike.query_stream(cluster, within_query)
+        records = Enum.to_list(records_stream)
+        names = records |> Enum.map(& &1.bins["name"]) |> Enum.sort()
+
+        Enum.all?(records, &match?(%Geo.Point{}, &1.bins["loc"])) and
+          Enum.all?(records, &geo_region_value?/1) and
+          names == ["portland", "seattle"]
+      end)
+
+      contains_query =
+        Query.new(@namespace, set)
+        |> Query.where(Filter.geo_contains_point("region", -122.68, 45.52))
+        |> Query.max_records(20)
+
+      IntegrationSupport.assert_eventually("geo_contains query returns containing regions", fn ->
+        assert {:ok, records_stream} = Aerospike.query_stream(cluster, contains_query)
+        records = Enum.to_list(records_stream)
+        names = records |> Enum.map(& &1.bins["name"]) |> Enum.sort()
+
+        Enum.all?(records, &match?(%Geo.Point{}, &1.bins["loc"])) and
+          Enum.all?(records, &geo_region_value?/1) and
+          names == ["portland"]
+      end)
+    after
+      Enum.each(keys, &cleanup_key(cluster, &1))
+      _ = Aerospike.drop_index(cluster, @namespace, point_index)
+      _ = Aerospike.drop_index(cluster, @namespace, region_index)
+    end
+  end
+
   defp cleanup_key(cluster, key) do
     _ = Aerospike.delete(cluster, key)
   end
+
+  defp seed_geo_records(cluster, set) do
+    records = [
+      {"portland", -122.6765, 45.5231},
+      {"seattle", -122.3321, 47.6062},
+      {"san_francisco", -122.4194, 37.7749},
+      {"los_angeles", -118.2437, 34.0522},
+      {"denver", -104.9903, 39.7392}
+    ]
+
+    Enum.map(records, fn {name, lng, lat} ->
+      key = Key.new(@namespace, set, name)
+      point = Geo.point(lng, lat)
+      region = geo_box(lng, lat, 2.0)
+
+      assert {:ok, _metadata} =
+               Aerospike.put(cluster, key, %{"name" => name, "loc" => point, "region" => region})
+
+      key
+    end)
+  end
+
+  defp geo_region_value?(%{bins: %{"region" => %Geo.Polygon{}}}), do: true
+  defp geo_region_value?(%{bins: %{"region" => {:geojson, json}}}) when is_binary(json), do: true
+  defp geo_region_value?(_record), do: false
 
   defp seed_expression_index_records(cluster, set) do
     records = [
@@ -191,6 +288,18 @@ defmodule Aerospike.Integration.IndexQueryTest do
       assert {:ok, _metadata} = Aerospike.put(cluster, key, %{"age" => age})
       key
     end)
+  end
+
+  defp geo_box(center_lng, center_lat, half_degrees) do
+    Geo.polygon([
+      [
+        {center_lng - half_degrees, center_lat - half_degrees},
+        {center_lng + half_degrees, center_lat - half_degrees},
+        {center_lng + half_degrees, center_lat + half_degrees},
+        {center_lng - half_degrees, center_lat + half_degrees},
+        {center_lng - half_degrees, center_lat - half_degrees}
+      ]
+    ])
   end
 
   defp fetch_server_version!(cluster) do

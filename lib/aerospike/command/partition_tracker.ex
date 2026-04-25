@@ -1,11 +1,11 @@
 defmodule Aerospike.Command.PartitionTracker do
   @moduledoc false
 
+  alias Aerospike.Command.NodePartitions
+  alias Aerospike.Command.PartitionStatus
   alias Aerospike.Cursor
   alias Aerospike.Error
-  alias Aerospike.Command.NodePartitions
   alias Aerospike.PartitionFilter
-  alias Aerospike.Command.PartitionStatus
 
   @partitions 4_096
 

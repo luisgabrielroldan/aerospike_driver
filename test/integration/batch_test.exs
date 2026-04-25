@@ -156,12 +156,7 @@ defmodule Aerospike.Integration.BatchTest do
       case Router.pick_for_read(tables, key, :master, 0) do
         {:ok, node_name} ->
           node_keys = Map.put_new(acc, node_name, key)
-
-          if map_size(node_keys) == count do
-            {:halt, node_keys}
-          else
-            {:cont, node_keys}
-          end
+          maybe_halt_distinct_node_search(node_keys, count)
 
         {:error, reason} ->
           flunk("expected a routed key while building mixed batch proof, got #{inspect(reason)}")
@@ -175,6 +170,14 @@ defmodule Aerospike.Integration.BatchTest do
         flunk(
           "expected #{count} routed nodes from the live cluster, found #{map_size(node_keys)}"
         )
+    end
+  end
+
+  defp maybe_halt_distinct_node_search(node_keys, count) do
+    if map_size(node_keys) == count do
+      {:halt, node_keys}
+    else
+      {:cont, node_keys}
     end
   end
 

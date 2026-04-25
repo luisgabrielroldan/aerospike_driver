@@ -6,10 +6,10 @@ defmodule Aerospike.Command.BatchRouter do
   failures that were discovered before transport dispatch.
   """
 
+  alias Aerospike.Cluster.Router
   alias Aerospike.Command.BatchCommand.Entry
   alias Aerospike.Command.BatchCommand.NodeRequest
   alias Aerospike.Key
-  alias Aerospike.Cluster.Router
 
   defmodule RoutingFailure do
     @moduledoc false

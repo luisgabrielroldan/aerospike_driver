@@ -2,8 +2,9 @@ defmodule Aerospike.Op do
   @moduledoc """
   Primitive record operations for `Aerospike.operate/4`.
 
-  See also `Aerospike.Op.List`, `Aerospike.Op.Map`, and `Aerospike.Op.Exp`
-  for collection and expression operations.
+  See also `Aerospike.Op.Bit`, `Aerospike.Op.Exp`, `Aerospike.Op.HLL`,
+  `Aerospike.Op.List`, and `Aerospike.Op.Map` for collection and expression
+  operations.
   """
 
   alias Aerospike.Error

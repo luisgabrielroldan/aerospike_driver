@@ -16,7 +16,11 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @op_append 9
   @op_prepend 10
   @op_touch 11
+  @op_bit_read 12
+  @op_bit_modify 13
   @op_delete 14
+  @op_hll_read 15
+  @op_hll_modify 16
   @particle_null 0
   @particle_blob 4
 
@@ -81,9 +85,25 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @spec op_touch() :: 11
   def op_touch, do: @op_touch
 
+  @doc "Returns the BIT_READ operation type."
+  @spec op_bit_read() :: 12
+  def op_bit_read, do: @op_bit_read
+
+  @doc "Returns the BIT_MODIFY operation type."
+  @spec op_bit_modify() :: 13
+  def op_bit_modify, do: @op_bit_modify
+
   @doc "Returns the DELETE operation type."
   @spec op_delete() :: 14
   def op_delete, do: @op_delete
+
+  @doc "Returns the HLL_READ operation type."
+  @spec op_hll_read() :: 15
+  def op_hll_read, do: @op_hll_read
+
+  @doc "Returns the HLL_MODIFY operation type."
+  @spec op_hll_modify() :: 16
+  def op_hll_modify, do: @op_hll_modify
 
   @doc "Returns the null particle type."
   @spec particle_null() :: 0

@@ -16,8 +16,8 @@ defmodule Aerospike.Cluster.PartitionMap do
   #     needs refetching.
   #
   # All functions take table names and are pure with respect to the
-  # BEAM process model: any caller may *read*, but per plan Task 8 the
-  # Tender is the sole writer by convention.
+  # BEAM process model: any caller may *read*, but the Tender is the sole
+  # writer by convention.
 
   @partitions 4096
 

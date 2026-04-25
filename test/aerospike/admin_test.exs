@@ -5,6 +5,7 @@ defmodule Aerospike.Command.AdminTest do
   alias Aerospike.Cluster.PartitionMapWriter
   alias Aerospike.Cluster.TableOwner
   alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.Admin
   alias Aerospike.Error
   alias Aerospike.Exp
   alias Aerospike.IndexTask
@@ -132,6 +133,28 @@ defmodule Aerospike.Command.AdminTest do
     assert task.index_name == index_name
   end
 
+  test "create_index/4 encodes a geo2dsphere bin index", %{conn: conn, fake: fake} do
+    set = "admin_geo_idx_#{System.unique_integer([:positive, :monotonic])}"
+    index_name = "geo_idx_#{System.unique_integer([:positive, :monotonic])}"
+
+    command =
+      "sindex-create:namespace=test;set=#{set};indexname=#{index_name};bin=loc;type=GEO2DSPHERE"
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert {:ok, %IndexTask{} = task} =
+             Aerospike.create_index(conn, @namespace, set,
+               bin: "loc",
+               name: index_name,
+               type: :geo2dsphere
+             )
+
+    assert task.conn == conn
+    assert task.namespace == @namespace
+    assert task.index_name == index_name
+  end
+
   test "create_expression_index/5 encodes collection type without a bin source", %{
     conn: conn,
     fake: fake
@@ -146,7 +169,7 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_info(fake, "A1", [command], %{command => "OK"})
 
     assert {:ok, %IndexTask{namespace: @namespace, index_name: ^index_name}} =
-             Aerospike.Command.Admin.create_expression_index(
+             Admin.create_expression_index(
                conn,
                @namespace,
                set,
@@ -164,7 +187,7 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_info(fake, "A1", ["build"], %{"build" => "8.0.0.0"})
 
     assert {:error, %Error{code: :parameter_error, message: message}} =
-             Aerospike.Command.Admin.create_expression_index(
+             Admin.create_expression_index(
                conn,
                @namespace,
                "users",
@@ -184,7 +207,7 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
 
     assert {:error, %Error{code: :invalid_argument, message: message}} =
-             Aerospike.Command.Admin.create_expression_index(
+             Admin.create_expression_index(
                conn,
                @namespace,
                "users",
@@ -211,7 +234,7 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_info(fake, "A1", [command], %{command => "FAIL: duplicate index"})
 
     assert {:error, %Error{code: :server_error, message: message}} =
-             Aerospike.Command.Admin.create_expression_index(
+             Admin.create_expression_index(
                conn,
                @namespace,
                set,
@@ -353,7 +376,7 @@ defmodule Aerospike.Command.AdminTest do
             [
               %UDF{filename: "alpha.lua", hash: "abc123", language: "LUA"},
               %UDF{filename: "beta.lua", hash: "def456", language: "LUA"}
-            ]} = Aerospike.Command.Admin.list_udfs(conn, [])
+            ]} = Admin.list_udfs(conn, [])
   end
 
   test "register_udf/4 uploads inline source and returns a register task", %{
@@ -370,14 +393,14 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_info(fake, "A1", [command], %{command => "OK"})
 
     assert {:ok, %RegisterTask{conn: ^conn, package_name: ^server_name}} =
-             Aerospike.Command.Admin.register_udf(conn, source, server_name, [])
+             Admin.register_udf(conn, source, server_name, [])
   end
 
   test "remove_udf/3 treats missing packages as an idempotent success", %{conn: conn, fake: fake} do
     command = "udf-remove:filename=missing.lua;"
     Fake.script_info(fake, "A1", [command], %{command => "error=file not found"})
 
-    assert :ok = Aerospike.Command.Admin.remove_udf(conn, "missing.lua", [])
+    assert :ok = Admin.remove_udf(conn, "missing.lua", [])
   end
 
   test "truncate/3 builds the namespace command and appends lut when provided", %{
@@ -389,14 +412,14 @@ defmodule Aerospike.Command.AdminTest do
 
     Fake.script_info(fake, "A1", [command], %{command => "OK"})
 
-    assert :ok = Aerospike.Command.Admin.truncate(conn, @namespace, before: before)
+    assert :ok = Admin.truncate(conn, @namespace, before: before)
   end
 
   test "truncate/4 builds the set command and returns :ok", %{conn: conn, fake: fake} do
     command = "truncate:namespace=test;set=users"
     Fake.script_info(fake, "A1", [command], %{command => "OK"})
 
-    assert :ok = Aerospike.Command.Admin.truncate(conn, @namespace, "users", [])
+    assert :ok = Admin.truncate(conn, @namespace, "users", [])
   end
 
   test "query_users/2 decodes streamed admin frames into user structs", %{conn: conn, fake: fake} do
@@ -425,7 +448,7 @@ defmodule Aerospike.Command.AdminTest do
                 write_info: [3],
                 connections_in_use: 4
               }
-            ]} = Aerospike.Command.Admin.query_users(conn, [])
+            ]} = Admin.query_users(conn, [])
   end
 
   test "create_role sends scoped privileges, whitelist, and quotas", %{conn: conn, fake: fake} do
@@ -435,7 +458,7 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_command(fake, "A1", {:ok, ok_body})
 
     assert :ok =
-             Aerospike.Command.Admin.create_role(
+             Admin.create_role(
                conn,
                "analyst",
                [privilege],
@@ -472,7 +495,7 @@ defmodule Aerospike.Command.AdminTest do
                 read_quota: 25,
                 write_quota: 50
               }
-            ]} = Aerospike.Command.Admin.query_roles(conn, [])
+            ]} = Admin.query_roles(conn, [])
   end
 
   test "query_role returns nil when the server streams no matching records", %{
@@ -482,7 +505,7 @@ defmodule Aerospike.Command.AdminTest do
     done_block = admin_frame(50, 16, [])
     Fake.script_command_stream(fake, "A1", {:ok, done_block})
 
-    assert {:ok, nil} = Aerospike.Command.Admin.query_role(conn, "missing-role", [])
+    assert {:ok, nil} = Admin.query_role(conn, "missing-role", [])
   end
 
   test "query_roles translates malformed privilege payloads into protocol errors", %{
@@ -503,7 +526,7 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_command_stream(fake, "A1", {:ok, malformed_role <> done_block})
 
     assert {:error, %Error{code: :server_error, message: message}} =
-             Aerospike.Command.Admin.query_roles(conn, [])
+             Admin.query_roles(conn, [])
 
     assert message == "invalid admin response: :truncated_privilege_scope"
   end
@@ -515,7 +538,7 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_command(fake, "A1", {:ok, <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>})
     :ok = Tender.rotate_auth_credentials(conn, "alice", "old-secret")
 
-    assert :ok = Aerospike.Command.Admin.change_password(conn, "alice", "new-secret", [])
+    assert :ok = Admin.change_password(conn, "alice", "new-secret", [])
     assert %{user: "alice", password: "new-secret"} = Tender.auth_credentials(conn)
   end
 

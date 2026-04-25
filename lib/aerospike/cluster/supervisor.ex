@@ -38,9 +38,9 @@ defmodule Aerospike.Cluster.Supervisor do
 
   alias Aerospike.Cluster.NodeSupervisor
   alias Aerospike.Cluster.PartitionMapWriter
-  alias Aerospike.Policy
   alias Aerospike.Cluster.TableOwner
   alias Aerospike.Cluster.Tender
+  alias Aerospike.Policy
 
   @typedoc """
   Start options.

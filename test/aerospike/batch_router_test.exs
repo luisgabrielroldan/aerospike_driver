@@ -151,10 +151,8 @@ defmodule Aerospike.Command.BatchRouterTest do
   end
 
   defp delete_table_if_present(tab) do
-    try do
-      :ets.delete(tab)
-    catch
-      :error, :badarg -> :ok
-    end
+    :ets.delete(tab)
+  catch
+    :error, :badarg -> :ok
   end
 end

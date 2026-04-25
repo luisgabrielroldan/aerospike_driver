@@ -143,6 +143,7 @@ defmodule Aerospike.MixProject do
       {:nimble_pool, "~> 1.0"},
       {:telemetry, "~> 1.3"},
       {:bcrypt_elixir, "~> 3.3"},
+      {:jason, "~> 1.4"},
       {:telemetry_metrics, "~> 1.0", only: :test},
       {:benchee, "~> 1.3", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

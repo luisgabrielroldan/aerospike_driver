@@ -15,6 +15,8 @@ defmodule Aerospike.Command.Get do
       rebalance response
   """
 
+  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
@@ -22,8 +24,6 @@ defmodule Aerospike.Command.Get do
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
   alias Aerospike.Runtime.TxnSupport
-  alias Aerospike.Command.UnaryCommand
-  alias Aerospike.Command.UnarySupport
 
   @type mode :: :all | :header
 

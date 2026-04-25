@@ -27,9 +27,24 @@ defmodule Aerospike.Protocol.OperateFlags do
   @append Operation.op_append()
   @prepend Operation.op_prepend()
   @touch Operation.op_touch()
+  @bit_read Operation.op_bit_read()
+  @bit_modify Operation.op_bit_modify()
   @delete Operation.op_delete()
+  @hll_read Operation.op_hll_read()
+  @hll_modify Operation.op_hll_modify()
 
-  @write_op_types [@write, @cdt_modify, @add, @exp_modify, @append, @prepend, @touch, @delete]
+  @write_op_types [
+    @write,
+    @cdt_modify,
+    @add,
+    @exp_modify,
+    @append,
+    @prepend,
+    @touch,
+    @bit_modify,
+    @delete,
+    @hll_modify
+  ]
 
   @spec scan_ops([Operation.t()]) :: t()
   def scan_ops(ops) when is_list(ops) do
@@ -56,7 +71,10 @@ defmodule Aerospike.Protocol.OperateFlags do
   end
 
   defp maybe_mark_respond_all(acc, %Operation{op_type: t, map_cdt: map_cdt?}) do
-    respond_all? = t in [@exp_read, @exp_modify] or t in [@cdt_read, @cdt_modify] or map_cdt?
+    respond_all? =
+      t in [@exp_read, @exp_modify, @bit_read, @bit_modify, @hll_read, @hll_modify] or
+        t in [@cdt_read, @cdt_modify] or map_cdt?
+
     %{acc | respond_all?: acc.respond_all? or respond_all?}
   end
 
@@ -71,6 +89,10 @@ defmodule Aerospike.Protocol.OperateFlags do
   end
 
   defp accumulate_by_op_type(acc, %Operation{op_type: t}) when t in [@cdt_read, @exp_read] do
+    %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_bin?: true}
+  end
+
+  defp accumulate_by_op_type(acc, %Operation{op_type: t}) when t in [@bit_read, @hll_read] do
     %{acc | info1: acc.info1 ||| AsmMsg.info1_read(), read_bin?: true}
   end
 

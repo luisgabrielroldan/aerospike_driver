@@ -2,11 +2,11 @@ defmodule Aerospike.Command.UnaryCommand do
   @moduledoc """
   Internal contract for unary command-local hooks.
 
-  Phase 4's shared executor seam is narrower than `Aerospike.Command.Get`'s
+  The shared executor boundary is narrower than `Aerospike.Command.Get`'s
   current end-to-end control flow suggests. The retry driver, routing,
-  node-handle resolution, breaker checks, pool checkout, retry budget,
-  and retry classification stay shared concerns. The command-specific
-  variation exposed by the current spike is limited to:
+  node-handle resolution, breaker checks, pool checkout, retry budget, and
+  retry classification stay shared concerns. The command-specific variation
+  exposed by the current implementation is limited to:
 
     * choosing read or write dispatch
     * building the wire request from command input
@@ -14,15 +14,15 @@ defmodule Aerospike.Command.UnaryCommand do
 
   This module codifies that boundary without extracting the shared retry
   loop yet. `Aerospike.Command.Get` can delegate its transport edge here today,
-  and later Phase 4 tasks can move the surrounding retry/dispatch
-  orchestration into a reusable executor without re-deciding what a
-  unary command is allowed to own.
+  and future executor work can move the surrounding retry/dispatch
+  orchestration into a reusable executor without re-deciding what a unary
+  command is allowed to own.
   """
 
-  alias Aerospike.Error
-  alias Aerospike.Runtime.Executor
-  alias Aerospike.RetryPolicy
   alias Aerospike.Cluster.Router
+  alias Aerospike.Error
+  alias Aerospike.RetryPolicy
+  alias Aerospike.Runtime.Executor
 
   @enforce_keys [:name, :dispatch, :build_request, :parse_response]
   defstruct [:name, :dispatch, :build_request, :parse_response, retry_transport?: true]

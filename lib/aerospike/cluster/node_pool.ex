@@ -87,14 +87,13 @@ defmodule Aerospike.Cluster.NodePool do
     * `{:close, :failure}` — worker is removed *and* the counters'
       `:failed` slot is incremented. Use this when the command returned
       a transport-class error (`:network_error`, `:timeout`,
-      `:connection_error`) so the Task 6 circuit breaker can read the
-      rate.
+      `:connection_error`) so the circuit breaker can read the rate.
   """
 
   @behaviour NimblePool
 
-  alias Aerospike.Error
   alias Aerospike.Cluster.NodeCounters
+  alias Aerospike.Error
   alias Aerospike.Runtime.PoolCheckout
   alias Aerospike.RuntimeMetrics
 

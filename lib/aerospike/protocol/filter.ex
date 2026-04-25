@@ -6,6 +6,7 @@ defmodule Aerospike.Protocol.Filter do
 
   @particle_integer 1
   @particle_string 3
+  @particle_geojson 23
 
   @spec encode(Filter.t()) :: binary()
   def encode(%Filter{} = filter) do
@@ -31,6 +32,10 @@ defmodule Aerospike.Protocol.Filter do
     ctx
     |> Enum.flat_map(fn {id, value} -> [id, encode_ctx_value(value)] end)
     |> MessagePack.pack!()
+  end
+
+  defp particle_wire(%Filter{index_type: t}) when t in [:geo_within, :geo_contains] do
+    @particle_geojson
   end
 
   defp particle_wire(%Filter{index_type: t}) when t in [:list, :mapkeys, :mapvalues] do

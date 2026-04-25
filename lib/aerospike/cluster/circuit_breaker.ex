@@ -5,7 +5,7 @@ defmodule Aerospike.Cluster.CircuitBreaker do
   The breaker is a pure function over a node's `Aerospike.Cluster.NodeCounters`
   reference plus a small options map. It answers one question: is this
   node usable for an immediate command attempt, or should the caller
-  short-circuit and fall through to the retry layer (Task 7)?
+  short-circuit and fall through to the retry layer?
 
   Two thresholds gate the answer:
 
@@ -30,16 +30,16 @@ defmodule Aerospike.Cluster.CircuitBreaker do
   tend cycle so the breaker's "recent failure count" metric resets in
   lockstep with the cluster-state view of node health.
 
-  The breaker is paired with the `:active | :inactive` node lifecycle
-  (Task 1): a node the Tender has demoted to `:inactive` already
+  The breaker is paired with the `:active | :inactive` node lifecycle:
+  a node the Tender has demoted to `:inactive` already
   returns `{:error, :unknown_node}` from `Aerospike.Cluster.Tender.node_handle/2`,
   so commands never reach `allow?/2` against an inactive node. The
   breaker handles the narrower case of an `:active` node that is
   currently unusable without needing to promote it to `:inactive`.
   """
 
-  alias Aerospike.Error
   alias Aerospike.Cluster.NodeCounters
+  alias Aerospike.Error
 
   @typedoc """
   Breaker options.

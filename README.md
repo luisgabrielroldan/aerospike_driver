@@ -18,7 +18,7 @@ The library currently proves these command families through the public
 - Unary CRUD: `get/3`, `put/4`, `exists/2`, `touch/2`, `delete/2`
 - Unary operate: `operate/4` with the currently admitted write/read subset plus
   `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, `Aerospike.Op.Exp`,
-  and `Aerospike.Ctx`
+  `Aerospike.Op.Bit`, `Aerospike.Op.HLL`, and `Aerospike.Ctx`
 - Batch reads: `batch_get/4`
 - Root helpers: `start_link/1`, `child_spec/1`, `close/2`, `key/3`,
   `key_digest/3`
@@ -33,6 +33,8 @@ The library currently proves these command families through the public
   `Scan.filter/2` and `Query.filter/2`.
 - Query admin/runtime helpers: `create_index/4`, `create_expression_index/5`,
   `drop_index/4`, `query_aggregate/6`, `query_execute/4`, `query_udf/6`
+- Typed geo values through `Aerospike.Geo` and geo secondary-index filters
+  through `Aerospike.Filter.geo_within/2` and `Aerospike.Filter.geo_contains/2`
 - Enterprise XDR filter management through `set_xdr_filter/4`
 - Transactions: `transaction/2`, `transaction/3`, `commit/2`, `abort/2`,
   `txn_status/2`
@@ -76,6 +78,105 @@ are validated synchronously by `Aerospike.start_link/1` before the cluster
 runtime boots. Use `Aerospike.Cluster.ready?/1` to observe when the published
 cluster view is ready to route commands.
 
+## Advanced Operate And Geo
+
+`operate/4` accepts primitive tuple operations plus builder modules for CDT,
+bit, HyperLogLog, and expression operations. Returned operation values are
+accumulated into `%Aerospike.Record{bins: map}` by bin name.
+
+Nested CDT operations use `Aerospike.Ctx` steps:
+
+```elixir
+key = Aerospike.key("test", "demo", "nested-profile")
+
+{:ok, _} =
+  Aerospike.put(:aerospike, key, %{
+    "profile" => %{"events" => []}
+  })
+
+{:ok, _record} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.List.append("profile", "signed-in",
+      ctx: [Aerospike.Ctx.map_key("events")]
+    )
+  ])
+```
+
+Bit operations work on Aerospike blob bins. Plain Elixir binaries are encoded
+as strings, so seed bit bins with `{:blob, binary}` when using this client:
+
+```elixir
+key = Aerospike.key("test", "demo", "bit-flags")
+
+{:ok, _} =
+  Aerospike.put(:aerospike, key, %{"flags" => {:blob, <<0>>}})
+
+{:ok, _} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.Bit.set("flags", 0, 8, <<0b1010_0000>>)
+  ])
+
+{:ok, record} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.Bit.count("flags", 0, 8)
+  ])
+
+2 = record.bins["flags"]
+```
+
+HyperLogLog helpers create, update, and read probabilistic cardinality bins:
+
+```elixir
+key = Aerospike.key("test", "demo", "hll-visitors")
+
+{:ok, _} = Aerospike.put(:aerospike, key, %{"seed" => 0})
+
+{:ok, _} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.HLL.init("visitors", 14, 0)
+  ])
+
+{:ok, _} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.HLL.add("visitors", ["ada", "grace", "katherine"], 14, 0)
+  ])
+
+{:ok, record} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.HLL.get_count("visitors")
+  ])
+
+3 = record.bins["visitors"]
+```
+
+Geo bins accept typed values from `Aerospike.Geo`, and ordinary secondary
+indexes can be created with `type: :geo2dsphere`:
+
+```elixir
+key = Aerospike.key("test", "places", "portland")
+point = Aerospike.Geo.point(-122.68, 45.52)
+
+{:ok, _} = Aerospike.put(:aerospike, key, %{"loc" => point})
+
+{:ok, task} =
+  Aerospike.create_index(:aerospike, "test", "places",
+    bin: "loc",
+    name: "places_loc_geo_idx",
+    type: :geo2dsphere
+  )
+
+:ok = Aerospike.IndexTask.wait(task)
+
+region = Aerospike.Geo.circle(-122.68, 45.52, 10_000.0)
+
+query =
+  Aerospike.Query.new("test", "places")
+  |> Aerospike.Query.where(Aerospike.Filter.geo_within("loc", region))
+  |> Aerospike.Query.max_records(100)
+
+{:ok, records} = Aerospike.query_all(:aerospike, query)
+```
+
 ## Runtime Model
 
 This client is deliberately OTP-first. These runtime modules are internal
@@ -111,8 +212,8 @@ Reviewers should record the resolved image ids when they run the final gate.
 This library is not yet claiming full Aerospike feature parity.
 
 - `batch_get/4` supports only `bins: :all` and `:timeout`
-- `operate/4` supports the currently admitted tuple, CDT, and expression
-  operation surface, not the full historical operate breadth
+- `operate/4` supports the currently admitted tuple, CDT, bit, HyperLogLog,
+  and expression operation surface, not the full historical operate breadth
 - scan and query paths support `Scan.filter/2` and `Query.filter/2`
   for server-side expression filters. Queries keep secondary-index predicates in
   `Query.where/2` with `Aerospike.Filter`.

@@ -72,7 +72,7 @@ defmodule Aerospike.Integration.StreamTransportTest do
 
     frames = StreamProof.collect_stream!(stream)
 
-    assert length(frames) >= 1,
+    refute frames == [],
            "expected the scan to produce at least one frame, got #{length(frames)}"
 
     total_records =

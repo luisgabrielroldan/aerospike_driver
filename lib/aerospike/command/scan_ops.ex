@@ -1,6 +1,10 @@
 defmodule Aerospike.Command.ScanOps do
   @moduledoc false
 
+  alias Aerospike.Command.NodePartitions
+  alias Aerospike.Command.PartitionTracker
+  alias Aerospike.Command.ScanOps.PageRunner
+  alias Aerospike.Command.ScanOps.StreamRunner
   alias Aerospike.Cursor
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
@@ -8,8 +12,6 @@ defmodule Aerospike.Command.ScanOps do
   alias Aerospike.PartitionFilter
   alias Aerospike.Query
   alias Aerospike.Scan
-  alias Aerospike.Command.ScanOps.PageRunner
-  alias Aerospike.Command.ScanOps.StreamRunner
 
   @spec stream(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t()}
@@ -270,15 +272,15 @@ defmodule Aerospike.Command.ScanOps do
 
   @doc false
   @spec allow_record_fold(
-          Aerospike.Command.PartitionTracker.t(),
-          Aerospike.Command.NodePartitions.t(),
+          PartitionTracker.t(),
+          NodePartitions.t(),
           [term()]
         ) ::
-          {Aerospike.Command.PartitionTracker.t(), Aerospike.Command.NodePartitions.t(), [term()]}
+          {PartitionTracker.t(), NodePartitions.t(), [term()]}
   def allow_record_fold(tracker, np, records) when is_list(records) do
     {tracker, np, kept_records_rev} =
       Enum.reduce(records, {tracker, np, []}, fn record, {tracker_acc, np_acc, kept_acc} ->
-        case Aerospike.Command.PartitionTracker.allow_record?(tracker_acc, np_acc) do
+        case PartitionTracker.allow_record?(tracker_acc, np_acc) do
           {true, tracker2, np2} -> {tracker2, np2, [record | kept_acc]}
           {false, tracker2, np2} -> {tracker2, np2, kept_acc}
         end

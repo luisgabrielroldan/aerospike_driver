@@ -3,17 +3,17 @@ defmodule Aerospike.Runtime.TxnRoll do
 
   import Bitwise
 
+  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
-  alias Aerospike.Txn
   alias Aerospike.Runtime.TxnMonitor
   alias Aerospike.Runtime.TxnOps
-  alias Aerospike.Command.UnaryCommand
-  alias Aerospike.Command.UnarySupport
+  alias Aerospike.Txn
 
   @doc false
   @spec commit(atom(), Txn.t(), keyword()) ::

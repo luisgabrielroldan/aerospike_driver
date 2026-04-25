@@ -7,10 +7,10 @@ defmodule Aerospike.Command.BatchCommand do
   and final merge step back into caller-facing order.
   """
 
-  alias Aerospike.Error
-  alias Aerospike.Runtime.Executor
-  alias Aerospike.RetryPolicy
   alias Aerospike.Cluster.Router
+  alias Aerospike.Error
+  alias Aerospike.RetryPolicy
+  alias Aerospike.Runtime.Executor
 
   @type dispatch :: :write | {:read, Router.replica_policy(), non_neg_integer()}
   @type entry_kind :: :read | :read_header | :exists | :put | :delete | :operate | :udf

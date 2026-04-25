@@ -4,6 +4,7 @@ defmodule Aerospike.Protocol.FilterTest do
   alias Aerospike.Ctx
   alias Aerospike.Filter
   alias Aerospike.Protocol.Filter, as: FilterCodec
+  alias Aerospike.Protocol.MessagePack
 
   test "range filter (integer) layout" do
     filter = Filter.range("age", 10, 20)
@@ -69,6 +70,43 @@ defmodule Aerospike.Protocol.FilterTest do
     assert end_val == <<21::64-signed-big>>
   end
 
+  test "geo filters use GeoJSON particle type" do
+    region = ~s({"type":"Polygon","coordinates":[[[0,0],[0,1],[1,1],[1,0],[0,0]]]})
+    bin = "loc" |> Filter.geo_within(region) |> FilterCodec.encode()
+
+    <<
+      1::8,
+      3::8,
+      "loc"::binary,
+      23::8,
+      begin_size::32-big,
+      begin_val::binary-size(begin_size),
+      end_size::32-big,
+      end_val::binary-size(end_size)
+    >> = bin
+
+    assert begin_size == byte_size(region)
+    assert end_size == byte_size(region)
+    assert begin_val == region
+    assert end_val == region
+  end
+
+  test "named geo indexes omit the bin name and keep GeoJSON particle type" do
+    point = ~s({"type":"Point","coordinates":[0,0]})
+
+    bin =
+      "region"
+      |> Filter.geo_contains(point)
+      |> Filter.using_index("region_geo_idx")
+      |> FilterCodec.encode()
+
+    <<1::8, 0::8, 23::8, begin_size::32-big, begin_val::binary-size(begin_size), end_size::32-big,
+      end_val::binary-size(end_size)>> = bin
+
+    assert begin_val == point
+    assert end_val == point
+  end
+
   test "encode_ctx/1 produces a MessagePack payload" do
     ctx = [Ctx.map_key("roles"), Ctx.list_index(0)]
     encoded = FilterCodec.encode_ctx(ctx)
@@ -93,7 +131,7 @@ defmodule Aerospike.Protocol.FilterTest do
     encoded =
       FilterCodec.encode_ctx([Ctx.map_key("roles"), {0x22, {:bytes, <<1, 2>>}}, {0x10, 7}])
 
-    assert Aerospike.Protocol.MessagePack.unpack!(encoded) == [
+    assert MessagePack.unpack!(encoded) == [
              34,
              "roles",
              34,

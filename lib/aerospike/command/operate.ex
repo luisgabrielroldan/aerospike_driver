@@ -20,6 +20,8 @@ defmodule Aerospike.Command.Operate do
   as write traffic.
   """
 
+  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Policy
@@ -29,8 +31,6 @@ defmodule Aerospike.Command.Operate do
   alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Protocol.Response
   alias Aerospike.Runtime.TxnSupport
-  alias Aerospike.Command.UnaryCommand
-  alias Aerospike.Command.UnarySupport
 
   @type simple_operation ::
           {:read, String.t() | atom()}

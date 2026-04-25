@@ -105,36 +105,36 @@ defmodule Aerospike do
   policy families ad hoc.
   """
 
+  alias Aerospike.Cluster
+  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
   alias Aerospike.Command.Admin
   alias Aerospike.Command.ApplyUdf
   alias Aerospike.Command.BatchGet
-  alias Aerospike.Cluster
   alias Aerospike.Command.Delete
+  alias Aerospike.Command.Exists
+  alias Aerospike.Command.Get
+  alias Aerospike.Command.Operate
+  alias Aerospike.Command.Put
+  alias Aerospike.Command.ScanOps
+  alias Aerospike.Command.Touch
+  alias Aerospike.Command.WriteOp
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
-  alias Aerospike.Command.Exists
   alias Aerospike.Exp
-  alias Aerospike.Command.Get
   alias Aerospike.IndexTask
   alias Aerospike.Key
-  alias Aerospike.Command.Operate
   alias Aerospike.Page
-  alias Aerospike.Command.Put
   alias Aerospike.Policy
   alias Aerospike.Privilege
   alias Aerospike.Query
   alias Aerospike.RegisterTask
   alias Aerospike.Role
+  alias Aerospike.Runtime.TxnRoll
   alias Aerospike.RuntimeMetrics
   alias Aerospike.Scan
-  alias Aerospike.Command.ScanOps
-  alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
-  alias Aerospike.Command.Touch
+  alias Aerospike.Txn
   alias Aerospike.UDF
   alias Aerospike.User
-  alias Aerospike.Command.WriteOp
-  alias Aerospike.Txn
-  alias Aerospike.Runtime.TxnRoll
 
   @typedoc """
   Identifier for a running cluster facade.
@@ -706,6 +706,30 @@ defmodule Aerospike do
 
   @doc """
   Creates a secondary index and returns a pollable task handle.
+
+  Required options:
+
+    * `:bin` — non-empty bin name.
+    * `:name` — non-empty index name.
+    * `:type` — one of `:numeric`, `:string`, or `:geo2dsphere`.
+
+  Optional options:
+
+    * `:collection` — one of `:list`, `:mapkeys`, or `:mapvalues`.
+    * `:pool_checkout_timeout` — non-negative pool checkout timeout in
+      milliseconds.
+
+  Geo indexes use `type: :geo2dsphere` and can be queried with
+  `Aerospike.Filter.geo_within/2` or `Aerospike.Filter.geo_contains/2`.
+
+      {:ok, task} =
+        Aerospike.create_index(cluster, "test", "places",
+          bin: "loc",
+          name: "places_loc_geo_idx",
+          type: :geo2dsphere
+        )
+
+      :ok = Aerospike.IndexTask.wait(task)
   """
   @spec create_index(cluster(), String.t(), String.t(), keyword()) ::
           {:ok, IndexTask.t()} | {:error, Aerospike.Error.t()}
@@ -1467,11 +1491,24 @@ defmodule Aerospike do
   `:sleep_between_retries_ms`, `:ttl`, `:generation`, and `:filter`.
 
   Accepted operations include the simple tuple form plus the public
-  `Aerospike.Op` helpers for primitive, CDT-style, and expression operations.
+  `Aerospike.Op` helpers for primitive, CDT, bit, HyperLogLog, and expression
+  operations. Returned operation values are accumulated into
+  `%Aerospike.Record{bins: map}` by bin name.
 
       Aerospike.operate(cluster, key, [
         Aerospike.Op.Exp.read("projected", Aerospike.Exp.int_bin("count")),
         Aerospike.Op.Exp.write("computed", Aerospike.Exp.int(99))
+      ])
+
+      Aerospike.operate(cluster, key, [
+        Aerospike.Op.List.append("profile", "signed-in",
+          ctx: [Aerospike.Ctx.map_key("events")]
+        )
+      ])
+
+      Aerospike.operate(cluster, key, [
+        Aerospike.Op.Bit.count("flags", 0, 8),
+        Aerospike.Op.HLL.get_count("visitors")
       ])
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
@@ -1656,9 +1693,8 @@ defmodule Aerospike do
   defp validate_warm_up_opts(opts) when is_list(opts) do
     with :ok <-
            validate_supported_opts(opts, [:count, :pool_checkout_timeout], "Aerospike.warm_up/2"),
-         :ok <- validate_non_neg_opt(opts, :count),
-         :ok <- validate_non_neg_opt(opts, :pool_checkout_timeout) do
-      :ok
+         :ok <- validate_non_neg_opt(opts, :count) do
+      validate_non_neg_opt(opts, :pool_checkout_timeout)
     end
   end
 

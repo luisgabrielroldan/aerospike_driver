@@ -1,6 +1,10 @@
 defmodule Aerospike.UnaryFilterExpTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Cluster.NodeSupervisor
+  alias Aerospike.Cluster.PartitionMapWriter
+  alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Command.ApplyUdf
   alias Aerospike.Command.Delete
   alias Aerospike.Command.Exists
@@ -9,10 +13,6 @@ defmodule Aerospike.UnaryFilterExpTest do
   alias Aerospike.Command.Put
   alias Aerospike.Command.Touch
   alias Aerospike.Command.WriteOp
-  alias Aerospike.Cluster.NodeSupervisor
-  alias Aerospike.Cluster.PartitionMapWriter
-  alias Aerospike.Cluster.TableOwner
-  alias Aerospike.Cluster.Tender
   alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg

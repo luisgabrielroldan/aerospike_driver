@@ -10,6 +10,13 @@ defmodule Aerospike.Protocol.AsmMsg.OperationTest do
       assert Operation.op_exp_modify() == 8
       assert Operation.particle_blob() == 4
     end
+
+    test "exposes bit and HLL operation types" do
+      assert Operation.op_bit_read() == 12
+      assert Operation.op_bit_modify() == 13
+      assert Operation.op_hll_read() == 15
+      assert Operation.op_hll_modify() == 16
+    end
   end
 
   describe "from_simple/1" do

@@ -19,9 +19,9 @@ defmodule Aerospike.Cluster.Router do
       router stays stateless.
   """
 
-  alias Aerospike.Key
   alias Aerospike.Cluster.PartitionMap
   alias Aerospike.Cluster.PartitionMap.PartitionOwners
+  alias Aerospike.Key
 
   @type replica_policy :: :master | :sequence
   @type node_name :: String.t()

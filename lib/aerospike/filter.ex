@@ -2,21 +2,25 @@ defmodule Aerospike.Filter do
   @moduledoc """
   Secondary-index predicate values for query builders.
 
-  Use `range/3`, `equal/2`, or `contains/3` to build a predicate, then
-  pass it to `Aerospike.Query.where/2`.
+  Use `range/3`, `equal/2`, `contains/3`, `geo_within/2`, or
+  `geo_contains/2` to build a predicate, then pass it to
+  `Aerospike.Query.where/2`.
 
   `using_index/2` targets a named index, and `with_ctx/2` carries nested
   CDT context for context-aware predicates.
   """
 
   alias Aerospike.Ctx
+  alias Aerospike.Geo
   alias Aerospike.Key
 
   @enforce_keys [:bin_name, :index_type, :particle_type, :begin, :end]
   defstruct [:bin_name, :index_type, :particle_type, :begin, :end, :index_name, :ctx]
 
-  @type index_type :: :default | :list | :mapkeys | :mapvalues
+  @type index_type :: :default | :list | :mapkeys | :mapvalues | :geo_within | :geo_contains
   @type particle_type :: :integer | :string
+
+  @type geo_geometry :: String.t() | Geo.Point.t() | Geo.Polygon.t() | Geo.Circle.t()
 
   @type t :: %__MODULE__{
           bin_name: String.t(),
@@ -116,6 +120,82 @@ defmodule Aerospike.Filter do
   end
 
   @doc """
+  Geo region query for points within a GeoJSON region.
+  """
+  @spec geo_within(String.t(), geo_geometry()) :: t()
+  def geo_within(bin_name, %Geo.Point{} = region) when is_binary(bin_name) do
+    geo_within(bin_name, Geo.to_json(region))
+  end
+
+  def geo_within(bin_name, %Geo.Polygon{} = region) when is_binary(bin_name) do
+    geo_within(bin_name, Geo.to_json(region))
+  end
+
+  def geo_within(bin_name, %Geo.Circle{} = region) when is_binary(bin_name) do
+    geo_within(bin_name, Geo.to_json(region))
+  end
+
+  def geo_within(bin_name, region) when is_binary(bin_name) and is_binary(region) do
+    validate_bin_name!(bin_name)
+    validate_geojson!(region, "geo_within/2 region")
+
+    %__MODULE__{
+      bin_name: bin_name,
+      index_type: :geo_within,
+      particle_type: :string,
+      begin: region,
+      end: region
+    }
+  end
+
+  @doc """
+  Geo point query for regions containing a GeoJSON point.
+  """
+  @spec geo_contains(String.t(), geo_geometry()) :: t()
+  def geo_contains(bin_name, %Geo.Point{} = point) when is_binary(bin_name) do
+    geo_contains(bin_name, Geo.to_json(point))
+  end
+
+  def geo_contains(bin_name, %Geo.Polygon{} = point) when is_binary(bin_name) do
+    geo_contains(bin_name, Geo.to_json(point))
+  end
+
+  def geo_contains(bin_name, %Geo.Circle{} = point) when is_binary(bin_name) do
+    geo_contains(bin_name, Geo.to_json(point))
+  end
+
+  def geo_contains(bin_name, point) when is_binary(bin_name) and is_binary(point) do
+    validate_bin_name!(bin_name)
+    validate_geojson!(point, "geo_contains/2 point")
+
+    %__MODULE__{
+      bin_name: bin_name,
+      index_type: :geo_contains,
+      particle_type: :string,
+      begin: point,
+      end: point
+    }
+  end
+
+  @doc """
+  Builds a `geo_within/2` circle query from center longitude, latitude, and radius.
+  """
+  @spec geo_within_radius(String.t(), number(), number(), number()) :: t()
+  def geo_within_radius(bin_name, lng, lat, radius)
+      when is_binary(bin_name) and is_number(lng) and is_number(lat) and is_number(radius) do
+    geo_within(bin_name, Geo.circle(lng, lat, radius))
+  end
+
+  @doc """
+  Builds a `geo_contains/2` point query from longitude and latitude.
+  """
+  @spec geo_contains_point(String.t(), number(), number()) :: t()
+  def geo_contains_point(bin_name, lng, lat)
+      when is_binary(bin_name) and is_number(lng) and is_number(lat) do
+    geo_contains(bin_name, Geo.point(lng, lat))
+  end
+
+  @doc """
   Targets a named secondary index.
   """
   @spec using_index(t(), String.t()) :: t()
@@ -142,6 +222,12 @@ defmodule Aerospike.Filter do
   defp validate_index_name!(index_name) do
     if index_name == "" do
       raise ArgumentError, "index_name must be a non-empty string"
+    end
+  end
+
+  defp validate_geojson!(json, subject) do
+    if json == "" do
+      raise ArgumentError, "#{subject} must be a non-empty GeoJSON string"
     end
   end
 

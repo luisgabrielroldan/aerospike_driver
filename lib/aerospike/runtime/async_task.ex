@@ -21,11 +21,13 @@ defmodule Aerospike.Runtime.AsyncTask do
   @doc false
   defmacro __using__(_opts) do
     quote do
-      @behaviour Aerospike.Runtime.AsyncTask
+      alias Aerospike.Runtime.AsyncTask
 
-      @impl Aerospike.Runtime.AsyncTask
+      @behaviour AsyncTask
+
+      @impl AsyncTask
       def wait(task, opts \\ []) do
-        Aerospike.Runtime.AsyncTask.poll(__MODULE__, task, opts)
+        AsyncTask.poll(__MODULE__, task, opts)
       end
 
       defoverridable wait: 2

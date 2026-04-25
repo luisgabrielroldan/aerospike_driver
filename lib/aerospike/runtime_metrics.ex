@@ -28,25 +28,29 @@ defmodule Aerospike.RuntimeMetrics do
 
   @spec enable(atom() | pid(), keyword()) :: :ok | {:error, Error.t()}
   def enable(cluster, opts \\ []) when is_list(opts) do
-    with {:ok, table} <- meta_table(cluster) do
-      if Keyword.get(opts, :reset, false) do
-        clear_runtime_counters(table)
-      end
+    case meta_table(cluster) do
+      {:ok, table} ->
+        if Keyword.get(opts, :reset, false) do
+          clear_runtime_counters(table)
+        end
 
-      :ets.insert(table, {@metrics_enabled_key, true})
-      :ok
-    else
-      :error -> {:error, Error.from_result_code(:cluster_not_ready)}
+        :ets.insert(table, {@metrics_enabled_key, true})
+        :ok
+
+      :error ->
+        {:error, Error.from_result_code(:cluster_not_ready)}
     end
   end
 
   @spec disable(atom() | pid()) :: :ok | {:error, Error.t()}
   def disable(cluster) do
-    with {:ok, table} <- meta_table(cluster) do
-      :ets.insert(table, {@metrics_enabled_key, false})
-      :ok
-    else
-      :error -> {:error, Error.from_result_code(:cluster_not_ready)}
+    case meta_table(cluster) do
+      {:ok, table} ->
+        :ets.insert(table, {@metrics_enabled_key, false})
+        :ok
+
+      :error ->
+        {:error, Error.from_result_code(:cluster_not_ready)}
     end
   end
 
@@ -275,9 +279,8 @@ defmodule Aerospike.RuntimeMetrics do
   end
 
   defp lookup_meta(cluster, key) do
-    with {:ok, table} <- meta_table(cluster) do
-      :ets.lookup(table, key)
-    else
+    case meta_table(cluster) do
+      {:ok, table} -> :ets.lookup(table, key)
       :error -> []
     end
   end

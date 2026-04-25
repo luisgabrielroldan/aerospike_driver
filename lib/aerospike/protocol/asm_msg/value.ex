@@ -2,7 +2,9 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @moduledoc false
 
   alias Aerospike.Error
+  alias Aerospike.Geo
   alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.MessagePack
 
   @particle_null 0
   @particle_integer 1
@@ -10,6 +12,8 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @particle_string 3
   @particle_blob 4
   @particle_bool 17
+  @particle_list 20
+  @particle_geojson 23
   @op_write Operation.op_write()
   @op_add Operation.op_add()
   @op_append Operation.op_append()
@@ -19,8 +23,9 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   Encodes an Elixir value into `{particle_type, data}` for a simple write op.
 
   Supported values are the narrow subset this spike phase needs:
-  `nil`, integers, floats, strings, booleans, and explicit blobs via
-  `{:blob, binary}`.
+  `nil`, integers, floats, strings, booleans, explicit blobs via
+  `{:blob, binary}`, typed geo values, and explicit GeoJSON via
+  `{:geojson, binary}`.
   """
   @spec encode_value(term()) ::
           {:ok, {non_neg_integer(), binary()}} | {:error, Error.t()}
@@ -45,11 +50,19 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
     {:ok, {@particle_blob, value}}
   end
 
+  def encode_value(%Geo.Point{} = point), do: encode_value({:geojson, Geo.to_json(point)})
+  def encode_value(%Geo.Polygon{} = polygon), do: encode_value({:geojson, Geo.to_json(polygon)})
+  def encode_value(%Geo.Circle{} = circle), do: encode_value({:geojson, Geo.to_json(circle)})
+
+  def encode_value({:geojson, json}) when is_binary(json) do
+    {:ok, {@particle_geojson, <<0::8, 0::16-big, json::binary>>}}
+  end
+
   def encode_value(value) do
     {:error,
      Error.from_result_code(:invalid_argument,
        message:
-         "unsupported write particle #{inspect(value)}; supported values: nil, integer, float, binary, boolean, {:blob, binary}"
+         "unsupported write particle #{inspect(value)}; supported values: nil, integer, float, binary, boolean, {:blob, binary}, Aerospike.Geo structs, {:geojson, binary}"
      )}
   end
 
@@ -127,7 +140,47 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   def decode_value(@particle_bool, <<0>>), do: {:ok, false}
   def decode_value(@particle_bool, <<1>>), do: {:ok, true}
 
+  def decode_value(@particle_list, data) when is_binary(data) do
+    decode_message_pack_particle(data, "list")
+  end
+
+  def decode_value(@particle_geojson, <<0::8, ncells::16-big, rest::binary>> = data)
+      when byte_size(rest) >= ncells * 8 do
+    cell_bytes = ncells * 8
+    <<_cells::binary-size(cell_bytes), json::binary>> = rest
+
+    if geojson_start?(json) do
+      {:ok, Geo.from_json(json)}
+    else
+      {:ok, Geo.from_json(data)}
+    end
+  end
+
+  def decode_value(@particle_geojson, data) when is_binary(data) do
+    {:ok, Geo.from_json(data)}
+  end
+
   def decode_value(particle_type, data) when is_integer(particle_type) and is_binary(data) do
     {:ok, {:raw, particle_type, data}}
+  end
+
+  defp geojson_start?(<<"{", _rest::binary>>), do: true
+  defp geojson_start?(<<"[", _rest::binary>>), do: true
+  defp geojson_start?(_data), do: false
+
+  defp decode_message_pack_particle(data, type) do
+    case MessagePack.unpack(data) do
+      {:ok, {value, <<>>}} ->
+        {:ok, value}
+
+      {:ok, {_value, rest}} ->
+        {:error,
+         Error.from_result_code(:parse_error,
+           message: "MessagePack #{type}: trailing bytes (#{byte_size(rest)})"
+         )}
+
+      {:error, :invalid_msgpack} ->
+        {:error, Error.from_result_code(:parse_error, message: "invalid MessagePack #{type}")}
+    end
   end
 end

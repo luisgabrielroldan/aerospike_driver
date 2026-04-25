@@ -8,12 +8,12 @@ defmodule Aerospike.Runtime.StreamingExecutor do
   """
 
   alias Aerospike.Cluster.CircuitBreaker
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Command.StreamingCommand
   alias Aerospike.Error
   alias Aerospike.Protocol.Message
   alias Aerospike.Query
   alias Aerospike.Scan
-  alias Aerospike.Command.StreamingCommand
-  alias Aerospike.Cluster.Tender
 
   @type runtime :: %{
           required(:tender) => GenServer.server(),
@@ -150,18 +150,23 @@ defmodule Aerospike.Runtime.StreamingExecutor do
   end
 
   defp handle_stream_frame(command, transport, stream, timeout, ctx, acc, frame) do
-    with {:ok, body} <- decode_stream_body(frame) do
-      case StreamingCommand.consume_frame(command, body, ctx, acc) do
-        {:cont, next_acc} ->
-          do_read_stream(command, transport, stream, timeout, ctx, next_acc)
+    case decode_stream_body(frame) do
+      {:ok, body} ->
+        handle_decoded_stream_body(command, transport, stream, timeout, ctx, acc, body)
 
-        {:halt, result} ->
-          result
+      {:error, %Error{} = err} ->
+        StreamingCommand.error_result(command, err, ctx)
+    end
+  end
 
-        {:error, %Error{} = err} ->
-          StreamingCommand.error_result(command, err, ctx)
-      end
-    else
+  defp handle_decoded_stream_body(command, transport, stream, timeout, ctx, acc, body) do
+    case StreamingCommand.consume_frame(command, body, ctx, acc) do
+      {:cont, next_acc} ->
+        do_read_stream(command, transport, stream, timeout, ctx, next_acc)
+
+      {:halt, result} ->
+        result
+
       {:error, %Error{} = err} ->
         StreamingCommand.error_result(command, err, ctx)
     end

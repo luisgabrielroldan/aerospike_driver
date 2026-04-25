@@ -7,6 +7,8 @@ defmodule Aerospike.Command.Put do
   `Aerospike.Runtime.Executor`.
   """
 
+  alias Aerospike.Command.UnaryCommand
+  alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Policy
@@ -16,8 +18,6 @@ defmodule Aerospike.Command.Put do
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
   alias Aerospike.Runtime.TxnSupport
-  alias Aerospike.Command.UnaryCommand
-  alias Aerospike.Command.UnarySupport
 
   @type option ::
           {:timeout, non_neg_integer()}

@@ -6,8 +6,8 @@ defmodule Aerospike.Cluster.TenderTest do
   alias Aerospike.Cluster.PartitionMap
   alias Aerospike.Cluster.PartitionMapWriter
   alias Aerospike.Cluster.TableOwner
-  alias Aerospike.Cluster.TendHistogram
   alias Aerospike.Cluster.Tender
+  alias Aerospike.Cluster.TendHistogram
   alias Aerospike.Error
   alias Aerospike.RetryPolicy
   alias Aerospike.RuntimeMetrics
@@ -458,7 +458,7 @@ defmodule Aerospike.Cluster.TenderTest do
       script_cycle(ctx.fake, "B1", gen: 1, peers: "0,3000,[]", replicas: b1_replicas_v1)
 
       # Cycle 2 — A1's generation advances so replicas is refetched (the
-      # Task 3 short-circuit would otherwise skip the fetch entirely); the
+      # unchanged-generation short-circuit would otherwise skip the fetch); the
       # fetch errors. B1's generation advances and its replicas body is
       # upgraded to regime 2 so the partition-map entries for the second
       # half of the ring are re-applied at the new regime. The invariant

@@ -1,22 +1,22 @@
 defmodule Aerospike.Command.Admin do
   @moduledoc false
 
-  alias Aerospike.Error
   alias Aerospike.Cluster
+  alias Aerospike.Cluster.NodePool
+  alias Aerospike.Cluster.Tender
+  alias Aerospike.Error
   alias Aerospike.Exp
   alias Aerospike.IndexTask
-  alias Aerospike.Privilege
-  alias Aerospike.RegisterTask
-  alias Aerospike.Role
-  alias Aerospike.User
-  alias Aerospike.UDF
-  alias Aerospike.Cluster.NodePool
   alias Aerospike.Policy
+  alias Aerospike.Privilege
   alias Aerospike.Protocol.Admin, as: AdminProtocol
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
-  alias Aerospike.Cluster.Tender
+  alias Aerospike.RegisterTask
+  alias Aerospike.Role
+  alias Aerospike.UDF
+  alias Aerospike.User
 
   @sindex_modern_min {8, 1, 0, 0}
 
@@ -204,8 +204,29 @@ defmodule Aerospike.Command.Admin do
           :ok | {:error, Error.t()}
   def create_role(cluster, role_name, privileges, whitelist, read_quota, write_quota, opts)
       when is_binary(role_name) and is_list(privileges) and is_list(whitelist) and
-             is_integer(read_quota) and read_quota >= 0 and is_integer(write_quota) and
-             write_quota >= 0 and is_list(opts) do
+             is_list(opts) do
+    create_role_with_valid_quota(
+      cluster,
+      role_name,
+      privileges,
+      whitelist,
+      read_quota,
+      write_quota,
+      opts
+    )
+  end
+
+  defp create_role_with_valid_quota(
+         cluster,
+         role_name,
+         privileges,
+         whitelist,
+         read_quota,
+         write_quota,
+         opts
+       )
+       when is_integer(read_quota) and read_quota >= 0 and is_integer(write_quota) and
+              write_quota >= 0 do
     case AdminProtocol.encode_create_role(
            role_name,
            privileges,
@@ -647,7 +668,7 @@ defmodule Aerospike.Command.Admin do
 
   defp index_type(opts) do
     case Keyword.fetch(opts, :type) do
-      {:ok, type} when type in [:numeric, :string] ->
+      {:ok, type} when type in [:numeric, :string, :geo2dsphere] ->
         {:ok, type}
 
       {:ok, other} ->
@@ -921,14 +942,11 @@ defmodule Aerospike.Command.Admin do
     bodies
     |> Enum.reduce_while({:ok, []}, fn body, {:ok, acc} ->
       case AdminProtocol.decode_users_block(body) do
-        {:ok, %{done?: done?, users: users}} ->
-          acc = acc ++ users
+        {:ok, %{done?: true, users: users}} ->
+          {:halt, {:ok, acc ++ users}}
 
-          if done? do
-            {:halt, {:ok, acc}}
-          else
-            {:cont, {:ok, acc}}
-          end
+        {:ok, %{done?: false, users: users}} ->
+          {:cont, {:ok, acc ++ users}}
 
         {:error, {:result_code, result_code, _raw}} ->
           {:halt, {:error, Error.from_result_code(result_code)}}
@@ -943,14 +961,11 @@ defmodule Aerospike.Command.Admin do
     bodies
     |> Enum.reduce_while({:ok, []}, fn body, {:ok, acc} ->
       case AdminProtocol.decode_roles_block(body) do
-        {:ok, %{done?: done?, roles: roles}} ->
-          acc = acc ++ roles
+        {:ok, %{done?: true, roles: roles}} ->
+          {:halt, {:ok, acc ++ roles}}
 
-          if done? do
-            {:halt, {:ok, acc}}
-          else
-            {:cont, {:ok, acc}}
-          end
+        {:ok, %{done?: false, roles: roles}} ->
+          {:cont, {:ok, acc ++ roles}}
 
         {:error, {:result_code, result_code, _raw}} ->
           {:halt, {:error, Error.from_result_code(result_code)}}

@@ -47,7 +47,7 @@ defmodule Aerospike.RetryPolicy do
     * **transport** — the command did not reach a server that answered
       cleanly: `:network_error`, `:timeout`, `:connection_error`
       (socket), `:pool_timeout`, `:invalid_node` (pool checkout), and
-      `:circuit_open` (Task 6 refusal). These are not ownership signals;
+      `:circuit_open` (circuit-breaker refusal). These are not ownership signals;
       the retry driver re-dispatches without asking for a map refresh.
 
     * **routing_refusal** — the router refused to select a replica
@@ -198,7 +198,7 @@ defmodule Aerospike.RetryPolicy do
   end
 
   @doc """
-  Classifies one command outcome into the Phase 1 retry buckets and the
+  Classifies one command outcome into retry buckets and the
   metadata the retry and pool layers consume.
   """
   @spec classify(term()) :: classification()

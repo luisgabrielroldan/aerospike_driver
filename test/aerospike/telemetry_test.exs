@@ -1,10 +1,10 @@
 defmodule Aerospike.TelemetryTest do
   use ExUnit.Case, async: false
 
-  alias Aerospike.Error
-  alias Aerospike.Telemetry
-  alias Aerospike.RuntimeMetrics
   alias Aerospike.Cluster.TableOwner
+  alias Aerospike.Error
+  alias Aerospike.RuntimeMetrics
+  alias Aerospike.Telemetry
 
   @span_events [
     {:pool_checkout_span, [:aerospike, :pool, :checkout],

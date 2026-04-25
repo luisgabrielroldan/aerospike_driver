@@ -6,8 +6,8 @@ defmodule Aerospike.Protocol.Response do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
-  alias Aerospike.Protocol.Batch
   alias Aerospike.Protocol.AsmMsg.Value
+  alias Aerospike.Protocol.Batch
   alias Aerospike.Protocol.BatchRead
   alias Aerospike.Protocol.ResultCode
   alias Aerospike.Record

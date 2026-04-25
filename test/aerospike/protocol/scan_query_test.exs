@@ -131,6 +131,30 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     refute Field.type_filter_exp() in field_types(msg)
   end
 
+  test "build_query/3 encodes geo filters without collection index type fields" do
+    filter =
+      Filter.geo_within_radius("loc", -122.0, 45.0, 5_000)
+      |> Filter.using_index("loc_geo_idx")
+
+    query = Query.new("testns", "places") |> Query.where(filter)
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 42)
+
+    wire =
+      ScanQuery.build_query(
+        query,
+        %{parts_full: [3], parts_partial: [], record_max: 4},
+        policy
+      )
+
+    msg = decode_as_msg(wire)
+    range_data = field_data(msg, Field.type_index_range())
+
+    assert field_data(msg, Field.type_index_name()) == "loc_geo_idx"
+    assert range_data == FilterCodec.encode(filter)
+    assert <<1, 0, 23, _rest::binary>> = range_data
+    refute Field.type_index_type() in field_types(msg)
+  end
+
   test "query builders include FILTER_EXP with a secondary-index predicate" do
     query =
       Query.new("testns", "users")

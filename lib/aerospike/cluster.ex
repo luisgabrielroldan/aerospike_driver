@@ -10,11 +10,11 @@ defmodule Aerospike.Cluster do
   aggregates over the published active-node view.
   """
 
-  alias Aerospike.Key
   alias Aerospike.Cluster.NodePool
   alias Aerospike.Cluster.Router
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
+  alias Aerospike.Key
   alias Aerospike.RetryPolicy
 
   @type cluster :: atom() | pid()

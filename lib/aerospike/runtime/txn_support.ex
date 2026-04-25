@@ -6,9 +6,9 @@ defmodule Aerospike.Runtime.TxnSupport do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.Response
-  alias Aerospike.Txn
   alias Aerospike.Runtime.TxnMonitor
   alias Aerospike.Runtime.TxnOps
+  alias Aerospike.Txn
 
   @spec txn_from_opts(keyword()) :: {:ok, Txn.t() | nil} | {:error, Error.t()}
   def txn_from_opts(opts) when is_list(opts) do

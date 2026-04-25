@@ -93,7 +93,7 @@ defmodule Aerospike.Command.ScanOpsTest do
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-stream"), last_frame()]})
 
     assert ["alias-stream"] =
-             apply(Aerospike, :stream!, [tender, scan, [node: "A1"]])
+             :erlang.apply(Aerospike, :stream!, [tender, scan, [node: "A1"]])
              |> Enum.map(& &1.bins["payload"])
 
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-all"), last_frame()]})
@@ -104,13 +104,13 @@ defmodule Aerospike.Command.ScanOpsTest do
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-all"), last_frame()]})
 
     assert {:ok, [%{bins: %{"payload" => "alias-all"}}]} =
-             apply(Aerospike, :all, [tender, scan, [node: "A1"]])
+             :erlang.apply(Aerospike, :all, [tender, scan, [node: "A1"]])
 
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
     assert 1 = Aerospike.scan_count!(tender, scan, node: "A1")
 
     Fake.script_stream(ctx.fake, "A1", {:ok, [frame("alias-count"), last_frame()]})
-    assert 1 = apply(Aerospike, :count!, [tender, scan, [node: "A1"]])
+    assert 1 = :erlang.apply(Aerospike, :count!, [tender, scan, [node: "A1"]])
   end
 
   test "query helpers expose a lazy outer stream and resumable collected pages", ctx do
