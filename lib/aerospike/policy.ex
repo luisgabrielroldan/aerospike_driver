@@ -220,11 +220,11 @@ defmodule Aerospike.Policy do
          }}
 
       {:timeout, _value} ->
-        invalid_argument("Aerospike.batch_get/4 expects :timeout to be a non-negative integer")
+        invalid_argument("Aerospike batch helpers expect :timeout to be a non-negative integer")
 
       {key, _value} ->
         invalid_argument(
-          "Aerospike.batch_get/4 currently supports only the :timeout option, got #{inspect(key)}"
+          "Aerospike batch helpers currently support only the :timeout option, got #{inspect(key)}"
         )
     end
   end

@@ -187,6 +187,125 @@ defmodule Aerospike.Protocol.BatchTest do
       assert BatchRead.encode_request(request, mode: :all_bins) ==
                Batch.encode_request(request, layout: :batch_index_with_set)
     end
+
+    test "encodes read-only operate entries without write flags" do
+      key = Key.new("test", "users", "k-operate-read")
+      read_op = Operation.read("name")
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{
+            index: 0,
+            key: key,
+            kind: :operate,
+            dispatch: {:read, :master, 0},
+            payload: %{operations: [read_op]}
+          }
+        ],
+        payload: nil
+      }
+
+      encoded = Batch.encode_request(request, timeout: 250)
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert msg.info1 == AsmMsg.info1_batch()
+      assert msg.timeout == 250
+      assert [%Field{type: type, data: data}] = msg.fields
+      assert type == Field.type_batch_index()
+
+      assert data ==
+               IO.iodata_to_binary([
+                 <<1::32-big, 0::8>>,
+                 mixed_row(0, key, [
+                   <<0x0A::8, AsmMsg.info1_read()::8, 0::8, 0::8, 0::32-big>>,
+                   <<2::16-big, 1::16-big>>,
+                   Field.encode(Field.namespace("test")),
+                   Field.encode(Field.set("users")),
+                   Operation.encode(read_op)
+                 ])
+               ])
+    end
+
+    test "encodes delete entries with empty payload" do
+      key = Key.new("test", "users", "k-delete")
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{index: 0, key: key, kind: :delete, dispatch: :write, payload: nil}
+        ],
+        payload: nil
+      }
+
+      encoded = Batch.encode_request(request, timeout: 250)
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert msg.info1 == AsmMsg.info1_batch()
+      assert msg.timeout == 250
+      assert [%Field{type: type, data: data}] = msg.fields
+      assert type == Field.type_batch_index()
+
+      assert data ==
+               IO.iodata_to_binary([
+                 <<1::32-big, 0::8>>,
+                 mixed_row(0, key, [
+                   <<0x0E::8, 0::8,
+                     bor(
+                       AsmMsg.info2_write(),
+                       bor(AsmMsg.info2_delete(), AsmMsg.info2_respond_all_ops())
+                     )::8, 0::8, 0::16-big, 0::32-big>>,
+                   <<2::16-big, 0::16-big>>,
+                   Field.encode(Field.namespace("test")),
+                   Field.encode(Field.set("users"))
+                 ])
+               ])
+    end
+
+    test "encodes udf entries with package function and packed arguments" do
+      key = Key.new("test", "users", "k-udf")
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{
+            index: 0,
+            key: key,
+            kind: :udf,
+            dispatch: :write,
+            payload: %{package: "demo", function: "echo", args: ["x", 1]}
+          }
+        ],
+        payload: nil
+      }
+
+      encoded = Batch.encode_request(request, timeout: 250)
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert msg.info1 == AsmMsg.info1_batch()
+      assert msg.timeout == 250
+      assert [%Field{type: type, data: data}] = msg.fields
+      assert type == Field.type_batch_index()
+
+      assert data ==
+               IO.iodata_to_binary([
+                 <<1::32-big, 0::8>>,
+                 mixed_row(0, key, [
+                   <<0x0E::8, 0::8, AsmMsg.info2_write()::8, 0::8, 0::16-big, 0::32-big>>,
+                   <<5::16-big, 0::16-big>>,
+                   Field.encode(Field.namespace("test")),
+                   Field.encode(Field.set("users")),
+                   Field.encode(Field.udf_package_name("demo")),
+                   Field.encode(Field.udf_function("echo")),
+                   Field.encode(
+                     Field.udf_arglist(MessagePack.pack!([{:particle_string, "x"}, 1]))
+                   )
+                 ])
+               ])
+    end
   end
 
   describe "parse_response/2" do
@@ -358,6 +477,31 @@ defmodule Aerospike.Protocol.BatchTest do
 
       assert {:ok, %Batch.Reply{results: [%BatchCommand.Result{index: 1, key: ^key_b}]}} =
                Batch.parse_response(body, request)
+    end
+
+    test "parses udf error rows as per-entry failures" do
+      key = Key.new("test", "users", "k-udf")
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{index: 0, key: key, kind: :udf, dispatch: :write, payload: nil}
+        ],
+        payload: nil
+      }
+
+      body = IO.iodata_to_binary([batch_row(0, 100, 0, 0, []), last_row()])
+
+      assert {:ok, %Batch.Reply{results: [result]}} = Response.parse_batch_response(body, request)
+
+      assert %BatchCommand.Result{
+               index: 0,
+               key: ^key,
+               kind: :udf,
+               status: :error,
+               record: nil,
+               error: %Error{code: :udf_bad_response}
+             } = result
     end
 
     test "accepts successful put and delete replies that include echoed operations" do

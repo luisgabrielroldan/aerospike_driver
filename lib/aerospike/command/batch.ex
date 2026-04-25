@@ -1,6 +1,7 @@
 defmodule Aerospike.Command.Batch do
   @moduledoc false
 
+  alias Aerospike.BatchResult
   alias Aerospike.Cluster
   alias Aerospike.Cluster.Tender
   alias Aerospike.Command.BatchCommand
@@ -20,6 +21,12 @@ defmodule Aerospike.Command.Batch do
   @default_max_concurrency max(System.schedulers_online(), 1)
 
   @type result :: {:ok, [Result.t()]} | {:error, Error.t()} | {:error, :cluster_not_ready}
+
+  @doc false
+  @spec to_public_results([Result.t()]) :: [BatchResult.t()]
+  def to_public_results(results) when is_list(results) do
+    Enum.map(results, &BatchResult.from_command_result/1)
+  end
 
   @spec execute(GenServer.server(), [Entry.t()], keyword()) :: result()
   def execute(tender, entries, opts \\ [])
@@ -178,6 +185,10 @@ defmodule Aerospike.Command.Batch do
       error: reason,
       in_doubt: false
     }
+  end
+
+  defp error_result(%Entry{} = entry, reason) when is_atom(reason) do
+    error_result(entry, {:error, reason})
   end
 
   defp missing_result(%Entry{} = entry) do

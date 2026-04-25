@@ -9,6 +9,7 @@ defmodule Aerospike.Command.BatchGetTest do
   alias Aerospike.Command.BatchGet
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Op
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Test.ReplicasFixture
@@ -131,7 +132,7 @@ defmodule Aerospike.Command.BatchGetTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Aerospike.batch_get(:unused_tender, [key], :all, max_retries: 1)
 
-      assert message =~ "supports only the :timeout option"
+      assert message =~ "currently support only the :timeout option"
     end
 
     test "rejects invalid tuple keys at the public boundary" do
@@ -155,6 +156,105 @@ defmodule Aerospike.Command.BatchGetTest do
                BatchGet.execute(:unused_tender, [key], :bins, [])
 
       assert message =~ "supports only :all bins in the spike"
+    end
+  end
+
+  describe "batch_get_operate/4" do
+    test "returns an empty result for an empty key list when ops and opts are valid" do
+      assert {:ok, []} = Aerospike.batch_get_operate(:unused_tender, [], [Op.get("name")])
+    end
+
+    test "rejects empty operation lists" do
+      key = Key.new("test", "batch", "k1")
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Aerospike.batch_get_operate(:unused_tender, [key], [])
+
+      assert message =~ "expects a non-empty operation list"
+    end
+
+    test "rejects write operation lists" do
+      key = Key.new("test", "batch", "k1")
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Aerospike.batch_get_operate(:unused_tender, [key], [Op.put("name", "Ada")])
+
+      assert message =~ "accepts only read-only operations"
+    end
+
+    test "rejects unsupported batch opts instead of silently dropping them" do
+      key = Key.new("test", "batch", "k1")
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Aerospike.batch_get_operate(:unused_tender, [key], [Op.get("name")],
+                 max_retries: 1
+               )
+
+      assert message =~ "currently support only the :timeout option"
+    end
+
+    test "rejects invalid tuple keys at the public boundary" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Aerospike.batch_get_operate(:unused_tender, [{"test", :batch, "k1"}], [
+                 Op.get("name")
+               ])
+
+      assert message =~ "set must be a string"
+    end
+
+    test "returns per-key records and errors in caller order across multiple nodes", ctx do
+      script_two_node_cluster(ctx.fake)
+      {:ok, tender} = start_tender(ctx)
+      :ok = Tender.tend_now(tender)
+
+      key_a = key_for_partition("test", "batch", 100, "a")
+      key_b = key_for_partition("test", "batch", 101, "b")
+      key_c = key_for_partition("test", "batch", 100, "c")
+      key_d = key_for_partition("test", "batch", 101, "d")
+      key_b_tuple = {key_b.namespace, key_b.set, key_b.user_key}
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "A1",
+        {:ok,
+         IO.iodata_to_binary([
+           batch_row(0, 0, 3, 120, [
+             %Operation{op_type: 1, particle_type: 3, bin_name: "name", data: "Ada"}
+           ]),
+           batch_row(2, 2, 0, 0, []),
+           last_row()
+         ])}
+      )
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "B1",
+        {:ok,
+         IO.iodata_to_binary([
+           batch_row(1, 0, 5, 240, [
+             %Operation{
+               op_type: 1,
+               particle_type: 1,
+               bin_name: "count",
+               data: <<7::64-signed-big>>
+             }
+           ]),
+           batch_row(3, 4, 0, 0, []),
+           last_row()
+         ])}
+      )
+
+      assert {:ok, [first, second, third, fourth]} =
+               Aerospike.batch_get_operate(
+                 tender,
+                 [key_a, key_b_tuple, key_c, key_d],
+                 [Op.get("name")]
+               )
+
+      assert {:ok, %{key: ^key_a, bins: %{"name" => "Ada"}, generation: 3, ttl: 120}} = first
+      assert {:ok, %{key: ^key_b, bins: %{"count" => 7}, generation: 5, ttl: 240}} = second
+      assert {:error, %Error{code: :key_not_found}} = third
+      assert {:error, %Error{code: :parameter_error}} = fourth
     end
   end
 

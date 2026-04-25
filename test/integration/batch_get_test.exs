@@ -8,6 +8,7 @@ defmodule Aerospike.Integration.BatchGetTest do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Op
   alias Aerospike.Record
   alias Aerospike.Test.IntegrationSupport
 
@@ -108,6 +109,34 @@ defmodule Aerospike.Integration.BatchGetTest do
     assert {:ok, %Record{key: ^key_c, bins: %{}, generation: generation_c, ttl: ttl_c}} = fourth
     assert generation_c >= 1
     assert ttl_c >= 0
+  end
+
+  test "batch_get_operate returns read-only operation records across multiple live cluster nodes",
+       %{
+         cluster: cluster
+       } do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = IntegrationSupport.unique_name("spike_batch_operate")
+    [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
+    missing_key = key_for_node(cluster, set, node_a, "missing")
+
+    assert {:ok, _} = Aerospike.put(cluster, key_a, %{"node" => node_a, "value" => 11})
+    assert {:ok, _} = Aerospike.put(cluster, key_b, %{"node" => node_b, "value" => 22})
+    assert {:ok, _} = Aerospike.put(cluster, key_c, %{"node" => node_c, "value" => 33})
+
+    assert {:ok, [first, second, third, fourth]} =
+             Aerospike.batch_get_operate(
+               cluster,
+               [key_b, missing_key, key_a, key_c],
+               [Op.get("node"), Op.get("value")],
+               timeout: 5_000
+             )
+
+    assert {:ok, %Record{key: ^key_b, bins: %{"node" => ^node_b, "value" => 22}}} = first
+    assert {:error, %Error{code: :key_not_found}} = second
+    assert {:ok, %Record{key: ^key_a, bins: %{"node" => ^node_a, "value" => 11}}} = third
+    assert {:ok, %Record{key: ^key_c, bins: %{"node" => ^node_c, "value" => 33}}} = fourth
   end
 
   test "batch_exists returns booleans in caller order across multiple live cluster nodes", %{

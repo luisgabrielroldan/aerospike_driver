@@ -5,6 +5,7 @@ defmodule Aerospike.Integration.BatchTest do
   @moduletag :cluster
   @moduletag capture_log: true
 
+  alias Aerospike.Batch, as: BatchEntry
   alias Aerospike.Cluster.Router
   alias Aerospike.Cluster.Tender
   alias Aerospike.Command.Batch
@@ -144,6 +145,108 @@ defmodule Aerospike.Integration.BatchTest do
     assert {:ok, %Record{bins: %{"count" => 3}}} = Aerospike.get(cluster, key_operate)
     assert {:ok, false} = Aerospike.exists(cluster, key_delete)
     assert {:ok, true} = Aerospike.exists(cluster, key_put)
+  end
+
+  test "batch_delete removes existing records and preserves missing-key errors", %{
+    cluster: cluster
+  } do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = IntegrationSupport.unique_name("spike_batch_delete")
+
+    [{_node_a, key_a}, {_node_b, key_b}] = keys_for_distinct_nodes(cluster, set, 2)
+    missing_key = Key.new(@namespace, set, "missing")
+
+    assert {:ok, _} = Aerospike.put(cluster, key_a, %{"delete" => "a"})
+    assert {:ok, _} = Aerospike.put(cluster, key_b, %{"delete" => "b"})
+
+    assert {:ok, [first, second, third]} =
+             Aerospike.batch_delete(cluster, [key_b, missing_key, key_a], timeout: 10_000)
+
+    assert %{key: ^key_b, status: :ok, record: nil, error: nil, in_doubt: false} = first
+
+    assert %{key: ^missing_key, status: :error, record: nil, in_doubt: false} = second
+    assert %Error{code: :key_not_found} = second.error
+
+    assert %{key: ^key_a, status: :ok, record: nil, error: nil, in_doubt: false} = third
+
+    assert {:ok, [{:ok, false}, {:ok, false}]} =
+             Aerospike.batch_exists(cluster, [key_a, key_b], timeout: 10_000)
+  end
+
+  test "batch_udf preserves per-entry server errors", %{cluster: cluster} do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = IntegrationSupport.unique_name("spike_batch_udf")
+
+    [{_node_a, key_a}, {_node_b, key_b}] = keys_for_distinct_nodes(cluster, set, 2)
+
+    assert {:ok, _} = Aerospike.put(cluster, key_a, %{"n" => 1})
+    assert {:ok, _} = Aerospike.put(cluster, key_b, %{"n" => 2})
+
+    assert {:ok, [first, second]} =
+             Aerospike.batch_udf(cluster, [key_b, key_a], "missing_pkg", "missing_fn", [],
+               timeout: 10_000
+             )
+
+    assert %{key: ^key_b, status: :error, record: nil, in_doubt: false} = first
+    assert %Error{code: :udf_bad_response} = first.error
+
+    assert %{key: ^key_a, status: :error, record: nil, in_doubt: false} = second
+    assert %Error{code: :udf_bad_response} = second.error
+  end
+
+  test "batch_operate mixes public entries and preserves caller order", %{cluster: cluster} do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = IntegrationSupport.unique_name("spike_batch_public_mixed")
+
+    [{_node_a, key_read}, {_node_b, key_put}, {_node_c, key_operate}] =
+      keys_for_distinct_nodes(cluster, set, 3)
+
+    key_delete = Key.new(@namespace, set, "delete")
+
+    assert {:ok, _} = Aerospike.put(cluster, key_read, %{"name" => "Ada"})
+    assert {:ok, _} = Aerospike.put(cluster, key_delete, %{"gone" => true})
+    assert {:ok, _} = Aerospike.put(cluster, key_operate, %{"count" => 1})
+
+    {:ok, add_op} = Operation.add("count", 2)
+    read_op = Operation.read("count")
+
+    assert {:ok, [read, put, delete, operate]} =
+             Aerospike.batch_operate(
+               cluster,
+               [
+                 BatchEntry.read(key_read),
+                 BatchEntry.put({key_put.namespace, key_put.set, key_put.user_key}, %{
+                   created: true
+                 }),
+                 BatchEntry.delete(key_delete),
+                 BatchEntry.operate(key_operate, [add_op, read_op])
+               ],
+               timeout: 10_000
+             )
+
+    assert %{key: ^key_read, status: :ok, record: %Record{bins: %{"name" => "Ada"}}} = read
+    assert %{key: ^key_put, status: :ok, record: nil, error: nil} = put
+    assert %{key: ^key_delete, status: :ok, record: nil, error: nil} = delete
+    assert %{key: ^key_operate, status: :ok, record: %Record{bins: %{"count" => 3}}} = operate
+
+    assert {:ok, %Record{bins: %{"created" => true}}} = Aerospike.get(cluster, key_put)
+    assert {:ok, false} = Aerospike.exists(cluster, key_delete)
+
+    key_udf = Key.new(@namespace, set, "udf")
+    assert {:ok, _} = Aerospike.put(cluster, key_udf, %{"n" => 1})
+
+    assert {:ok, [udf]} =
+             Aerospike.batch_operate(
+               cluster,
+               [BatchEntry.udf(key_udf, "missing_pkg", "missing_fn", [])],
+               timeout: 10_000
+             )
+
+    assert %{key: ^key_udf, status: :error, record: nil, in_doubt: false} = udf
+    assert %Error{code: :udf_bad_response} = udf.error
   end
 
   defp keys_for_distinct_nodes(cluster, set, count) when is_integer(count) and count > 0 do

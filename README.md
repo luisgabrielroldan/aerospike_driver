@@ -19,7 +19,9 @@ The library currently proves these command families through the public
 - Unary operate: `operate/4` with the currently admitted write/read subset plus
   `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, `Aerospike.Op.Exp`,
   `Aerospike.Op.Bit`, `Aerospike.Op.HLL`, and `Aerospike.Ctx`
-- Batch reads: `batch_get/4`
+- Batch helpers: `batch_get/4`, `batch_get_header/3`, `batch_exists/3`,
+  `batch_get_operate/4`, `batch_delete/3`, `batch_udf/6`, and
+  heterogeneous `batch_operate/3` entries built with `Aerospike.Batch`
 - Root helpers: `start_link/1`, `child_spec/1`, `close/2`, `key/3`,
   `key_digest/3`
 - Scans: `scan_stream/3`, `scan_stream!/3`, `scan_all/3`, `scan_all!/3`,
@@ -77,6 +79,61 @@ Required startup options are `:name`, `:transport`, `:hosts`, and
 are validated synchronously by `Aerospike.start_link/1` before the cluster
 runtime boots. Use `Aerospike.Cluster.ready?/1` to observe when the published
 cluster view is ready to route commands.
+
+## Batch APIs
+
+Batch helpers keep result order aligned with the caller's input order. Read
+helpers return explicit per-key tuples, so a missing key is an error tuple
+rather than `nil`:
+
+```elixir
+keys = [
+  Aerospike.key("test", "demo", "one"),
+  Aerospike.key("test", "demo", "missing")
+]
+
+{:ok, results} = Aerospike.batch_get(:aerospike, keys)
+# [
+#   {:ok, %Aerospike.Record{}},
+#   {:error, %Aerospike.Error{result_code: :key_not_found}}
+# ]
+
+ops = [Aerospike.Op.get("count")]
+{:ok, results} = Aerospike.batch_get_operate(:aerospike, keys, ops)
+```
+
+Helpers that can perform writes or record UDFs return
+`%Aerospike.BatchResult{}` entries. Each result includes the target key,
+`:ok` or `:error` status, any returned record payload, the error reason, and
+whether a write outcome is in doubt:
+
+```elixir
+{:ok, delete_results} = Aerospike.batch_delete(:aerospike, keys)
+
+{:ok, udf_results} =
+  Aerospike.batch_udf(:aerospike, keys, "records", "mark_seen", [])
+```
+
+For curated heterogeneous work, build entries with `Aerospike.Batch` and pass
+them to `batch_operate/3`:
+
+```elixir
+entries = [
+  Aerospike.Batch.read(Aerospike.key("test", "demo", "one")),
+  Aerospike.Batch.put(Aerospike.key("test", "demo", "two"), %{"count" => 2}),
+  Aerospike.Batch.operate(
+    Aerospike.key("test", "demo", "three"),
+    [Aerospike.Op.put("count", 3)]
+  ),
+  Aerospike.Batch.delete(Aerospike.key("test", "demo", "old"))
+]
+
+{:ok, results} = Aerospike.batch_operate(:aerospike, entries)
+```
+
+The current public batch option surface is intentionally narrow. Batch helpers
+accept only the batch-level `:timeout` option; per-entry write policies and
+public batch retry options are not exposed.
 
 ## Advanced Operate And Geo
 
@@ -211,7 +268,11 @@ Reviewers should record the resolved image ids when they run the final gate.
 
 This library is not yet claiming full Aerospike feature parity.
 
-- `batch_get/4` supports only `bins: :all` and `:timeout`
+- Batch helpers accept only the batch-level `:timeout` option.
+  `batch_get/4` supports only `bins: :all`.
+  `batch_get_operate/4` accepts read-only operation lists.
+  `batch_operate/3` accepts entries built with `Aerospike.Batch` and does not
+  expose per-entry write policies.
 - `operate/4` supports the currently admitted tuple, CDT, bit, HyperLogLog,
   and expression operation surface, not the full historical operate breadth
 - scan and query paths support `Scan.filter/2` and `Query.filter/2`

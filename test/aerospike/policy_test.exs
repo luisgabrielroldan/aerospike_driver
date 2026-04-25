@@ -126,7 +126,7 @@ defmodule Aerospike.PolicyTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Policy.batch_read(RetryPolicy.defaults(), max_retries: 1)
 
-      assert message =~ "supports only the :timeout option"
+      assert message =~ "support only the :timeout option"
     end
 
     test "does not accept expression filters before batch wire support exists" do
@@ -135,7 +135,7 @@ defmodule Aerospike.PolicyTest do
                  filter: Exp.eq(Exp.int_bin("a"), Exp.val(1))
                )
 
-      assert message =~ "supports only the :timeout option"
+      assert message =~ "support only the :timeout option"
     end
   end
 
@@ -154,7 +154,7 @@ defmodule Aerospike.PolicyTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Policy.batch(RetryPolicy.defaults(), ttl: 10)
 
-      assert message =~ "supports only the :timeout option"
+      assert message =~ "support only the :timeout option"
     end
   end
 

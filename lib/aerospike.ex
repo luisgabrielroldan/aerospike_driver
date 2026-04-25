@@ -48,8 +48,12 @@ defmodule Aerospike do
       usable as expression-backed secondary-index sources
     * `create_expression_index/5` creates expression-backed secondary indexes
       on servers that support them and returns a pollable index task
-    * `batch_get/4`, `batch_get_header/3`, and `batch_exists/3` read
+    * `batch_get/4`, `batch_get_header/3`, `batch_exists/3`,
+      `batch_get_operate/4`, `batch_delete/3`, and `batch_udf/6` operate on
       multiple keys and return per-key results in caller order
+    * `Aerospike.Batch` and `batch_operate/3` expose a curated heterogeneous
+      batch surface for mixing reads, writes, deletes, operations, and record
+      UDF calls while returning one `%Aerospike.BatchResult{}` per input
     * `child_spec/1`, `close/2`, `key/3`, and `key_digest/3` round out
       the root lifecycle and key-construction boundary
     * `info/3`, `nodes/1`, and `node_names/1` expose one-node operator
@@ -95,9 +99,8 @@ defmodule Aerospike do
   yielding that node's records downstream, so it does not promise
   frame-by-frame cross-node backpressure or cancellation coordination.
 
-  Broader batch semantics, additional expression-builder families, and the
-  wider policy surface remain out of scope until supported command paths prove
-  them.
+  Additional expression-builder families and the wider policy surface remain
+  out of scope until supported command paths prove them.
 
   Caller-facing policy validation and default materialization now lives
   under `Aerospike.Policy`. Public command functions still accept
@@ -105,11 +108,16 @@ defmodule Aerospike do
   policy families ad hoc.
   """
 
+  alias Aerospike.Batch
   alias Aerospike.Cluster
   alias Aerospike.Cluster.Supervisor, as: ClusterSupervisor
   alias Aerospike.Command.Admin
   alias Aerospike.Command.ApplyUdf
+  alias Aerospike.Command.Batch, as: MixedBatch
+  alias Aerospike.Command.BatchCommand.Entry
+  alias Aerospike.Command.BatchDelete
   alias Aerospike.Command.BatchGet
+  alias Aerospike.Command.BatchUdf
   alias Aerospike.Command.Delete
   alias Aerospike.Command.Exists
   alias Aerospike.Command.Get
@@ -126,6 +134,8 @@ defmodule Aerospike do
   alias Aerospike.Page
   alias Aerospike.Policy
   alias Aerospike.Privilege
+  alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Query
   alias Aerospike.RegisterTask
   alias Aerospike.Role
@@ -452,6 +462,125 @@ defmodule Aerospike do
   def batch_exists(cluster, keys, opts) when is_list(keys) and is_list(opts) do
     with {:ok, keys} <- coerce_keys(keys) do
       BatchGet.execute(cluster, keys, :exists, opts)
+    end
+  end
+
+  @doc """
+  Runs one read-only operation list for multiple `keys` from `cluster`.
+
+  The result list stays in the same order as `keys`. Each list item is
+  either `{:ok, %Aerospike.Record{}}` for a hit or an indexed error for
+  that key (`{:error, %Aerospike.Error{}}`, `{:error, :no_master}`, or
+  `{:error, :unknown_node}`). Missing keys remain explicit per-key
+  errors; this helper does not collapse misses to `nil`.
+
+  This helper keeps the same narrow batch policy surface as `batch_get/4`:
+  only `:timeout` is currently accepted in `opts`.
+
+  Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
+  """
+  @spec batch_get_operate(cluster(), [Key.key_input()], [Aerospike.Op.t()], keyword()) ::
+          {:ok,
+           [
+             {:ok, Aerospike.Record.t()}
+             | {:error, Aerospike.Error.t()}
+             | {:error, :no_master | :unknown_node}
+           ]}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready}
+  def batch_get_operate(cluster, keys, operations, opts \\ [])
+
+  def batch_get_operate(cluster, keys, operations, opts)
+      when is_list(keys) and is_list(operations) and is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys) do
+      BatchGet.execute_operate(cluster, keys, operations, opts)
+    end
+  end
+
+  @doc """
+  Deletes multiple `keys` from `cluster`.
+
+  The result list stays in the same order as `keys`. Each list item is a
+  `%Aerospike.BatchResult{}` with `status: :ok` for a deleted record or
+  `status: :error` for a per-key failure such as a missing key, routing
+  failure, or node transport error. Missing keys remain explicit error
+  results with the server result code; this helper does not collapse them to
+  booleans.
+
+  This helper keeps the same narrow batch policy surface as `batch_get/4`:
+  only `:timeout` is currently accepted in `opts`.
+
+  Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
+  """
+  @spec batch_delete(cluster(), [Key.key_input()], keyword()) ::
+          {:ok, [Aerospike.BatchResult.t()]}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready}
+  def batch_delete(cluster, keys, opts \\ [])
+
+  def batch_delete(cluster, keys, opts) when is_list(keys) and is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys) do
+      BatchDelete.execute(cluster, keys, opts)
+    end
+  end
+
+  @doc """
+  Executes one record UDF for multiple `keys` from `cluster`.
+
+  The result list stays in the same order as `keys`. Each list item is a
+  `%Aerospike.BatchResult{}` with `status: :ok` for a successful UDF row or
+  `status: :error` for a per-key failure such as a missing key, missing UDF,
+  routing failure, or node transport error. Successful UDF rows may include a
+  returned `%Aerospike.Record{}` when the server sends return bins.
+
+  This helper keeps the same narrow batch policy surface as `batch_get/4`:
+  only `:timeout` is currently accepted in `opts`.
+
+  Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
+  """
+  @spec batch_udf(cluster(), [Key.key_input()], String.t(), String.t(), list(), keyword()) ::
+          {:ok, [Aerospike.BatchResult.t()]}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready}
+  def batch_udf(cluster, keys, package, function, args, opts \\ [])
+
+  def batch_udf(cluster, keys, package, function, args, opts)
+      when is_list(keys) and is_binary(package) and is_binary(function) and is_list(args) and
+             is_list(opts) do
+    with {:ok, keys} <- coerce_keys(keys) do
+      BatchUdf.execute(cluster, keys, package, function, args, opts)
+    end
+  end
+
+  @doc """
+  Executes heterogeneous batch entries built with `Aerospike.Batch`.
+
+  The result list stays in the same order as the input entries. Each list item
+  is a `%Aerospike.BatchResult{}` with `status: :ok` for a successful row or
+  `status: :error` for a per-key failure such as a missing key, routing
+  failure, server error, or node transport error.
+
+  The current batch policy surface is intentionally narrow: only `:timeout` is
+  accepted in `opts`. Per-entry write policies are not exposed.
+  """
+  @spec batch_operate(cluster(), [Batch.t()], keyword()) ::
+          {:ok, [Aerospike.BatchResult.t()]}
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready}
+  def batch_operate(cluster, entries, opts \\ [])
+
+  def batch_operate(_cluster, [], opts) when is_list(opts) do
+    with {:ok, _policy} <- Policy.batch(opts) do
+      {:ok, []}
+    end
+  end
+
+  def batch_operate(cluster, entries, opts) when is_list(entries) and is_list(opts) do
+    with {:ok, _validated} <- Policy.batch(opts),
+         {:ok, policy} <- batch_policy(cluster, opts),
+         {:ok, command_entries} <- batch_command_entries(entries, policy),
+         {:ok, results} <- MixedBatch.execute(cluster, command_entries, opts) do
+      {:ok, MixedBatch.to_public_results(results)}
     end
   end
 
@@ -1536,6 +1665,156 @@ defmodule Aerospike do
     err in ArgumentError ->
       {:error, Error.from_result_code(:invalid_argument, message: err.message)}
   end
+
+  defp batch_policy(cluster, opts) do
+    cluster
+    |> Cluster.retry_policy()
+    |> Policy.batch(opts)
+  end
+
+  defp batch_command_entries(entries, %Policy.Batch{} = policy) do
+    entries
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, &put_batch_command_entry(&1, &2, policy))
+    |> case do
+      {:ok, command_entries} -> {:ok, Enum.reverse(command_entries)}
+      {:error, %Error{}} = err -> err
+    end
+  end
+
+  defp put_batch_command_entry({entry, index}, {:ok, acc}, %Policy.Batch{} = policy) do
+    case batch_command_entry(entry, index, policy) do
+      {:ok, %Entry{} = command_entry} -> {:cont, {:ok, [command_entry | acc]}}
+      {:error, %Error{}} = err -> {:halt, err}
+    end
+  end
+
+  defp batch_command_entry(%Batch.Read{key: %Key{} = key}, index, %Policy.Batch{} = policy) do
+    {:ok,
+     %Entry{
+       index: index,
+       key: key,
+       kind: :read,
+       dispatch: {:read, policy.retry.replica_policy, 0},
+       payload: nil
+     }}
+  end
+
+  defp batch_command_entry(%Batch.Put{key: %Key{} = key, bins: bins}, index, %Policy.Batch{})
+       when is_map(bins) do
+    with {:ok, operations} <- batch_put_operations(bins) do
+      {:ok,
+       %Entry{
+         index: index,
+         key: key,
+         kind: :put,
+         dispatch: :write,
+         payload: %{operations: operations}
+       }}
+    end
+  end
+
+  defp batch_command_entry(%Batch.Delete{key: %Key{} = key}, index, %Policy.Batch{}) do
+    {:ok,
+     %Entry{
+       index: index,
+       key: key,
+       kind: :delete,
+       dispatch: :write,
+       payload: nil
+     }}
+  end
+
+  defp batch_command_entry(
+         %Batch.Operate{key: %Key{} = key, operations: operations},
+         index,
+         %Policy.Batch{} = policy
+       )
+       when is_list(operations) do
+    with :ok <- validate_batch_operations(operations) do
+      flags = OperateFlags.scan_ops(operations)
+
+      {:ok,
+       %Entry{
+         index: index,
+         key: key,
+         kind: :operate,
+         dispatch: batch_operate_dispatch(flags, policy),
+         payload: %{operations: operations, flags: flags}
+       }}
+    end
+  end
+
+  defp batch_command_entry(
+         %Batch.UDF{key: %Key{} = key, package: package, function: function, args: args},
+         index,
+         %Policy.Batch{}
+       )
+       when is_binary(package) and is_binary(function) and is_list(args) do
+    {:ok,
+     %Entry{
+       index: index,
+       key: key,
+       kind: :udf,
+       dispatch: :write,
+       payload: %{package: package, function: function, args: args}
+     }}
+  end
+
+  defp batch_command_entry(_entry, _index, %Policy.Batch{}) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "Aerospike.batch_operate/3 expects entries built by Aerospike.Batch"
+     )}
+  end
+
+  defp batch_operate_dispatch(%{has_write?: true}, %Policy.Batch{}), do: :write
+
+  defp batch_operate_dispatch(%{has_write?: false}, %Policy.Batch{} = policy) do
+    {:read, policy.retry.replica_policy, 0}
+  end
+
+  defp batch_put_operations(bins) when map_size(bins) == 0 do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "batch put requires at least one bin write"
+     )}
+  end
+
+  defp batch_put_operations(bins) do
+    bins
+    |> Enum.reduce_while({:ok, []}, fn {bin_name, value}, {:ok, acc} ->
+      case Operation.write(normalize_batch_bin_name(bin_name), value) do
+        {:ok, operation} -> {:cont, {:ok, [operation | acc]}}
+        {:error, %Error{}} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, operations} -> {:ok, Enum.reverse(operations)}
+      {:error, %Error{}} = err -> err
+    end
+  end
+
+  defp validate_batch_operations([]) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "batch operate requires at least one operation"
+     )}
+  end
+
+  defp validate_batch_operations(operations) do
+    if Enum.all?(operations, &match?(%Operation{}, &1)) do
+      :ok
+    else
+      {:error,
+       Error.from_result_code(:invalid_argument,
+         message: "batch operate expects a list of Aerospike.Op operations"
+       )}
+    end
+  end
+
+  defp normalize_batch_bin_name(bin_name) when is_atom(bin_name), do: Atom.to_string(bin_name)
+  defp normalize_batch_bin_name(bin_name), do: bin_name
 
   defp validate_truncate_opts(opts, callsite) when is_list(opts) do
     with :ok <- validate_truncate_opt_keys(opts, callsite),

@@ -1,12 +1,14 @@
 defmodule Aerospike.Command.BatchCommandTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.BatchResult
   alias Aerospike.Command.BatchCommand
   alias Aerospike.Command.BatchCommand.Entry
   alias Aerospike.Command.BatchCommand.NodeRequest
   alias Aerospike.Command.BatchCommand.Result
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Record
 
   describe "Result" do
     test "captures stable per-entry outcome metadata for mixed batches" do
@@ -29,6 +31,118 @@ defmodule Aerospike.Command.BatchCommandTest do
                error: :unknown_node,
                in_doubt: true
              }
+    end
+  end
+
+  describe "BatchResult.from_command_result/1" do
+    test "preserves successful records" do
+      key = Key.new("test", "users", "user-1")
+      record = %Record{key: key, bins: %{"name" => "Ada"}, generation: 4, ttl: 120}
+
+      result =
+        BatchResult.from_command_result(%Result{
+          index: 0,
+          key: key,
+          kind: :read,
+          status: :ok,
+          record: record,
+          error: nil,
+          in_doubt: false
+        })
+
+      assert %BatchResult{
+               key: ^key,
+               status: :ok,
+               record: ^record,
+               error: nil,
+               in_doubt: false
+             } = result
+    end
+
+    test "preserves successful write-like outcomes without records" do
+      key = Key.new("test", "users", "user-1")
+
+      result =
+        BatchResult.from_command_result(%Result{
+          index: 0,
+          key: key,
+          kind: :delete,
+          status: :ok,
+          record: nil,
+          error: nil,
+          in_doubt: false
+        })
+
+      assert %BatchResult{
+               key: ^key,
+               status: :ok,
+               record: nil,
+               error: nil,
+               in_doubt: false
+             } = result
+    end
+
+    test "preserves server errors" do
+      key = Key.new("test", "users", "missing")
+      error = Error.from_result_code(:key_not_found)
+
+      result =
+        BatchResult.from_command_result(%Result{
+          index: 0,
+          key: key,
+          kind: :read,
+          status: :error,
+          record: nil,
+          error: error,
+          in_doubt: false
+        })
+
+      assert %BatchResult{
+               key: ^key,
+               status: :error,
+               record: nil,
+               error: ^error,
+               in_doubt: false
+             } = result
+    end
+
+    test "preserves routing failures, transport errors, parse omissions, and in-doubt metadata" do
+      key = Key.new("test", "users", "user-1")
+      routing_failure = :no_master
+      transport_error = Error.from_result_code(:network_error, message: "socket closed")
+
+      parse_error =
+        Error.from_result_code(:parse_error,
+          message: "batch reply omitted requested index 1"
+        )
+
+      in_doubt_error = Error.from_result_code(:timeout, in_doubt: true)
+
+      for {kind, error, in_doubt} <- [
+            {:read, routing_failure, false},
+            {:read, transport_error, false},
+            {:read, parse_error, false},
+            {:delete, in_doubt_error, true}
+          ] do
+        result =
+          BatchResult.from_command_result(%Result{
+            index: 1,
+            key: key,
+            kind: kind,
+            status: :error,
+            record: nil,
+            error: error,
+            in_doubt: in_doubt
+          })
+
+        assert %BatchResult{
+                 key: ^key,
+                 status: :error,
+                 record: nil,
+                 error: ^error,
+                 in_doubt: ^in_doubt
+               } = result
+      end
     end
   end
 
