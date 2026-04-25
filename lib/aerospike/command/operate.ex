@@ -49,6 +49,7 @@ defmodule Aerospike.Command.Operate do
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:ttl, non_neg_integer()}
           | {:generation, non_neg_integer()}
+          | {:filter, Aerospike.Exp.t() | nil}
 
   @type result ::
           {:ok, Aerospike.Record.t()}
@@ -89,7 +90,8 @@ defmodule Aerospike.Command.Operate do
       operations: built_operations,
       flags: flags,
       ttl: policy.ttl,
-      generation: policy.generation
+      generation: policy.generation,
+      filter: policy.filter
     }
   end
 
@@ -214,7 +216,8 @@ defmodule Aerospike.Command.Operate do
            respond_all?: respond_all?
          },
          ttl: ttl,
-         generation: generation
+         generation: generation,
+         filter: filter
        }) do
     key
     |> AsmMsg.key_command(operations,
@@ -226,6 +229,7 @@ defmodule Aerospike.Command.Operate do
       ttl: ttl,
       generation: generation
     )
+    |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, has_write?)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()

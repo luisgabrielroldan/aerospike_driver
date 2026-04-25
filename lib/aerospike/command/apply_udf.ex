@@ -25,6 +25,7 @@ defmodule Aerospike.Command.ApplyUdf do
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:ttl, non_neg_integer()}
           | {:generation, non_neg_integer()}
+          | {:filter, Aerospike.Exp.t() | nil}
 
   @type result ::
           {:ok, term()}
@@ -76,7 +77,8 @@ defmodule Aerospike.Command.ApplyUdf do
       txn: txn,
       ttl: policy.ttl,
       generation: policy.generation,
-      timeout: policy.timeout
+      timeout: policy.timeout,
+      filter: policy.filter
     }
   end
 
@@ -96,7 +98,8 @@ defmodule Aerospike.Command.ApplyUdf do
          opts: opts,
          ttl: ttl,
          generation: generation,
-         timeout: timeout
+         timeout: timeout,
+         filter: filter
        }) do
     %AsmMsg{
       info2: AsmMsg.info2_write(),
@@ -112,6 +115,7 @@ defmodule Aerospike.Command.ApplyUdf do
             Field.udf_op(1)
           ]
     }
+    |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()

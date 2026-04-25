@@ -3,6 +3,7 @@ defmodule Aerospike.Protocol.ScanQuery do
 
   import Bitwise
 
+  alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
@@ -32,6 +33,7 @@ defmodule Aerospike.Protocol.ScanQuery do
   def build_scan(%Scan{} = scan, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
     timeout = policy.timeout
     query_id = policy.task_id
+    filter_wire = merge_exp_filters(scan.filters)
 
     %AsmMsg{
       info1: scan_info1(scan),
@@ -44,6 +46,7 @@ defmodule Aerospike.Protocol.ScanQuery do
         |> maybe_append_table(scan.set)
         |> Kernel.++(pid_array_fields(node_partitions.parts_full))
         |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
+        |> Kernel.++(filter_exp_fields(filter_wire))
         |> Kernel.++(max_records_fields(node_partitions.record_max))
         |> Kernel.++(records_per_second_fields(scan.records_per_second))
         |> Kernel.++([socket_timeout_field(timeout), query_id_field(query_id)]),
@@ -61,6 +64,8 @@ defmodule Aerospike.Protocol.ScanQuery do
     filter =
       query.index_filter ||
         raise ArgumentError, "build_query/3 requires query.index_filter set via Query.where/2"
+
+    filter_wire = merge_exp_filters(query.filters)
 
     %AsmMsg{
       info1: query_info1(query),
@@ -80,6 +85,7 @@ defmodule Aerospike.Protocol.ScanQuery do
         |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
         |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
         |> Kernel.++(max_records_fields(node_partitions.record_max))
+        |> Kernel.++(filter_exp_fields(filter_wire))
         |> Kernel.++(records_per_second_fields(query.records_per_second))
         |> Kernel.++([socket_timeout_field(timeout)]),
       operations: query_operations(query)
@@ -218,6 +224,7 @@ defmodule Aerospike.Protocol.ScanQuery do
        ) do
     timeout = policy.timeout
     query_id = policy.task_id
+    filter_wire = merge_exp_filters(query.filters)
 
     fields =
       [
@@ -233,6 +240,7 @@ defmodule Aerospike.Protocol.ScanQuery do
       |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
       |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
       |> Kernel.++(max_records_fields(node_partitions.record_max))
+      |> Kernel.++(filter_exp_fields(filter_wire))
       |> Kernel.++(records_per_second_fields(query.records_per_second))
       |> Kernel.++([socket_timeout_field(timeout)])
       |> Kernel.++(background_query_fields(background))
@@ -258,6 +266,7 @@ defmodule Aerospike.Protocol.ScanQuery do
        ) do
     timeout = policy.timeout
     query_id = policy.task_id
+    filter_wire = merge_exp_filters(query.filters)
 
     fields =
       [
@@ -273,6 +282,7 @@ defmodule Aerospike.Protocol.ScanQuery do
       |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
       |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
       |> Kernel.++(max_records_fields(node_partitions.record_max))
+      |> Kernel.++(filter_exp_fields(filter_wire))
       |> Kernel.++(records_per_second_fields(query.records_per_second))
       |> Kernel.++([socket_timeout_field(timeout)])
       |> Kernel.++(background_query_fields(background))
@@ -400,4 +410,22 @@ defmodule Aerospike.Protocol.ScanQuery do
   end
 
   defp records_per_second_fields(_), do: []
+
+  defp filter_exp_fields(nil), do: []
+
+  defp filter_exp_fields(wire) when is_binary(wire) and wire != "" do
+    [%Field{type: Field.type_filter_exp(), data: wire}]
+  end
+
+  defp filter_exp_fields(_), do: []
+
+  defp merge_exp_filters([]), do: nil
+
+  defp merge_exp_filters([%Exp{wire: wire}]), do: wire
+
+  defp merge_exp_filters([%Exp{wire: first_wire} | rest]) do
+    Enum.reduce(rest, %Exp{wire: first_wire}, fn %Exp{wire: next_wire}, %Exp{} = merged ->
+      Exp.and_([merged, %Exp{wire: next_wire}])
+    end).wire
+  end
 end

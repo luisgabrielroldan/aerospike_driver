@@ -9,8 +9,13 @@ defmodule Aerospike.Scan do
   `Aerospike.scan_stream/3`, `Aerospike.scan_all/3`, and
   `Aerospike.scan_count/3`. Node-targeted execution uses `node: node_name`
   in facade opts where supported.
+
+  Filters are server-side expressions. Append expressions with
+  `filter/2` to keep returned records scoped by
+  `%Aerospike.Exp{}` evaluation.
   """
 
+  alias Aerospike.Exp
   alias Aerospike.PartitionFilter
 
   @enforce_keys [:namespace]
@@ -29,7 +34,7 @@ defmodule Aerospike.Scan do
           namespace: String.t(),
           set: String.t() | nil,
           bin_names: [String.t()],
-          filters: [term()],
+          filters: [Exp.t()],
           max_records: pos_integer() | nil,
           records_per_second: non_neg_integer(),
           partition_filter: PartitionFilter.t() | nil,
@@ -65,10 +70,13 @@ defmodule Aerospike.Scan do
   end
 
   @doc """
-  Appends an opaque server-side filter term.
+  Appends a server-side expression filter.
+
+  The scan encoder appends a single `FILTER_EXP` field for the expression
+  filter set.
   """
-  @spec filter(t(), term()) :: t()
-  def filter(%__MODULE__{} = scan, filter) do
+  @spec filter(t(), Exp.t()) :: t()
+  def filter(%__MODULE__{} = scan, %Exp{} = filter) do
     %{scan | filters: scan.filters ++ [filter]}
   end
 

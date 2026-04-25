@@ -10,6 +10,7 @@ defmodule Aerospike.Policy do
   """
 
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.RetryPolicy
 
   @default_timeout 5_000
@@ -27,26 +28,28 @@ defmodule Aerospike.Policy do
   defmodule UnaryRead do
     @moduledoc false
 
-    @enforce_keys [:timeout, :retry]
-    defstruct [:timeout, :retry]
+    @enforce_keys [:timeout, :retry, :filter]
+    defstruct [:timeout, :retry, :filter]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
-            retry: RetryPolicy.t()
+            retry: RetryPolicy.t(),
+            filter: Exp.t() | nil
           }
   end
 
   defmodule UnaryWrite do
     @moduledoc false
 
-    @enforce_keys [:timeout, :retry, :ttl, :generation]
-    defstruct [:timeout, :retry, :ttl, :generation]
+    @enforce_keys [:timeout, :retry, :ttl, :generation, :filter]
+    defstruct [:timeout, :retry, :ttl, :generation, :filter]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
             retry: RetryPolicy.t(),
             ttl: non_neg_integer(),
-            generation: non_neg_integer()
+            generation: non_neg_integer(),
+            filter: Exp.t() | nil
           }
   end
 
@@ -152,8 +155,10 @@ defmodule Aerospike.Policy do
 
   @spec unary_read(RetryPolicy.t(), keyword()) :: {:ok, UnaryRead.t()} | {:error, Error.t()}
   def unary_read(%{} = base_retry, opts) when is_list(opts) do
-    with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout) do
-      {:ok, %UnaryRead{timeout: timeout, retry: RetryPolicy.merge(base_retry, opts)}}
+    with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
+         {:ok, filter} <- fetch_filter(opts) do
+      {:ok,
+       %UnaryRead{timeout: timeout, retry: RetryPolicy.merge(base_retry, opts), filter: filter}}
     end
   end
 
@@ -161,13 +166,15 @@ defmodule Aerospike.Policy do
   def unary_write(%{} = base_retry, opts) when is_list(opts) do
     with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
          {:ok, ttl} <- fetch_non_neg_integer(opts, :ttl, 0),
-         {:ok, generation} <- fetch_non_neg_integer(opts, :generation, 0) do
+         {:ok, generation} <- fetch_non_neg_integer(opts, :generation, 0),
+         {:ok, filter} <- fetch_filter(opts) do
       {:ok,
        %UnaryWrite{
          timeout: timeout,
          retry: RetryPolicy.merge(base_retry, opts),
          ttl: ttl,
-         generation: generation
+         generation: generation,
+         filter: filter
        }}
     end
   end
@@ -310,6 +317,21 @@ defmodule Aerospike.Policy do
 
       value ->
         invalid_argument(":task_id must be a positive integer, got: #{inspect(value)}")
+    end
+  end
+
+  defp fetch_filter(opts) do
+    case Keyword.get(opts, :filter) do
+      nil ->
+        {:ok, nil}
+
+      %Exp{wire: wire} = filter when is_binary(wire) and byte_size(wire) > 0 ->
+        {:ok, filter}
+
+      value ->
+        invalid_argument(
+          ":filter must be nil or a %Aerospike.Exp{} with non-empty wire bytes, got: #{inspect(value)}"
+        )
     end
   end
 

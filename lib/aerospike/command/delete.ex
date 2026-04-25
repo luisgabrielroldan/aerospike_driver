@@ -21,6 +21,7 @@ defmodule Aerospike.Command.Delete do
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:generation, non_neg_integer()}
+          | {:filter, Aerospike.Exp.t() | nil}
 
   @type result ::
           {:ok, boolean()}
@@ -67,11 +68,18 @@ defmodule Aerospike.Command.Delete do
       conn: conn,
       txn: txn,
       opts: opts,
-      generation: policy.generation
+      generation: policy.generation,
+      filter: policy.filter
     }
   end
 
-  defp encode_delete(%{key: %Key{} = key, conn: conn, opts: opts, generation: generation}) do
+  defp encode_delete(%{
+         key: %Key{} = key,
+         conn: conn,
+         opts: opts,
+         generation: generation,
+         filter: filter
+       }) do
     key
     |> AsmMsg.key_command([],
       write: true,
@@ -79,6 +87,7 @@ defmodule Aerospike.Command.Delete do
       send_key: true,
       generation: generation
     )
+    |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()

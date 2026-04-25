@@ -13,12 +13,14 @@ defmodule Aerospike.UnaryRuntimeTest do
         Executor.new!(
           policy: %Policy.UnaryRead{
             timeout: 5_000,
+            filter: nil,
             retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
           }
         )
 
       assert executor.policy == %Policy.UnaryRead{
                timeout: 5_000,
+               filter: nil,
                retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
              }
     end
@@ -384,6 +386,7 @@ defmodule Aerospike.UnaryRuntimeTest do
     Executor.new!(
       policy: %Policy.UnaryRead{
         timeout: Keyword.get(opts, :timeout, 5_000),
+        filter: nil,
         retry: %{
           max_retries: Keyword.get(opts, :max_retries, 2),
           sleep_between_retries_ms: Keyword.get(opts, :sleep_between_retries_ms, 0),

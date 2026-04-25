@@ -2,6 +2,7 @@ defmodule Aerospike.PolicyTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.Policy
   alias Aerospike.RetryPolicy
 
@@ -21,13 +22,19 @@ defmodule Aerospike.PolicyTest do
   describe "unary_read/2" do
     test "merges retry settings and applies the default timeout" do
       base_retry = RetryPolicy.defaults()
+      filter = Exp.eq(Exp.int_bin("age"), Exp.val(18))
 
       assert {:ok,
               %Policy.UnaryRead{
                 timeout: 5_000,
-                retry: %{max_retries: 1, sleep_between_retries_ms: 0, replica_policy: :master}
+                retry: %{max_retries: 1, sleep_between_retries_ms: 0, replica_policy: :master},
+                filter: ^filter
               }} =
-               Policy.unary_read(base_retry, max_retries: 1, replica_policy: :master)
+               Policy.unary_read(base_retry,
+                 max_retries: 1,
+                 replica_policy: :master,
+                 filter: filter
+               )
     end
 
     test "rejects invalid timeout values" do
@@ -36,24 +43,40 @@ defmodule Aerospike.PolicyTest do
 
       assert message =~ "timeout must be a non-negative integer"
     end
+
+    test "rejects malformed filters" do
+      assert {:error, %Error{code: :invalid_argument, message: empty_message}} =
+               Policy.unary_read(RetryPolicy.defaults(), filter: Exp.from_wire(""))
+
+      assert empty_message =~ "%Aerospike.Exp{}"
+      assert empty_message =~ "non-empty wire bytes"
+
+      assert {:error, %Error{code: :invalid_argument, message: bad_message}} =
+               Policy.unary_read(RetryPolicy.defaults(), filter: %{wire: <<1>>})
+
+      assert bad_message =~ "%Aerospike.Exp{}"
+    end
   end
 
   describe "unary_write/2" do
     test "materializes timeout, retry, ttl, and generation together" do
       base_retry = RetryPolicy.defaults()
+      filter = Exp.gt(Exp.int_bin("count"), Exp.val(0))
 
       assert {:ok,
               %Policy.UnaryWrite{
                 timeout: 1_500,
                 retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence},
                 ttl: 120,
-                generation: 3
+                generation: 3,
+                filter: ^filter
               }} =
                Policy.unary_write(base_retry,
                  timeout: 1_500,
                  max_retries: 0,
                  ttl: 120,
-                 generation: 3
+                 generation: 3,
+                 filter: filter
                )
     end
 
@@ -68,12 +91,23 @@ defmodule Aerospike.PolicyTest do
 
       assert generation_message =~ "generation must be a non-negative integer"
     end
+
+    test "keeps nil filter equivalent to no filter" do
+      assert {:ok, %Policy.UnaryWrite{filter: nil}} =
+               Policy.unary_write(RetryPolicy.defaults(), filter: nil)
+    end
   end
 
   describe "unary_operate/2" do
     test "shares the unary write policy surface" do
-      assert {:ok, %Policy.UnaryWrite{ttl: 10, generation: 2}} =
-               Policy.unary_operate(RetryPolicy.defaults(), ttl: 10, generation: 2)
+      filter = Exp.eq(Exp.str_bin("status"), Exp.val("active"))
+
+      assert {:ok, %Policy.UnaryWrite{ttl: 10, generation: 2, filter: ^filter}} =
+               Policy.unary_operate(RetryPolicy.defaults(),
+                 ttl: 10,
+                 generation: 2,
+                 filter: filter
+               )
     end
   end
 
@@ -91,6 +125,15 @@ defmodule Aerospike.PolicyTest do
     test "rejects unsupported batch opts" do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Policy.batch_read(RetryPolicy.defaults(), max_retries: 1)
+
+      assert message =~ "supports only the :timeout option"
+    end
+
+    test "does not accept expression filters before batch wire support exists" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.batch_read(RetryPolicy.defaults(),
+                 filter: Exp.eq(Exp.int_bin("a"), Exp.val(1))
+               )
 
       assert message =~ "supports only the :timeout option"
     end

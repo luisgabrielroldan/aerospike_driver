@@ -2,6 +2,7 @@ defmodule Aerospike.ScanQueryTypesTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Cursor
+  alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
@@ -14,7 +15,7 @@ defmodule Aerospike.ScanQueryTypesTest do
       scan =
         Scan.new("test")
         |> Scan.select(["name", "age"])
-        |> Scan.filter({:opaque_filter, 1})
+        |> Scan.filter(Exp.from_wire(<<1>>))
         |> Scan.max_records(25)
         |> Scan.records_per_second(100)
         |> Scan.partition_filter(PartitionFilter.by_id(42))
@@ -23,7 +24,7 @@ defmodule Aerospike.ScanQueryTypesTest do
       assert scan.namespace == "test"
       assert scan.set == nil
       assert scan.bin_names == ["name", "age"]
-      assert scan.filters == [{:opaque_filter, 1}]
+      assert %Exp{wire: <<1>>} = scan.filters |> hd()
       assert scan.max_records == 25
       assert scan.records_per_second == 100
       assert scan.partition_filter.begin == 42
@@ -41,7 +42,7 @@ defmodule Aerospike.ScanQueryTypesTest do
         Query.new("test", "users")
         |> Query.where(Filter.range("age", 10, 20))
         |> Query.select(["name"])
-        |> Query.filter({:opaque_filter, 2})
+        |> Query.filter(Exp.from_wire(<<2>>))
         |> Query.max_records(10)
         |> Query.records_per_second(50)
         |> Query.partition_filter(PartitionFilter.by_range(10, 5))
@@ -53,7 +54,7 @@ defmodule Aerospike.ScanQueryTypesTest do
       assert query.index_filter.begin == 10
       assert query.index_filter.end == 20
       assert query.bin_names == ["name"]
-      assert query.filters == [{:opaque_filter, 2}]
+      assert %Exp{wire: <<2>>} = query.filters |> hd()
       assert query.max_records == 10
       assert query.records_per_second == 50
       assert query.partition_filter.begin == 10

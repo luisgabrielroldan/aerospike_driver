@@ -1,6 +1,6 @@
 defmodule Aerospike.Query do
   @moduledoc """
-  Composable secondary-index query description.
+  Composable query description with separate predicate lanes.
 
   The query itself is pure data. It does not own transport state or
   partition iteration.
@@ -11,8 +11,13 @@ defmodule Aerospike.Query do
   Node-targeted execution uses `node: node_name` in facade opts where that
   query helper supports it, and `query_all/3` / `query_page/3` require
   `query.max_records`.
+
+  Use `where/2` for secondary-index predicates (`Aerospike.Filter`), and
+  `filter/2` for server-side expression filters (`Aerospike.Exp`). Both can be
+  used together where the query is supported.
   """
 
+  alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.PartitionFilter
 
@@ -34,7 +39,7 @@ defmodule Aerospike.Query do
           set: String.t(),
           index_filter: Filter.t() | nil,
           bin_names: [String.t()],
-          filters: [term()],
+          filters: [Exp.t()],
           max_records: pos_integer() | nil,
           records_per_second: non_neg_integer(),
           partition_filter: PartitionFilter.t() | nil,
@@ -69,10 +74,13 @@ defmodule Aerospike.Query do
   end
 
   @doc """
-  Appends an opaque server-side filter term.
+  Appends a server-side expression filter.
+
+  Multiple calls append additional expression filters that are combined with
+  server-side boolean AND when encoded.
   """
-  @spec filter(t(), term()) :: t()
-  def filter(%__MODULE__{} = query, filter) do
+  @spec filter(t(), Exp.t()) :: t()
+  def filter(%__MODULE__{} = query, %Exp{} = filter) do
     %{query | filters: query.filters ++ [filter]}
   end
 

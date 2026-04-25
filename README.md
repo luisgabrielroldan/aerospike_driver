@@ -25,6 +25,11 @@ The library currently proves these command families through the public
   `scan_count/3`, `scan_count!/3`
 - Secondary-index queries: `query_stream!/3`, `query_all/3`, `query_count/3`,
   `query_page/3`
+- Unary and write-family commands (`get`, `put`, `delete`, `touch`, `exists`,
+  `operate`, `apply_udf`, `add`, `append`, `prepend`) support
+  `%Aerospike.Exp{}` via `:filter`.
+- Scan and query builders support expression filtering through
+  `Scan.filter/2` and `Query.filter/2`.
 - Query admin/runtime helpers: `create_index/4`, `drop_index/4`,
   `query_aggregate/6`, `query_execute/4`, `query_udf/6`
 - Transactions: `transaction/2`, `transaction/3`, `commit/2`, `abort/2`,
@@ -106,7 +111,9 @@ This library is not yet claiming full Aerospike feature parity.
 - `batch_get/4` supports only `bins: :all` and `:timeout`
 - `operate/4` supports the currently admitted tuple/CDT surface, not the full
   historical operate breadth
-- query filters use `Aerospike.Filter` values instead of pre-encoded bytes
+- scan and query paths support `Scan.filter/2` and `Query.filter/2`
+  for server-side expression filters. Queries keep secondary-index predicates in
+  `Query.where/2` with `Aerospike.Filter`.
 - broader expression filters, general UDF package management, and a wider
   policy surface remain deferred
 - scan/query streams are lazy at the outer `Enumerable` boundary only; the

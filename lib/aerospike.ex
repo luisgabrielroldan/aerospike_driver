@@ -34,12 +34,17 @@ defmodule Aerospike do
     * `metrics_enabled?/1`, `enable_metrics/2`, `disable_metrics/1`,
       `stats/1`, and `warm_up/2` expose opt-in runtime metrics and an
       explicit operator pool probe over the already-started workers
-    * `exists/2` performs a header-only existence probe
     * `touch/2` updates record metadata
     * `delete/2` removes a record
+    * `exists/2` performs a header-only existence probe
     * `operate/4` runs simple and CDT-style unary operation lists built
       with `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, and
       `Aerospike.Ctx`
+    * unary commands (`get/3`, `get_header/2`, `put/4`, `exists/2`,
+      `touch/2`, `delete/2`, `operate/4`, `apply_udf/6`, `add/4`,
+      `append/4`, and `prepend/4`) accept `%Aerospike.Exp{}` via `:filter`
+      for server-side execution filtering
+    * `Aerospike.Exp` builds server-side expression values
     * `batch_get/4`, `batch_get_header/3`, and `batch_exists/3` read
       multiple keys and return per-key results in caller order
     * `child_spec/1`, `close/2`, `key/3`, and `key_digest/3` round out
@@ -50,6 +55,8 @@ defmodule Aerospike do
       `query_aggregate/6` run secondary-index queries through the same
       node-preparation pipeline, with lazy outer streams but
       node-buffered record delivery
+      and optional `%Aerospike.Exp{}` filters through `Query.filter/2`
+      when a secondary-index predicate from `Query.where/2` is also used.
     * `query_execute/4` and `query_udf/6` run background query jobs on
       that same setup path and return pollable task handles
     * `scan_stream/3`, `scan_stream!/3`, `scan_all/3`, `scan_all!/3`,
@@ -83,8 +90,8 @@ defmodule Aerospike do
   yielding that node's records downstream, so it does not promise
   frame-by-frame cross-node backpressure or cancellation coordination.
 
-  Broader batch semantics, the remaining expression surface, and the
-  wider policy surface remain out of scope until later work proves them.
+  Broader batch semantics, expression operation builders, expression indexes, and
+  the wider policy surface remain out of scope until later work proves them.
 
   Caller-facing policy validation and default materialization now lives
   under `Aerospike.Policy`. Public command functions still accept
@@ -290,6 +297,8 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms` — fixed delay between retry attempts.
     * `:replica_policy` — `:master` (all attempts against the master)
       or `:sequence` (walk the replica list by attempt index).
+    * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
+      expression, or `nil` for no filter.
 
   Returns `{:ok, %Aerospike.Record{}}` on hit,
   `{:error, %Aerospike.Error{code: :key_not_found}}` on miss, or a
@@ -326,6 +335,8 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms` — fixed delay between retry attempts.
     * `:replica_policy` — `:master` (all attempts against the master)
       or `:sequence` (walk the replica list by attempt index).
+    * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
+      expression, or `nil` for no filter.
 
   Returns `{:ok, %Aerospike.Record{bins: %{}}}` on hit,
   `{:error, %Aerospike.Error{code: :key_not_found}}` on miss, or a
@@ -1083,6 +1094,7 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation`
+    * `:filter`
     * `:txn`
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
@@ -1211,6 +1223,8 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
+      expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1238,6 +1252,8 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
+      expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1264,6 +1280,8 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
+      expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1290,6 +1308,8 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
+      expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1307,7 +1327,7 @@ defmodule Aerospike do
   Returns whether `key` exists in `cluster` without reading bins.
 
   Supported read opts are `:timeout`, `:max_retries`,
-  `:sleep_between_retries_ms`, and `:replica_policy`.
+  `:sleep_between_retries_ms`, `:replica_policy`, and `:filter`.
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1325,7 +1345,7 @@ defmodule Aerospike do
   Updates `key`'s header metadata in `cluster`.
 
   Supported write opts are `:timeout`, `:max_retries`,
-  `:sleep_between_retries_ms`, `:ttl`, and `:generation`.
+  `:sleep_between_retries_ms`, `:ttl`, `:generation`, and `:filter`.
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1344,7 +1364,8 @@ defmodule Aerospike do
 
   Returns `{:ok, true}` when a record was deleted and `{:ok, false}`
   when the key was already absent. Supported write opts are `:timeout`,
-  `:max_retries`, `:sleep_between_retries_ms`, and `:generation`.
+  `:max_retries`, `:sleep_between_retries_ms`, `:generation`, and
+  `:filter`.
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1375,7 +1396,7 @@ defmodule Aerospike do
   any list that includes a write uses write routing.
 
   Supported opts are `:timeout`, `:max_retries`,
-  `:sleep_between_retries_ms`, `:ttl`, and `:generation`.
+  `:sleep_between_retries_ms`, `:ttl`, `:generation`, and `:filter`.
 
   Accepted operations include the simple tuple form plus the public
   `Aerospike.Op` helpers for primitive and CDT-style operations.

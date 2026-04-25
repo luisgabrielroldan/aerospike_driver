@@ -32,6 +32,7 @@ defmodule Aerospike.Command.Get do
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:replica_policy, :master | :sequence}
+          | {:filter, Aerospike.Exp.t() | nil}
 
   @doc """
   Reads `key` from the cluster identified by `tender`.
@@ -50,6 +51,8 @@ defmodule Aerospike.Command.Get do
       disables retry entirely.
     * `:sleep_between_retries_ms` — fixed delay between attempts.
     * `:replica_policy` — `:master` or `:sequence`.
+    * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
+      expression, or `nil` for no filter.
 
   Errors surface as typed `Aerospike.Error` structs or the router's
   `:cluster_not_ready` / `:no_master` atoms for routing failures.
@@ -69,7 +72,7 @@ defmodule Aerospike.Command.Get do
         key,
         policy,
         command(),
-        %{key: key, conn: tender, txn: txn, opts: opts, mode: mode}
+        %{key: key, conn: tender, txn: txn, opts: opts, mode: mode, filter: policy.filter}
       )
     end
   end
@@ -91,9 +94,10 @@ defmodule Aerospike.Command.Get do
     )
   end
 
-  defp encode_read(%{key: %Key{} = key, conn: conn, opts: opts, mode: mode}) do
+  defp encode_read(%{key: %Key{} = key, conn: conn, opts: opts, mode: mode, filter: filter}) do
     key
     |> AsmMsg.key_command([], read: true, read_all: mode == :all, read_header: mode == :header)
+    |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, false)
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()

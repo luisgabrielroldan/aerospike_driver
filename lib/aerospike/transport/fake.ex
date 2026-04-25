@@ -234,6 +234,16 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @doc """
+  Returns the request passed to the most recent `command/4` call for any
+  connection addressing `node_id`, or `nil` if `command/4` has not been
+  called for that node yet.
+  """
+  @spec last_command_request(pid(), node_id()) :: iodata() | nil
+  def last_command_request(fake, node_id) do
+    GenServer.call(fake, {:last_command_request, node_id})
+  end
+
+  @doc """
   Returns the `opts` keyword list passed to the most recent `command/4`
   call for any connection addressing `node_id`, or `nil` if `command/4`
   has not been called for that node yet. Lets tests assert that callers
@@ -286,7 +296,7 @@ defmodule Aerospike.Transport.Fake do
   def command(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
-    GenServer.call(fake, {:consume, ref, {:command, deadline_ms, opts}})
+    GenServer.call(fake, {:consume, ref, {:command, request, deadline_ms, opts}})
   end
 
   @impl Aerospike.Cluster.NodeTransport
@@ -326,6 +336,7 @@ defmodule Aerospike.Transport.Fake do
       close_counts: %{},
       stream_close_counts: %{},
       last_command_deadlines: %{},
+      last_command_requests: %{},
       last_command_opts: %{},
       conns: %{},
       streams: %{},
@@ -380,6 +391,10 @@ defmodule Aerospike.Transport.Fake do
 
   def handle_call({:last_command_deadline, node_id}, _from, state) do
     {:reply, Map.get(state.last_command_deadlines, node_id), state}
+  end
+
+  def handle_call({:last_command_request, node_id}, _from, state) do
+    {:reply, Map.get(state.last_command_requests, node_id), state}
   end
 
   def handle_call({:last_command_opts, node_id}, _from, state) do
@@ -556,14 +571,15 @@ defmodule Aerospike.Transport.Fake do
   end
 
   defp script_key(node_id, {:info, commands}), do: {:info, node_id, commands}
-  defp script_key(node_id, {:command, _deadline_ms, _opts}), do: {:command, node_id}
+  defp script_key(node_id, {:command, _request, _deadline_ms, _opts}), do: {:command, node_id}
   defp script_key(node_id, {:command_stream, _deadline_ms, _opts}), do: {:command_stream, node_id}
   defp script_key(node_id, {:stream_open, _request, _deadline_ms, _opts}), do: {:stream, node_id}
 
-  defp record_command_deadline(state, node_id, {:command, deadline_ms, opts}) do
+  defp record_command_deadline(state, node_id, {:command, request, deadline_ms, opts}) do
     %{
       state
       | last_command_deadlines: Map.put(state.last_command_deadlines, node_id, deadline_ms),
+        last_command_requests: Map.put(state.last_command_requests, node_id, request),
         last_command_opts: Map.put(state.last_command_opts, node_id, opts)
     }
   end

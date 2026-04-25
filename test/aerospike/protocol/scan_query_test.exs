@@ -1,6 +1,7 @@
 defmodule Aerospike.Protocol.ScanQueryTest do
   use ExUnit.Case, async: true
 
+  alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.Policy
   alias Aerospike.Protocol.AsmMsg
@@ -26,6 +27,10 @@ defmodule Aerospike.Protocol.ScanQueryTest do
       %Field{type: ^type, data: data} -> data
       _ -> nil
     end)
+  end
+
+  defp field_types(msg) do
+    Enum.map(msg.fields, & &1.type)
   end
 
   test "build_scan/3 encodes partition fields and selected bins" do
@@ -66,6 +71,29 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert field_data(msg, Field.type_records_per_second()) == <<50::32-signed-big>>
     assert field_data(msg, Field.type_socket_timeout()) == <<12_345::32-signed-big>>
     assert field_data(msg, Field.type_query_id()) == <<9_001_234_567_890::64-unsigned-big>>
+    refute Field.type_filter_exp() in field_types(msg)
+  end
+
+  test "scan can combine multiple expression filters into one FILTER_EXP field" do
+    scan =
+      Scan.new("testns")
+      |> Scan.filter(Exp.from_wire(<<0xC3>>))
+      |> Scan.filter(Exp.from_wire(<<0xC2>>))
+
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 1)
+
+    wire =
+      ScanQuery.build_scan(
+        scan,
+        %{parts_full: [], parts_partial: [], record_max: 0},
+        policy
+      )
+
+    msg = decode_as_msg(wire)
+    types = field_types(msg)
+
+    assert Enum.count(types, &(&1 == Field.type_filter_exp())) == 1
+    assert byte_size(field_data(msg, Field.type_filter_exp())) > 1
   end
 
   test "build_query/3 encodes a filter struct and keeps query bins" do
@@ -100,6 +128,34 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert field_data(msg, Field.type_bval_array()) == <<99::64-signed-little>>
     assert field_data(msg, Field.type_max_records()) == <<4::64-signed-big>>
     assert field_data(msg, Field.type_records_per_second()) == <<7::32-signed-big>>
+    refute Field.type_filter_exp() in field_types(msg)
+  end
+
+  test "query builders include FILTER_EXP with a secondary-index predicate" do
+    query =
+      Query.new("testns", "users")
+      |> Query.where(Filter.range("age", 10, 20))
+      |> Query.filter(Exp.from_wire(<<0xC3>>))
+      |> Query.filter(Exp.from_wire(<<0xC2>>))
+
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 88)
+
+    msg =
+      query
+      |> ScanQuery.build_query(
+        %{
+          parts_full: [3],
+          parts_partial: [],
+          record_max: 4
+        },
+        policy
+      )
+      |> decode_as_msg()
+
+    assert Field.type_index_range() in field_types(msg)
+    assert Field.type_filter_exp() in field_types(msg)
+    assert Enum.count(field_types(msg), &(&1 == Field.type_filter_exp())) == 1
+    assert byte_size(field_data(msg, Field.type_filter_exp())) > 1
   end
 
   test "build_query_execute/4 encodes write ops on the background query path" do
@@ -130,6 +186,46 @@ defmodule Aerospike.Protocol.ScanQueryTest do
              FilterCodec.encode(Filter.range("age", 10, 20))
 
     assert field_data(msg, Field.type_query_id()) == <<42::64-unsigned-big>>
+    refute Field.type_filter_exp() in field_types(msg)
+  end
+
+  test "query UDF and aggregate builders preserve FILTER_EXP with index fields" do
+    query =
+      Query.new("testns", "users")
+      |> Query.where(Filter.range("age", 10, 20))
+      |> Query.filter(Exp.from_wire(<<0xC3>>))
+
+    {:ok, policy} = Policy.scan_query_runtime(timeout: 5_000, task_id: 7)
+
+    query_udf_msg =
+      query
+      |> ScanQuery.build_query_udf(
+        %{parts_full: [4], parts_partial: [], record_max: 9},
+        "demo",
+        "echo",
+        [1, true, nil],
+        policy
+      )
+      |> decode_as_msg()
+
+    query_agg_msg =
+      query
+      |> ScanQuery.build_query_aggregate(
+        %{parts_full: [4], parts_partial: [], record_max: 9},
+        "demo",
+        "sum",
+        ["score"],
+        policy
+      )
+      |> decode_as_msg()
+
+    assert Field.type_index_range() in field_types(query_udf_msg)
+    assert Field.type_filter_exp() in field_types(query_udf_msg)
+    assert Enum.count(field_types(query_udf_msg), &(&1 == Field.type_filter_exp())) == 1
+
+    assert Field.type_index_range() in field_types(query_agg_msg)
+    assert Field.type_filter_exp() in field_types(query_agg_msg)
+    assert Enum.count(field_types(query_agg_msg), &(&1 == Field.type_filter_exp())) == 1
   end
 
   test "build_query_udf/6 encodes the UDF field block with write flags" do

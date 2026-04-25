@@ -147,6 +147,7 @@ defmodule Aerospike.Runtime.ExecutorTest do
     Executor.new!(
       policy: %Policy.UnaryRead{
         timeout: timeout,
+        filter: nil,
         retry: %{max_retries: max_retries, sleep_between_retries_ms: 0, replica_policy: :sequence}
       },
       on_rebalance: on_rebalance

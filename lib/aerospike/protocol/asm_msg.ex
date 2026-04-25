@@ -3,6 +3,7 @@ defmodule Aerospike.Protocol.AsmMsg do
 
   import Bitwise
 
+  alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
@@ -293,6 +294,14 @@ defmodule Aerospike.Protocol.AsmMsg do
       nil -> []
       field -> [field]
     end
+  end
+
+  @doc false
+  @spec maybe_add_filter_exp(t(), Exp.t() | nil) :: t()
+  def maybe_add_filter_exp(%__MODULE__{} = msg, nil), do: msg
+
+  def maybe_add_filter_exp(%__MODULE__{} = msg, %Exp{wire: wire}) when is_binary(wire) do
+    %{msg | fields: msg.fields ++ [Field.filter_exp(wire)]}
   end
 
   defp info1_from_opts(opts) do

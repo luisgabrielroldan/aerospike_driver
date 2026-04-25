@@ -282,6 +282,14 @@ defmodule Aerospike.Protocol.AsmMsg.Field do
   end
 
   @doc """
+  Creates a FILTER_EXP field from pre-encoded expression bytes.
+  """
+  @spec filter_exp(binary()) :: t()
+  def filter_exp(wire) when is_binary(wire) do
+    %__MODULE__{type: @filter_exp, data: wire}
+  end
+
+  @doc """
   Creates an MRT_ID field from a transaction ID.
 
   Encodes the transaction ID as an 8-byte little-endian signed integer.
