@@ -1,13 +1,14 @@
 defmodule Aerospike.Integration.IndexQueryTest do
   use ExUnit.Case, async: false
 
+  alias Aerospike.Cluster.Router
+  alias Aerospike.Cluster.Tender
   alias Aerospike.Cursor
+  alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.Key
   alias Aerospike.Page
   alias Aerospike.Query
-  alias Aerospike.Cluster.Router
-  alias Aerospike.Cluster.Tender
   alias Aerospike.Test.IntegrationSupport
 
   @moduletag :integration
@@ -123,9 +124,94 @@ defmodule Aerospike.Integration.IndexQueryTest do
     end
   end
 
+  test "creates an expression-backed index and queries it by name", %{cluster: cluster} do
+    set = IntegrationSupport.unique_name("expr_idx_query")
+    index_name = IntegrationSupport.unique_name("age_expr_idx")
+    expression = Exp.int_bin("age")
+    version = fetch_server_version!(cluster)
+
+    if supports_expression_indexes?(version) do
+      keys = seed_expression_index_records(cluster, set)
+
+      try do
+        assert {:ok, task} =
+                 Aerospike.create_expression_index(cluster, @namespace, set, expression,
+                   name: index_name,
+                   type: :numeric
+                 )
+
+        assert :ok = Aerospike.IndexTask.wait(task, timeout: 30_000, poll_interval: 200)
+
+        query =
+          Query.new(@namespace, set)
+          |> Query.where(Filter.range("age", 18, 40) |> Filter.using_index(index_name))
+          |> Query.max_records(20)
+
+        IntegrationSupport.assert_eventually("expression index query returns matching ages", fn ->
+          assert {:ok, records_stream} = Aerospike.query_stream(cluster, query)
+
+          ages =
+            records_stream
+            |> Enum.to_list()
+            |> Enum.map(& &1.bins["age"])
+            |> Enum.sort()
+
+          ages == [24, 31]
+        end)
+      after
+        _ = Aerospike.drop_index(cluster, @namespace, index_name)
+        Enum.each(keys, &cleanup_key(cluster, &1))
+      end
+    else
+      assert {:error, %Aerospike.Error{code: :parameter_error, message: message}} =
+               Aerospike.create_expression_index(cluster, @namespace, set, expression,
+                 name: index_name,
+                 type: :numeric
+               )
+
+      assert message ==
+               "expression-backed secondary indexes require Aerospike server 8.1.0 or newer"
+    end
+  end
+
   defp cleanup_key(cluster, key) do
     _ = Aerospike.delete(cluster, key)
   end
+
+  defp seed_expression_index_records(cluster, set) do
+    records = [
+      {"teen", 17},
+      {"adult-1", 24},
+      {"adult-2", 31},
+      {"senior", 65}
+    ]
+
+    Enum.map(records, fn {user_key, age} ->
+      key = Key.new(@namespace, set, user_key)
+      assert {:ok, _metadata} = Aerospike.put(cluster, key, %{"age" => age})
+      key
+    end)
+  end
+
+  defp fetch_server_version!(cluster) do
+    assert {:ok, build} = Aerospike.info(cluster, "build")
+
+    case Regex.run(~r/^v?\d+(?:\.\d+){0,3}/, build) do
+      [matched] ->
+        matched
+        |> String.trim_leading("v")
+        |> String.split(".")
+        |> Enum.map(&String.to_integer/1)
+        |> Kernel.++([0, 0, 0, 0])
+        |> Enum.take(4)
+        |> List.to_tuple()
+
+      _ ->
+        flunk("unable to parse Aerospike build string: #{inspect(build)}")
+    end
+  end
+
+  defp supports_expression_indexes?(version) when is_tuple(version), do: version >= {8, 1, 0, 0}
 
   defp keys_for_one_node(cluster, set, count) when is_integer(count) and count > 0 do
     tables = Tender.tables(cluster)

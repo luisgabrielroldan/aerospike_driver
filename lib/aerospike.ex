@@ -37,20 +37,25 @@ defmodule Aerospike do
     * `touch/2` updates record metadata
     * `delete/2` removes a record
     * `exists/2` performs a header-only existence probe
-    * `operate/4` runs simple and CDT-style unary operation lists built
-      with `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, and
-      `Aerospike.Ctx`
+    * `operate/4` runs simple, CDT-style, and expression operation lists built
+      with `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`,
+      `Aerospike.Op.Exp`, and `Aerospike.Ctx`
     * unary commands (`get/3`, `get_header/2`, `put/4`, `exists/2`,
       `touch/2`, `delete/2`, `operate/4`, `apply_udf/6`, `add/4`,
       `append/4`, and `prepend/4`) accept `%Aerospike.Exp{}` via `:filter`
       for server-side execution filtering
-    * `Aerospike.Exp` builds server-side expression values
+    * `Aerospike.Exp` builds server-side expression values, including values
+      usable as expression-backed secondary-index sources
+    * `create_expression_index/5` creates expression-backed secondary indexes
+      on servers that support them and returns a pollable index task
     * `batch_get/4`, `batch_get_header/3`, and `batch_exists/3` read
       multiple keys and return per-key results in caller order
     * `child_spec/1`, `close/2`, `key/3`, and `key_digest/3` round out
       the root lifecycle and key-construction boundary
     * `info/3`, `nodes/1`, and `node_names/1` expose one-node operator
       reads over the published cluster view
+    * `set_xdr_filter/4` sets or clears Enterprise XDR expression filters
+      through a one-node info command
     * `query_stream!/3`, `query_all/3`, `query_count/3`, and
       `query_aggregate/6` run secondary-index queries through the same
       node-preparation pipeline, with lazy outer streams but
@@ -90,8 +95,9 @@ defmodule Aerospike do
   yielding that node's records downstream, so it does not promise
   frame-by-frame cross-node backpressure or cancellation coordination.
 
-  Broader batch semantics, expression operation builders, expression indexes, and
-  the wider policy surface remain out of scope until later work proves them.
+  Broader batch semantics, additional expression-builder families, and the
+  wider policy surface remain out of scope until supported command paths prove
+  them.
 
   Caller-facing policy validation and default materialization now lives
   under `Aerospike.Policy`. Public command functions still accept
@@ -107,6 +113,7 @@ defmodule Aerospike do
   alias Aerospike.Error
   alias Aerospike.ExecuteTask
   alias Aerospike.Command.Exists
+  alias Aerospike.Exp
   alias Aerospike.Command.Get
   alias Aerospike.IndexTask
   alias Aerospike.Key
@@ -705,6 +712,67 @@ defmodule Aerospike do
   def create_index(cluster, namespace, set, opts \\ [])
       when is_binary(namespace) and is_binary(set) and is_list(opts) do
     Admin.create_index(cluster, namespace, set, opts)
+  end
+
+  @doc """
+  Creates an expression-backed secondary index and returns a pollable task
+  handle.
+
+  Required options:
+
+    * `:name` — non-empty index name.
+    * `:type` — one of `:numeric`, `:string`, or `:geo2dsphere`.
+
+  Optional options:
+
+    * `:collection` — one of `:list`, `:mapkeys`, or `:mapvalues`.
+    * `:pool_checkout_timeout` — non-negative pool checkout timeout in
+      milliseconds.
+
+  The source must be a `%Aerospike.Exp{}` with non-empty wire bytes. Expression
+  indexes use the expression as the source and therefore do not accept `:bin`.
+  Servers older than Aerospike 8.1 reject expression-backed index creation
+  before the create command is sent.
+
+      {:ok, task} =
+        Aerospike.create_expression_index(cluster, "test", "users", Exp.int_bin("age"),
+          name: "users_age_expr_idx",
+          type: :numeric
+        )
+
+      :ok = Aerospike.IndexTask.wait(task)
+  """
+  @spec create_expression_index(cluster(), String.t(), String.t(), Exp.t(), keyword()) ::
+          {:ok, IndexTask.t()} | {:error, Aerospike.Error.t()}
+  def create_expression_index(cluster, namespace, set, %Exp{} = expression, opts \\ [])
+      when is_binary(namespace) and is_binary(set) and is_list(opts) do
+    with {:ok, _policy} <- Policy.expression_index_create(expression, opts) do
+      Admin.create_expression_index(cluster, namespace, set, expression, opts)
+    end
+  end
+
+  @doc """
+  Sets or clears the Enterprise XDR filter for one datacenter and namespace.
+
+  Pass a non-empty `%Aerospike.Exp{}` to set the filter, or `nil` to clear the
+  current filter. `datacenter` and `namespace` must be non-empty info-command
+  identifiers and cannot contain command delimiters.
+
+  Live application requires an Enterprise server with XDR configured. Community
+  Edition or unconfigured clusters may reject the command after local
+  validation.
+
+      filter = Exp.eq(Exp.int_bin("active"), Exp.int(1))
+      :ok = Aerospike.set_xdr_filter(cluster, "dc-west", "test", filter)
+      :ok = Aerospike.set_xdr_filter(cluster, "dc-west", "test", nil)
+  """
+  @spec set_xdr_filter(cluster(), String.t(), String.t(), Exp.t() | nil) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def set_xdr_filter(cluster, datacenter, namespace, filter)
+      when is_binary(datacenter) and is_binary(namespace) do
+    with :ok <- Policy.xdr_filter(datacenter, namespace, filter) do
+      Admin.set_xdr_filter(cluster, datacenter, namespace, filter)
+    end
   end
 
   @doc """
@@ -1399,7 +1467,12 @@ defmodule Aerospike do
   `:sleep_between_retries_ms`, `:ttl`, `:generation`, and `:filter`.
 
   Accepted operations include the simple tuple form plus the public
-  `Aerospike.Op` helpers for primitive and CDT-style operations.
+  `Aerospike.Op` helpers for primitive, CDT-style, and expression operations.
+
+      Aerospike.operate(cluster, key, [
+        Aerospike.Op.Exp.read("projected", Aerospike.Exp.int_bin("count")),
+        Aerospike.Op.Exp.write("computed", Aerospike.Exp.int(99))
+      ])
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """

@@ -2,18 +2,23 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @moduledoc false
 
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.Protocol.AsmMsg.Value
+  alias Aerospike.Protocol.MessagePack
 
   @op_read 1
   @op_write 2
   @op_cdt_read 3
   @op_cdt_modify 4
   @op_add 5
+  @op_exp_read 7
+  @op_exp_modify 8
   @op_append 9
   @op_prepend 10
   @op_touch 11
   @op_delete 14
   @particle_null 0
+  @particle_blob 4
 
   # `read_header`: when true, this is a header-only read (generation/TTL, no bins).
   # Wire `op_type` matches `READ` (1); flagging is used only for operate header flags.
@@ -56,6 +61,14 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @spec op_add() :: 5
   def op_add, do: @op_add
 
+  @doc "Returns the EXP_READ operation type."
+  @spec op_exp_read() :: 7
+  def op_exp_read, do: @op_exp_read
+
+  @doc "Returns the EXP_MODIFY operation type."
+  @spec op_exp_modify() :: 8
+  def op_exp_modify, do: @op_exp_modify
+
   @doc "Returns the APPEND operation type."
   @spec op_append() :: 9
   def op_append, do: @op_append
@@ -75,6 +88,10 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @doc "Returns the null particle type."
   @spec particle_null() :: 0
   def particle_null, do: @particle_null
+
+  @doc "Returns the blob particle type."
+  @spec particle_blob() :: 4
+  def particle_blob, do: @particle_blob
 
   @doc """
   Builds a named-bin read operation.
@@ -188,6 +205,22 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   end
 
   @doc """
+  Builds an expression read operation.
+  """
+  @spec exp_read(String.t(), Exp.t(), non_neg_integer()) :: {:ok, t()} | {:error, Error.t()}
+  def exp_read(bin_name, %Exp{} = expression, flags \\ 0) do
+    build_exp_operation(bin_name, expression, flags, @op_exp_read, "expression read")
+  end
+
+  @doc """
+  Builds an expression write operation.
+  """
+  @spec exp_modify(String.t(), Exp.t(), non_neg_integer()) :: {:ok, t()} | {:error, Error.t()}
+  def exp_modify(bin_name, %Exp{} = expression, flags \\ 0) do
+    build_exp_operation(bin_name, expression, flags, @op_exp_modify, "expression write")
+  end
+
+  @doc """
   Builds a touch operation.
   """
   @spec touch() :: t()
@@ -246,6 +279,42 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
         err
     end
   end
+
+  defp build_exp_operation(bin_name, %Exp{wire: wire}, flags, op_type, _name)
+       when is_binary(bin_name) and byte_size(bin_name) > 0 and is_binary(wire) and
+              byte_size(wire) > 0 and is_integer(flags) and flags >= 0 do
+    {:ok,
+     %__MODULE__{
+       op_type: op_type,
+       particle_type: @particle_blob,
+       bin_name: bin_name,
+       data: encode_exp_op(wire, flags)
+     }}
+  end
+
+  defp build_exp_operation(_bin_name, %Exp{wire: ""}, _flags, _op_type, name) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "#{name} expression wire must be non-empty"
+     )}
+  end
+
+  defp build_exp_operation(bin_name, %Exp{}, _flags, _op_type, name)
+       when not (is_binary(bin_name) and byte_size(bin_name) > 0) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "#{name} bin name must be a non-empty binary, got: #{inspect(bin_name)}"
+     )}
+  end
+
+  defp build_exp_operation(_bin_name, %Exp{}, flags, _op_type, name) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "#{name} flags must be a non-negative integer, got: #{inspect(flags)}"
+     )}
+  end
+
+  defp encode_exp_op(wire, flags), do: <<0x92>> <> wire <> MessagePack.pack!(flags)
 
   @doc """
   Encodes an operation into binary format.

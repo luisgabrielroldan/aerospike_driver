@@ -16,6 +16,10 @@ defmodule Aerospike.Policy do
   @default_timeout 5_000
   @default_pool_checkout_timeout 5_000
 
+  @expression_index_types [:numeric, :string, :geo2dsphere]
+  @index_collection_types [:list, :mapkeys, :mapvalues]
+  @expression_index_opts [:collection, :name, :pool_checkout_timeout, :type]
+
   defmodule ClusterDefaults do
     @moduledoc false
 
@@ -84,6 +88,20 @@ defmodule Aerospike.Policy do
     defstruct [:pool_checkout_timeout]
 
     @type t :: %__MODULE__{pool_checkout_timeout: non_neg_integer()}
+  end
+
+  defmodule ExpressionIndexCreate do
+    @moduledoc false
+
+    @enforce_keys [:name, :type, :collection, :pool_checkout_timeout]
+    defstruct [:name, :type, :collection, :pool_checkout_timeout]
+
+    @type t :: %__MODULE__{
+            name: String.t(),
+            type: :numeric | :string | :geo2dsphere,
+            collection: :list | :mapkeys | :mapvalues | nil,
+            pool_checkout_timeout: non_neg_integer()
+          }
   end
 
   defmodule SecurityAdmin do
@@ -219,6 +237,53 @@ defmodule Aerospike.Policy do
     end
   end
 
+  @spec expression_index_create(Exp.t(), keyword()) ::
+          {:ok, ExpressionIndexCreate.t()} | {:error, Error.t()}
+  def expression_index_create(%Exp{wire: wire}, opts)
+      when is_binary(wire) and byte_size(wire) > 0 and is_list(opts) do
+    with :ok <- reject_unknown_expression_index_opts(opts),
+         {:ok, name} <- fetch_required_string(opts, :name, "expression-backed index name"),
+         {:ok, type} <-
+           fetch_required_member(
+             opts,
+             :type,
+             @expression_index_types,
+             "expression-backed index type"
+           ),
+         {:ok, collection} <-
+           fetch_optional_member(
+             opts,
+             :collection,
+             @index_collection_types,
+             "expression-backed index collection type"
+           ),
+         {:ok, checkout_timeout} <-
+           fetch_non_neg_integer(opts, :pool_checkout_timeout, @default_pool_checkout_timeout) do
+      {:ok,
+       %ExpressionIndexCreate{
+         name: name,
+         type: type,
+         collection: collection,
+         pool_checkout_timeout: checkout_timeout
+       }}
+    end
+  end
+
+  def expression_index_create(%Exp{}, opts) when is_list(opts) do
+    invalid_argument(
+      "expression-backed indexes require a %Aerospike.Exp{} with non-empty wire bytes"
+    )
+  end
+
+  @spec xdr_filter(String.t(), String.t(), Exp.t() | nil) :: :ok | {:error, Error.t()}
+  def xdr_filter(datacenter, namespace, filter)
+      when is_binary(datacenter) and is_binary(namespace) do
+    with :ok <- validate_info_identifier(:datacenter, datacenter),
+         :ok <- validate_info_identifier(:namespace, namespace) do
+      validate_xdr_filter_expression(filter)
+    end
+  end
+
   @spec security_admin(keyword()) :: {:ok, SecurityAdmin.t()} | {:error, Error.t()}
   def security_admin(opts) when is_list(opts) do
     case Enum.find(opts, &invalid_security_admin_opt?/1) do
@@ -320,6 +385,47 @@ defmodule Aerospike.Policy do
     end
   end
 
+  defp fetch_required_string(opts, key, label) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} when is_binary(value) and value != "" ->
+        {:ok, value}
+
+      {:ok, value} ->
+        invalid_argument("#{label} must be a non-empty string, got: #{inspect(value)}")
+
+      :error ->
+        invalid_argument("expression-backed indexes require option :#{key}")
+    end
+  end
+
+  defp fetch_required_member(opts, key, allowed, label) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} ->
+        if value in allowed do
+          {:ok, value}
+        else
+          invalid_argument("#{label} must be one of #{inspect(allowed)}, got: #{inspect(value)}")
+        end
+
+      :error ->
+        invalid_argument("expression-backed indexes require option :#{key}")
+    end
+  end
+
+  defp fetch_optional_member(opts, key, allowed, label) do
+    case Keyword.get(opts, key) do
+      nil ->
+        {:ok, nil}
+
+      value ->
+        if value in allowed do
+          {:ok, value}
+        else
+          invalid_argument("#{label} must be one of #{inspect(allowed)}, got: #{inspect(value)}")
+        end
+    end
+  end
+
   defp fetch_filter(opts) do
     case Keyword.get(opts, :filter) do
       nil ->
@@ -331,6 +437,43 @@ defmodule Aerospike.Policy do
       value ->
         invalid_argument(
           ":filter must be nil or a %Aerospike.Exp{} with non-empty wire bytes, got: #{inspect(value)}"
+        )
+    end
+  end
+
+  defp validate_info_identifier(label, value) when value == "" do
+    invalid_argument("#{label} must be a non-empty string")
+  end
+
+  defp validate_info_identifier(label, value) when is_binary(value) do
+    if String.contains?(value, [";", "=", "\n", "\r", "\t"]) do
+      invalid_argument("#{label} cannot contain info-command delimiters")
+    else
+      :ok
+    end
+  end
+
+  defp validate_xdr_filter_expression(nil), do: :ok
+
+  defp validate_xdr_filter_expression(%Exp{wire: wire})
+       when is_binary(wire) and byte_size(wire) > 0 do
+    :ok
+  end
+
+  defp validate_xdr_filter_expression(value) do
+    invalid_argument(
+      "XDR filters require nil or a %Aerospike.Exp{} with non-empty wire bytes, got: #{inspect(value)}"
+    )
+  end
+
+  defp reject_unknown_expression_index_opts(opts) do
+    case Enum.find(opts, fn {key, _value} -> key not in @expression_index_opts end) do
+      nil ->
+        :ok
+
+      {key, _value} ->
+        invalid_argument(
+          "expression-backed indexes support only :name, :type, :collection, and :pool_checkout_timeout options, got #{inspect(key)}"
         )
     end
   end

@@ -3,6 +3,7 @@ defmodule Aerospike.Command.Admin do
 
   alias Aerospike.Error
   alias Aerospike.Cluster
+  alias Aerospike.Exp
   alias Aerospike.IndexTask
   alias Aerospike.Privilege
   alias Aerospike.RegisterTask
@@ -102,6 +103,18 @@ defmodule Aerospike.Command.Admin do
          {:ok, node_name, handle, transport} <- pick_node(cluster),
          {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
       parse_truncate_response(response, command)
+    end
+  end
+
+  @spec set_xdr_filter(GenServer.server(), String.t(), String.t(), Exp.t() | nil) ::
+          :ok | {:error, Error.t()}
+  def set_xdr_filter(cluster, datacenter, namespace, filter)
+      when is_binary(datacenter) and is_binary(namespace) do
+    with {:ok, policy} <- Policy.admin_info([]),
+         {:ok, command} <- build_xdr_filter_command(datacenter, namespace, filter),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      parse_xdr_filter_response(response, command)
     end
   end
 
@@ -266,6 +279,27 @@ defmodule Aerospike.Command.Admin do
     end
   end
 
+  @spec create_expression_index(GenServer.server(), String.t(), String.t(), Exp.t(), keyword()) ::
+          {:ok, IndexTask.t()} | {:error, Error.t()}
+  def create_expression_index(cluster, namespace, set, %Exp{} = expression, opts)
+      when is_binary(namespace) and is_binary(set) and is_list(opts) do
+    with {:ok, policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
+         :ok <- ensure_expression_index_supported(server_version),
+         {:ok, command} <-
+           build_create_expression_index_command(server_version, namespace, set, expression, opts),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      parse_create_index_response(
+        response,
+        command,
+        cluster,
+        namespace,
+        Keyword.fetch!(opts, :name)
+      )
+    end
+  end
+
   @spec index_status(GenServer.server(), String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, Error.t()}
   def index_status(cluster, namespace, index_name, opts)
@@ -415,6 +449,22 @@ defmodule Aerospike.Command.Admin do
     end
   end
 
+  defp build_create_expression_index_command(server_version, namespace, set, expression, opts) do
+    with {:ok, name} <- required_string(opts, :name, "expression-backed index name"),
+         {:ok, type} <- expression_index_type(opts),
+         {:ok, collection} <- collection_type(opts),
+         {:ok, encoded} <- encode_expression_base64(expression) do
+      command =
+        (create_index_command_prefix(server_version) <> namespace)
+        |> maybe_append_set(set)
+        |> Kernel.<>(";indexname=#{name};exp=#{encoded}")
+        |> maybe_append_collection(collection)
+        |> Kernel.<>(";type=#{index_type_string(type)}")
+
+      {:ok, command}
+    end
+  end
+
   defp build_index_status_command(server_version, namespace, index_name) do
     if modern_sindex_command?(server_version) do
       "sindex-stat:namespace=#{namespace};indexname=#{index_name}"
@@ -446,6 +496,17 @@ defmodule Aerospike.Command.Admin do
     server_version >= @sindex_modern_min
   end
 
+  defp ensure_expression_index_supported(server_version) when is_tuple(server_version) do
+    if modern_sindex_command?(server_version) do
+      :ok
+    else
+      {:error,
+       Error.from_result_code(:parameter_error,
+         message: "expression-backed secondary indexes require Aerospike server 8.1.0 or newer"
+       )}
+    end
+  end
+
   defp maybe_append_set(command, ""), do: command
   defp maybe_append_set(command, set), do: command <> ";set=#{set}"
 
@@ -474,6 +535,30 @@ defmodule Aerospike.Command.Admin do
       command = "truncate:namespace=#{namespace};set=#{set}"
       {:ok, maybe_append_truncate_before(command, before)}
     end
+  end
+
+  defp build_xdr_filter_command(datacenter, namespace, nil)
+       when is_binary(datacenter) and is_binary(namespace) do
+    {:ok, "xdr-set-filter:dc=#{datacenter};namespace=#{namespace};exp=null"}
+  end
+
+  defp build_xdr_filter_command(datacenter, namespace, %Exp{} = filter)
+       when is_binary(datacenter) and is_binary(namespace) do
+    with {:ok, encoded} <-
+           encode_expression_base64(
+             filter,
+             "XDR filters require a %Aerospike.Exp{} with non-empty wire bytes"
+           ) do
+      {:ok, "xdr-set-filter:dc=#{datacenter};namespace=#{namespace};exp=#{encoded}"}
+    end
+  end
+
+  defp build_xdr_filter_command(_datacenter, _namespace, filter) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message:
+         "XDR filters require nil or a %Aerospike.Exp{} with non-empty wire bytes, got: #{inspect(filter)}"
+     )}
   end
 
   defp append_index_source(command, server_version, bin, type) do
@@ -517,6 +602,19 @@ defmodule Aerospike.Command.Admin do
   end
 
   defp parse_truncate_response(response, command) do
+    body = Map.get(response, command, "")
+
+    if String.downcase(String.trim(body)) == "ok" do
+      :ok
+    else
+      {:error,
+       Error.from_result_code(:server_error,
+         message: "unexpected info response: #{inspect(body)}"
+       )}
+    end
+  end
+
+  defp parse_xdr_filter_response(response, command) do
     body = Map.get(response, command, "")
 
     if String.downcase(String.trim(body)) == "ok" do
@@ -576,6 +674,44 @@ defmodule Aerospike.Command.Admin do
         {:error,
          Error.from_result_code(:parameter_error,
            message: "unsupported collection type: #{inspect(other)}"
+         )}
+    end
+  end
+
+  defp expression_index_type(opts) do
+    case Keyword.fetch(opts, :type) do
+      {:ok, type} when type in [:numeric, :string, :geo2dsphere] ->
+        {:ok, type}
+
+      {:ok, other} ->
+        {:error,
+         Error.from_result_code(:parameter_error,
+           message: "unsupported expression-backed index type: #{inspect(other)}"
+         )}
+
+      :error ->
+        {:error,
+         Error.from_result_code(:parameter_error, message: "missing required option :type")}
+    end
+  end
+
+  defp encode_expression_base64(%Exp{} = expression) do
+    encode_expression_base64(
+      expression,
+      "expression-backed secondary indexes require a %Aerospike.Exp{} with non-empty wire bytes"
+    )
+  end
+
+  defp encode_expression_base64(%Exp{} = expression, empty_message)
+       when is_binary(empty_message) do
+    case Exp.base64(expression) do
+      {:ok, encoded} ->
+        {:ok, encoded}
+
+      {:error, :empty} ->
+        {:error,
+         Error.from_result_code(:invalid_argument,
+           message: empty_message
          )}
     end
   end
@@ -862,6 +998,7 @@ defmodule Aerospike.Command.Admin do
 
   defp index_type_string(:numeric), do: "NUMERIC"
   defp index_type_string(:string), do: "STRING"
+  defp index_type_string(:geo2dsphere), do: "GEO2DSPHERE"
 
   defp collection_type_string(:list), do: "LIST"
   defp collection_type_string(:mapkeys), do: "MAPKEYS"

@@ -169,6 +169,113 @@ defmodule Aerospike.PolicyTest do
     end
   end
 
+  describe "expression_index_create/2" do
+    test "materializes valid expression index options" do
+      expression = Exp.int_bin("age")
+
+      assert {:ok,
+              %Policy.ExpressionIndexCreate{
+                name: "age_expr_idx",
+                type: :geo2dsphere,
+                collection: :mapvalues,
+                pool_checkout_timeout: 250
+              }} =
+               Policy.expression_index_create(expression,
+                 name: "age_expr_idx",
+                 type: :geo2dsphere,
+                 collection: :mapvalues,
+                 pool_checkout_timeout: 250
+               )
+    end
+
+    test "defaults expression index optional values" do
+      assert {:ok,
+              %Policy.ExpressionIndexCreate{
+                collection: nil,
+                pool_checkout_timeout: 5_000
+              }} =
+               Policy.expression_index_create(Exp.int_bin("age"),
+                 name: "age_expr_idx",
+                 type: :numeric
+               )
+    end
+
+    test "rejects missing expression index name" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.expression_index_create(Exp.int_bin("age"), type: :numeric)
+
+      assert message =~ "expression-backed indexes require option :name"
+    end
+
+    test "rejects invalid expression index type" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.expression_index_create(Exp.int_bin("age"),
+                 name: "age_expr_idx",
+                 type: :boolean
+               )
+
+      assert message =~ "expression-backed index type"
+      assert message =~ ":boolean"
+    end
+
+    test "rejects bin-backed index options" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.expression_index_create(Exp.int_bin("age"),
+                 bin: "age",
+                 name: "age_expr_idx",
+                 type: :numeric
+               )
+
+      assert message =~ "expression-backed indexes support only"
+      assert message =~ ":bin"
+    end
+
+    test "rejects empty expression wire" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.expression_index_create(Exp.from_wire(""),
+                 name: "age_expr_idx",
+                 type: :numeric
+               )
+
+      assert message =~ "%Aerospike.Exp{}"
+      assert message =~ "non-empty wire bytes"
+    end
+  end
+
+  describe "xdr_filter/3" do
+    test "accepts nil and Aerospike.Exp filters" do
+      assert :ok = Policy.xdr_filter("dc-west", "test", nil)
+
+      assert :ok =
+               Policy.xdr_filter("dc-west", "test", Exp.eq(Exp.int_bin("age"), Exp.int(21)))
+    end
+
+    test "rejects empty or delimiter-bearing identifiers" do
+      assert {:error, %Error{code: :invalid_argument, message: datacenter_message}} =
+               Policy.xdr_filter("", "test", nil)
+
+      assert datacenter_message =~ "datacenter must be a non-empty string"
+
+      assert {:error, %Error{code: :invalid_argument, message: namespace_message}} =
+               Policy.xdr_filter("dc-west", "test;users", nil)
+
+      assert namespace_message =~ "namespace cannot contain info-command delimiters"
+    end
+
+    test "rejects empty expression wire and non-expression filters" do
+      assert {:error, %Error{code: :invalid_argument, message: empty_message}} =
+               Policy.xdr_filter("dc-west", "test", Exp.from_wire(""))
+
+      assert empty_message =~ "XDR filters require nil or a %Aerospike.Exp{}"
+      assert empty_message =~ "non-empty wire bytes"
+
+      assert {:error, %Error{code: :invalid_argument, message: filter_message}} =
+               Policy.xdr_filter("dc-west", "test", :invalid)
+
+      assert filter_message =~ "XDR filters require nil or a %Aerospike.Exp{}"
+    end
+  end
+
   describe "scan_query_runtime/1" do
     test "materializes the tracker runtime defaults" do
       assert {:ok, %Policy.ScanQueryRuntime{} = runtime} = Policy.scan_query_runtime([])

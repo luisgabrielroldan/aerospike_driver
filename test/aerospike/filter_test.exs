@@ -71,9 +71,11 @@ defmodule Aerospike.FilterTest do
     end
 
     test "rejects invalid index types and unsupported values" do
-      assert_raise ArgumentError, ~r/contains\/3 index_type must be :list, :mapkeys, or :mapvalues/, fn ->
-        Filter.contains("tags", :default, "k")
-      end
+      assert_raise ArgumentError,
+                   ~r/contains\/3 index_type must be :list, :mapkeys, or :mapvalues/,
+                   fn ->
+                     Filter.contains("tags", :default, "k")
+                   end
 
       assert_raise ArgumentError, ~r/contains\/3 value must be integer or string/, fn ->
         Filter.contains("tags", :list, :vip)

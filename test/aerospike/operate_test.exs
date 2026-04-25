@@ -7,6 +7,7 @@ defmodule Aerospike.Command.OperateTest do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Command.Operate
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Op
   alias Aerospike.Protocol.AsmMsg
@@ -106,11 +107,15 @@ defmodule Aerospike.Command.OperateTest do
       :ok = Tender.tend_now(tender)
 
       Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([7], ["count"])})
+      Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([7], ["result"])})
 
       key = Key.new(@namespace, @set, "operate-read-only")
 
       assert {:ok, %Record{bins: %{"count" => 7}}} =
                Aerospike.operate(tender, key, [Op.get("count")])
+
+      assert {:ok, %Record{bins: %{"result" => 7}}} =
+               Aerospike.operate(tender, key, [Op.Exp.read("result", Exp.int_bin("count"))])
     end
 
     test "accepts CDT helper operations through the shared unary path", ctx do

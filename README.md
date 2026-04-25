@@ -17,7 +17,8 @@ The library currently proves these command families through the public
 
 - Unary CRUD: `get/3`, `put/4`, `exists/2`, `touch/2`, `delete/2`
 - Unary operate: `operate/4` with the currently admitted write/read subset plus
-  `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, and `Aerospike.Ctx`
+  `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, `Aerospike.Op.Exp`,
+  and `Aerospike.Ctx`
 - Batch reads: `batch_get/4`
 - Root helpers: `start_link/1`, `child_spec/1`, `close/2`, `key/3`,
   `key_digest/3`
@@ -30,8 +31,9 @@ The library currently proves these command families through the public
   `%Aerospike.Exp{}` via `:filter`.
 - Scan and query builders support expression filtering through
   `Scan.filter/2` and `Query.filter/2`.
-- Query admin/runtime helpers: `create_index/4`, `drop_index/4`,
-  `query_aggregate/6`, `query_execute/4`, `query_udf/6`
+- Query admin/runtime helpers: `create_index/4`, `create_expression_index/5`,
+  `drop_index/4`, `query_aggregate/6`, `query_execute/4`, `query_udf/6`
+- Enterprise XDR filter management through `set_xdr_filter/4`
 - Transactions: `transaction/2`, `transaction/3`, `commit/2`, `abort/2`,
   `txn_status/2`
 
@@ -109,13 +111,16 @@ Reviewers should record the resolved image ids when they run the final gate.
 This library is not yet claiming full Aerospike feature parity.
 
 - `batch_get/4` supports only `bins: :all` and `:timeout`
-- `operate/4` supports the currently admitted tuple/CDT surface, not the full
-  historical operate breadth
+- `operate/4` supports the currently admitted tuple, CDT, and expression
+  operation surface, not the full historical operate breadth
 - scan and query paths support `Scan.filter/2` and `Query.filter/2`
   for server-side expression filters. Queries keep secondary-index predicates in
   `Query.where/2` with `Aerospike.Filter`.
-- broader expression filters, general UDF package management, and a wider
-  policy surface remain deferred
+- expression-backed secondary indexes require Aerospike 8.1 or newer
+- `set_xdr_filter/4` requires an Enterprise server with XDR configured; it can
+  set a `%Aerospike.Exp{}` filter or clear the existing filter with `nil`
+- broader expression-builder families, general UDF package management, and a
+  wider policy surface remain deferred
 - scan/query streams are lazy at the outer `Enumerable` boundary only; the
   current runtime still buffers each node before yielding that node's records
 - `query_all/3` and `query_page/3` require `query.max_records`
@@ -133,6 +138,55 @@ This library is not yet claiming full Aerospike feature parity.
 
 The write-family proof does not yet claim broad TTL semantics beyond the paths
 currently exercised in live validation.
+
+## Expression-Backed Server Features
+
+Expression builders produce `%Aerospike.Exp{}` values that can be used in
+server-side filters, expression-backed indexes, expression operate operations,
+and Enterprise XDR filters.
+
+Create an expression-backed secondary index from an expression source:
+
+```elixir
+{:ok, task} =
+  Aerospike.create_expression_index(:aerospike, "test", "users",
+    Aerospike.Exp.int_bin("age"),
+    name: "users_age_expr_idx",
+    type: :numeric
+  )
+
+:ok = Aerospike.IndexTask.wait(task)
+```
+
+Target that named index from a normal query predicate:
+
+```elixir
+query =
+  Aerospike.Query.new("test", "users")
+  |> Aerospike.Query.where(
+    Aerospike.Filter.range("age", 18, 40)
+    |> Aerospike.Filter.using_index("users_age_expr_idx")
+  )
+```
+
+Read and write expression results through `operate/4`:
+
+```elixir
+Aerospike.operate(:aerospike, key, [
+  Aerospike.Op.Exp.read("projected", Aerospike.Exp.int_bin("count")),
+  Aerospike.Op.Exp.write("computed", Aerospike.Exp.int(99))
+])
+```
+
+Set or clear an Enterprise XDR expression filter:
+
+```elixir
+filter =
+  Aerospike.Exp.eq(Aerospike.Exp.int_bin("active"), Aerospike.Exp.int(1))
+
+:ok = Aerospike.set_xdr_filter(:aerospike, "dc-west", "test", filter)
+:ok = Aerospike.set_xdr_filter(:aerospike, "dc-west", "test", nil)
+```
 
 ## Telemetry Contract
 

@@ -6,6 +6,7 @@ defmodule Aerospike.Command.AdminTest do
   alias Aerospike.Cluster.TableOwner
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.IndexTask
   alias Aerospike.Privilege
   alias Aerospike.Protocol.Message
@@ -105,6 +106,181 @@ defmodule Aerospike.Command.AdminTest do
     assert task.index_name == index_name
     assert :ok = IndexTask.wait(task, timeout: 2_000, poll_interval: 10)
     assert :ok = Aerospike.drop_index(conn, @namespace, index_name)
+  end
+
+  test "create_expression_index/5 encodes an expression source and returns a task", %{
+    conn: conn,
+    fake: fake
+  } do
+    set = "admin_expr_idx_#{System.unique_integer([:positive, :monotonic])}"
+    index_name = "age_expr_idx_#{System.unique_integer([:positive, :monotonic])}"
+
+    command =
+      "sindex-create:namespace=test;set=#{set};indexname=#{index_name};exp=k1ECo2FnZQ==;type=NUMERIC"
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert {:ok, %IndexTask{} = task} =
+             Aerospike.create_expression_index(conn, @namespace, set, Exp.int_bin("age"),
+               name: index_name,
+               type: :numeric
+             )
+
+    assert task.conn == conn
+    assert task.namespace == @namespace
+    assert task.index_name == index_name
+  end
+
+  test "create_expression_index/5 encodes collection type without a bin source", %{
+    conn: conn,
+    fake: fake
+  } do
+    set = "admin_expr_list_idx_#{System.unique_integer([:positive, :monotonic])}"
+    index_name = "age_expr_list_idx_#{System.unique_integer([:positive, :monotonic])}"
+
+    command =
+      "sindex-create:namespace=test;set=#{set};indexname=#{index_name};exp=k1ECo2FnZQ==;indextype=LIST;type=NUMERIC"
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert {:ok, %IndexTask{namespace: @namespace, index_name: ^index_name}} =
+             Aerospike.Command.Admin.create_expression_index(
+               conn,
+               @namespace,
+               set,
+               Exp.int_bin("age"),
+               name: index_name,
+               type: :numeric,
+               collection: :list
+             )
+  end
+
+  test "create_expression_index/5 rejects unsupported server versions before create", %{
+    conn: conn,
+    fake: fake
+  } do
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.0.0.0"})
+
+    assert {:error, %Error{code: :parameter_error, message: message}} =
+             Aerospike.Command.Admin.create_expression_index(
+               conn,
+               @namespace,
+               "users",
+               Exp.int_bin("age"),
+               name: "age_expr_idx",
+               type: :numeric
+             )
+
+    assert message ==
+             "expression-backed secondary indexes require Aerospike server 8.1.0 or newer"
+  end
+
+  test "create_expression_index/5 rejects an empty expression before create", %{
+    conn: conn,
+    fake: fake
+  } do
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+
+    assert {:error, %Error{code: :invalid_argument, message: message}} =
+             Aerospike.Command.Admin.create_expression_index(
+               conn,
+               @namespace,
+               "users",
+               Exp.from_wire(""),
+               name: "age_expr_idx",
+               type: :numeric
+             )
+
+    assert message =~ "%Aerospike.Exp{}"
+    assert message =~ "non-empty wire bytes"
+  end
+
+  test "create_expression_index/5 wraps non-OK server responses", %{
+    conn: conn,
+    fake: fake
+  } do
+    set = "admin_expr_fail_idx_#{System.unique_integer([:positive, :monotonic])}"
+    index_name = "age_expr_fail_idx_#{System.unique_integer([:positive, :monotonic])}"
+
+    command =
+      "sindex-create:namespace=test;set=#{set};indexname=#{index_name};exp=k1ECo2FnZQ==;type=NUMERIC"
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+    Fake.script_info(fake, "A1", [command], %{command => "FAIL: duplicate index"})
+
+    assert {:error, %Error{code: :server_error, message: message}} =
+             Aerospike.Command.Admin.create_expression_index(
+               conn,
+               @namespace,
+               set,
+               Exp.int_bin("age"),
+               name: index_name,
+               type: :numeric
+             )
+
+    assert message == ~s(unexpected info response: "FAIL: duplicate index")
+  end
+
+  test "set_xdr_filter/4 encodes an expression payload", %{conn: conn, fake: fake} do
+    command = "xdr-set-filter:dc=dc-west;namespace=test;exp=kwGTUQKjYmluVQ=="
+
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert :ok =
+             Aerospike.set_xdr_filter(
+               conn,
+               "dc-west",
+               @namespace,
+               Exp.eq(Exp.int_bin("bin"), Exp.int(85))
+             )
+  end
+
+  test "set_xdr_filter/4 uses exp=null when clearing a filter", %{conn: conn, fake: fake} do
+    command = "xdr-set-filter:dc=dc-west;namespace=test;exp=null"
+
+    Fake.script_info(fake, "A1", [command], %{command => "OK"})
+
+    assert :ok = Aerospike.set_xdr_filter(conn, "dc-west", @namespace, nil)
+  end
+
+  test "set_xdr_filter/4 validates identifiers and filters before command execution", %{
+    conn: conn
+  } do
+    assert {:error, %Error{code: :invalid_argument, message: dc_message}} =
+             Aerospike.set_xdr_filter(conn, "", @namespace, nil)
+
+    assert dc_message =~ "datacenter must be a non-empty string"
+
+    assert {:error, %Error{code: :invalid_argument, message: namespace_message}} =
+             Aerospike.set_xdr_filter(conn, "dc-west", "test;users", nil)
+
+    assert namespace_message =~ "namespace cannot contain info-command delimiters"
+
+    assert {:error, %Error{code: :invalid_argument, message: filter_message}} =
+             Aerospike.set_xdr_filter(conn, "dc-west", @namespace, :invalid)
+
+    assert filter_message =~ "XDR filters require nil or a %Aerospike.Exp{}"
+  end
+
+  test "set_xdr_filter/4 rejects empty expression wires before command execution", %{conn: conn} do
+    assert {:error, %Error{code: :invalid_argument, message: message}} =
+             Aerospike.set_xdr_filter(conn, "dc-west", @namespace, Exp.from_wire(""))
+
+    assert message =~ "XDR filters require nil or a %Aerospike.Exp{}"
+    assert message =~ "non-empty wire bytes"
+  end
+
+  test "set_xdr_filter/4 wraps non-OK info responses", %{conn: conn, fake: fake} do
+    command = "xdr-set-filter:dc=dc-west;namespace=test;exp=null"
+
+    Fake.script_info(fake, "A1", [command], %{command => "ERROR::unsupported feature"})
+
+    assert {:error, %Error{code: :server_error, message: message}} =
+             Aerospike.set_xdr_filter(conn, "dc-west", @namespace, nil)
+
+    assert message == ~s(unexpected info response: "ERROR::unsupported feature")
   end
 
   test "index task status treats blank and missing load_pct replies as complete", %{

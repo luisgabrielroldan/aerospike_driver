@@ -3,12 +3,14 @@ defmodule Aerospike.Integration.ExpressionsTest do
 
   @moduletag :integration
 
+  alias Aerospike
   alias Aerospike.Error
   alias Aerospike.Exp
   alias Aerospike.Key
+  alias Aerospike.Op
+  alias Aerospike.Record
   alias Aerospike.Scan
   alias Aerospike.Test.IntegrationSupport
-  alias Aerospike
 
   @host "localhost"
   @port 3_000
@@ -89,6 +91,30 @@ defmodule Aerospike.Integration.ExpressionsTest do
       assert scores == [40, 50, 60]
     after
       Enum.each(keys, &Aerospike.delete(cluster, &1))
+    end
+  end
+
+  test "operate reads and writes expression values", %{cluster: cluster} do
+    set = IntegrationSupport.unique_name("expr_operate")
+    key = IntegrationSupport.unique_key(@namespace, set, "record")
+
+    assert {:ok, _} = Aerospike.put(cluster, key, %{"count" => 42})
+
+    try do
+      assert {:ok, %Record{bins: %{"result" => 42}}} =
+               Aerospike.operate(cluster, key, [
+                 Op.Exp.read("result", Exp.int_bin("count"))
+               ])
+
+      assert {:ok, %Record{}} =
+               Aerospike.operate(cluster, key, [
+                 Op.Exp.write("computed", Exp.int(99))
+               ])
+
+      assert {:ok, %Record{bins: %{"computed" => 99, "count" => 42}}} =
+               Aerospike.get(cluster, key)
+    after
+      _ = Aerospike.delete(cluster, key)
     end
   end
 

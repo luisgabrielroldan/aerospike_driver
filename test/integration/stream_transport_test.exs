@@ -56,12 +56,15 @@ defmodule Aerospike.Integration.StreamTransportTest do
 
     IntegrationSupport.wait_for_tender_ready!(cluster, 5_000)
 
-    IntegrationSupport.assert_eventually("seeded stream proof records become visible to scans", fn ->
-      case Aerospike.scan_count(cluster, Scan.new(@namespace, set)) do
-        {:ok, 128} -> true
-        _ -> false
+    IntegrationSupport.assert_eventually(
+      "seeded stream proof records become visible to scans",
+      fn ->
+        case Aerospike.scan_count(cluster, Scan.new(@namespace, set)) do
+          {:ok, 128} -> true
+          _ -> false
+        end
       end
-    end)
+    )
 
     task_id = StreamProof.random_task_id()
     request = StreamProof.scan_request(conn, @namespace, set, task_id)
