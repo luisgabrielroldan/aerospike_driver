@@ -10,6 +10,7 @@ defmodule Aerospike.Command.AdminTest do
   alias Aerospike.Exp
   alias Aerospike.IndexTask
   alias Aerospike.Privilege
+  alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
   alias Aerospike.RegisterTask
   alias Aerospike.Role
@@ -451,6 +452,43 @@ defmodule Aerospike.Command.AdminTest do
             ]} = Admin.query_users(conn, [])
   end
 
+  test "create_pki_user/4 rejects unsupported server versions before create", %{
+    conn: conn,
+    fake: fake
+  } do
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.0.0.0"})
+
+    assert {:error, %Error{code: :parameter_error, message: message}} =
+             Admin.create_pki_user(conn, "cert-user", ["read"], [])
+
+    assert message == "PKI user creation requires Aerospike server 8.1.0 or newer"
+    assert Fake.last_command_request(fake, "A1") == nil
+  end
+
+  test "create_pki_user/4 checks server version and sends no-password credential", %{
+    conn: conn,
+    fake: fake
+  } do
+    ok_body = <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+    Fake.script_command(fake, "A1", {:ok, ok_body})
+
+    assert :ok = Admin.create_pki_user(conn, "cert-user", ["read"], [])
+
+    credential = Login.no_password_credential()
+    request = Fake.last_command_request(fake, "A1")
+
+    assert {:ok, {2, 2, <<0, 0, 1, 3, _::binary-size(12), fields::binary>>}} =
+             Message.decode(request)
+
+    assert [
+             {0, "cert-user"},
+             {1, ^credential},
+             {10, <<1, 4, "read">>}
+           ] = decode_admin_fields(fields, 3)
+  end
+
   test "create_role sends scoped privileges, whitelist, and quotas", %{conn: conn, fake: fake} do
     privilege = %Privilege{code: :read_write, namespace: "test", set: "demo"}
     ok_body = <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>
@@ -467,6 +505,52 @@ defmodule Aerospike.Command.AdminTest do
                50,
                []
              )
+  end
+
+  test "set_whitelist sends role and omits empty whitelist", %{conn: conn, fake: fake} do
+    ok_body = <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>
+
+    Fake.script_command(fake, "A1", {:ok, ok_body})
+    assert :ok = Admin.set_whitelist(conn, "analyst", ["10.0.0.1", "10.0.0.0/24"], [])
+
+    request = Fake.last_command_request(fake, "A1")
+
+    assert {:ok, {2, 2, <<0, 0, 14, 2, _::binary-size(12), fields::binary>>}} =
+             Message.decode(request)
+
+    assert [
+             {11, "analyst"},
+             {13, "10.0.0.1,10.0.0.0/24"}
+           ] = decode_admin_fields(fields, 2)
+
+    Fake.script_command(fake, "A1", {:ok, ok_body})
+    assert :ok = Admin.set_whitelist(conn, "analyst", [], [])
+
+    clear_request = Fake.last_command_request(fake, "A1")
+
+    assert {:ok, {2, 2, <<0, 0, 14, 1, _::binary-size(12), clear_fields::binary>>}} =
+             Message.decode(clear_request)
+
+    assert [{11, "analyst"}] = decode_admin_fields(clear_fields, 1)
+  end
+
+  test "set_quotas sends role and explicit zero quota fields", %{conn: conn, fake: fake} do
+    ok_body = <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>
+
+    Fake.script_command(fake, "A1", {:ok, ok_body})
+
+    assert :ok = Admin.set_quotas(conn, "analyst", 0, 25, [])
+
+    request = Fake.last_command_request(fake, "A1")
+
+    assert {:ok, {2, 2, <<0, 0, 15, 3, _::binary-size(12), fields::binary>>}} =
+             Message.decode(request)
+
+    assert [
+             {11, "analyst"},
+             {14, <<0::32-big>>},
+             {15, <<25::32-big>>}
+           ] = decode_admin_fields(fields, 3)
   end
 
   test "query_roles reads streamed admin frames into role structs", %{conn: conn, fake: fake} do
@@ -579,6 +663,16 @@ defmodule Aerospike.Command.AdminTest do
   defp admin_frame(result_code, command, fields) when is_list(fields) do
     body = IO.iodata_to_binary([<<0, result_code, command, length(fields), 0::96>>, fields])
     Message.encode(2, 2, body)
+  end
+
+  defp decode_admin_fields(<<>>, 0), do: []
+
+  defp decode_admin_fields(
+         <<size::32-big, id, value::binary-size(size - 1), rest::binary>>,
+         count
+       )
+       when count > 0 do
+    [{id, value} | decode_admin_fields(rest, count - 1)]
   end
 
   defp admin_field(id, value) when is_integer(id) and is_binary(value) do

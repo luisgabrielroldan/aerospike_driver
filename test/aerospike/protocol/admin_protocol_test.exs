@@ -3,6 +3,7 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
 
   alias Aerospike.Privilege
   alias Aerospike.Protocol.Admin
+  alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
   alias Aerospike.Role
   alias Aerospike.User
@@ -20,6 +21,32 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
       assert_command(Admin.encode_drop_role("reader"), 11, 1)
       assert_command(Admin.encode_query_roles(), 16, 0)
       assert_command(Admin.encode_query_roles("reader"), 16, 1)
+    end
+
+    test "encodes PKI user creation as create-user with the no-password credential" do
+      credential = Login.no_password_credential()
+      frame = Admin.encode_create_pki_user("cert-user", credential, ["read", "write"])
+
+      assert {1, 3, fields} = decode_command(frame)
+      assert [{0, "cert-user"}, {1, ^credential}, {10, <<2, 4, "read", 5, "write">>}] = fields
+    end
+
+    test "encodes standalone whitelist mutation and omits an empty whitelist" do
+      frame = Admin.encode_set_whitelist("analyst", ["10.0.0.1", "10.0.0.0/24"])
+
+      assert {14, 2, fields} = decode_command(frame)
+      assert [{11, "analyst"}, {13, "10.0.0.1,10.0.0.0/24"}] = fields
+
+      empty_frame = Admin.encode_set_whitelist("analyst", [])
+
+      assert {14, 1, [{11, "analyst"}]} = decode_command(empty_frame)
+    end
+
+    test "encodes standalone quotas and includes zero quota values" do
+      frame = Admin.encode_set_quotas("analyst", 0, 120)
+
+      assert {15, 3, fields} = decode_command(frame)
+      assert [{11, "analyst"}, {14, <<0::32-big>>}, {15, <<120::32-big>>}] = fields
     end
 
     test "encode all supported privilege codes with optional role fields" do
@@ -226,6 +253,20 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
   defp assert_command(frame, command, field_count) do
     assert {:ok, {2, 2, <<0, 0, ^command, ^field_count, _::binary-size(12), _::binary>>}} =
              Message.decode(frame)
+  end
+
+  defp decode_command(frame) do
+    assert {:ok, {2, 2, <<0, 0, command, field_count, _::binary-size(12), fields::binary>>}} =
+             Message.decode(frame)
+
+    {command, field_count, decode_fields(fields, field_count)}
+  end
+
+  defp decode_fields(<<>>, 0), do: []
+
+  defp decode_fields(<<size::32-big, id, value::binary-size(size - 1), rest::binary>>, count)
+       when count > 0 do
+    [{id, value} | decode_fields(rest, count - 1)]
   end
 
   defp admin_body(result_code, command, fields) when is_list(fields) do

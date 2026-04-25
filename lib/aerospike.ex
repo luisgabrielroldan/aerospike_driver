@@ -17,6 +17,7 @@ defmodule Aerospike do
     * `get/3` reads all bins for a key
     * `get_header/2` reads only record metadata for a key
     * `put/4` writes a bin map
+    * `put_payload/4` sends a caller-built single-record write/delete frame
     * `apply_udf/6` executes one record UDF against one key
     * `register_udf/3`, `register_udf/4`, `remove_udf/2`,
       `remove_udf/3`, and `list_udfs/1` / `list_udfs/2` manage
@@ -24,11 +25,12 @@ defmodule Aerospike do
       handles
     * `truncate/2`, `truncate/3`, and `truncate/4` expose one-node
       operator truncation helpers with explicit namespace and set forms
-    * `create_user/5`, `drop_user/3`, `change_password/4`,
-      `grant_roles/4`, `revoke_roles/4`, `query_user/3`,
+    * `create_user/5`, `create_pki_user/4`, `drop_user/3`,
+      `change_password/4`, `grant_roles/4`, `revoke_roles/4`, `query_user/3`,
       `query_users/2`, `create_role/4`, `drop_role/3`,
-      `grant_privileges/4`, `revoke_privileges/4`, `query_role/3`,
-      and `query_roles/2` expose the enterprise security-admin seam
+      `set_whitelist/4`, `set_quotas/5`, `grant_privileges/4`,
+      `revoke_privileges/4`, `query_role/3`, and `query_roles/2` expose the
+      enterprise security-admin seam
     * `add/4`, `append/4`, and `prepend/4` expose thin unary write
       helpers for common counter and string mutations
     * `metrics_enabled?/1`, `enable_metrics/2`, `disable_metrics/1`,
@@ -123,6 +125,7 @@ defmodule Aerospike do
   alias Aerospike.Command.Get
   alias Aerospike.Command.Operate
   alias Aerospike.Command.Put
+  alias Aerospike.Command.PutPayload
   alias Aerospike.Command.ScanOps
   alias Aerospike.Command.Touch
   alias Aerospike.Command.WriteOp
@@ -1074,6 +1077,29 @@ defmodule Aerospike do
   end
 
   @doc """
+  Creates a PKI-authenticated security user.
+
+  The user is created with a no-password credential and is intended for TLS
+  certificate authentication. This requires Aerospike Enterprise with security
+  enabled, server support for PKI users, and a cluster connection
+  authenticated as a user that holds the `user-admin` privilege.
+
+  Supported opts are:
+
+    * `:timeout`
+    * `:pool_checkout_timeout`
+  """
+  @spec create_pki_user(cluster(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def create_pki_user(cluster, user_name, roles, opts \\ [])
+      when is_binary(user_name) and is_list(roles) and is_list(opts) do
+    with {:ok, role_names} <- validate_role_names(roles),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.create_pki_user(cluster, user_name, role_names, opts)
+    end
+  end
+
+  @doc """
   Drops a security user.
 
   This requires Aerospike Enterprise with security enabled.
@@ -1206,6 +1232,39 @@ defmodule Aerospike do
       when is_binary(role_name) and is_list(opts) do
     with {:ok, _policy} <- Policy.security_admin(opts) do
       Admin.drop_role(cluster, role_name, opts)
+    end
+  end
+
+  @doc """
+  Sets or clears a security role's client-address whitelist.
+
+  Pass an empty list to clear the role's whitelist. This requires Aerospike
+  Enterprise with security enabled.
+  """
+  @spec set_whitelist(cluster(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def set_whitelist(cluster, role_name, whitelist, opts \\ [])
+      when is_binary(role_name) and is_list(opts) do
+    with {:ok, whitelist} <- validate_role_whitelist_value(whitelist),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.set_whitelist(cluster, role_name, whitelist, opts)
+    end
+  end
+
+  @doc """
+  Sets read and write quota limits for a security role.
+
+  Pass `0` for either quota to clear that limit. Quotas require server security
+  configuration with quotas enabled.
+  """
+  @spec set_quotas(cluster(), String.t(), non_neg_integer(), non_neg_integer(), keyword()) ::
+          :ok | {:error, Aerospike.Error.t()}
+  def set_quotas(cluster, role_name, read_quota, write_quota, opts \\ [])
+      when is_binary(role_name) and is_list(opts) do
+    with {:ok, read_quota} <- validate_role_quota_value(read_quota, :read_quota),
+         {:ok, write_quota} <- validate_role_quota_value(write_quota, :write_quota),
+         {:ok, _policy} <- Policy.security_admin(opts) do
+      Admin.set_quotas(cluster, role_name, read_quota, write_quota, opts)
     end
   end
 
@@ -1456,6 +1515,54 @@ defmodule Aerospike do
   def put(cluster, key, bins, opts \\ []) do
     with {:ok, key} <- coerce_key(key) do
       Put.execute(cluster, key, bins, opts)
+    end
+  end
+
+  @doc """
+  Sends a caller-built single-record write/delete frame for `key`.
+
+  This is an advanced escape hatch for tooling, proxy, and replay scenarios.
+  `payload` must be a complete Aerospike wire frame for one write-shaped
+  command. The client uses `key` only to choose the write partition owner,
+  forwards `payload` unchanged, and parses only the standard write response.
+
+  The payload must already contain every server-visible write attribute, such
+  as generation, TTL, send-key, delete flags, filters, and any transaction
+  fields. Passing `:txn` validates the transaction option shape but does not
+  register the key with the transaction monitor or add transaction fields.
+
+  Supported write opts are validated for routing and I/O budgets:
+
+    * `:timeout`
+    * `:max_retries`
+    * `:sleep_between_retries_ms`
+    * `:ttl`
+    * `:generation`
+    * `:filter`
+    * `:txn`
+
+  Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
+  """
+  @spec put_payload(cluster(), Key.key_input(), binary(), keyword()) ::
+          :ok
+          | {:error, Aerospike.Error.t()}
+          | {:error, :cluster_not_ready | :no_master | :unknown_node}
+  def put_payload(cluster, key, payload, opts \\ [])
+      when is_binary(payload) and is_list(opts) do
+    with {:ok, key} <- coerce_key(key) do
+      PutPayload.execute(cluster, key, payload, opts)
+    end
+  end
+
+  @doc """
+  Same as `put_payload/4` but returns `:ok` or raises `Aerospike.Error`.
+  """
+  @spec put_payload!(cluster(), Key.key_input(), binary(), keyword()) :: :ok
+  def put_payload!(cluster, key, payload, opts \\ [])
+      when is_binary(payload) and is_list(opts) do
+    case put_payload(cluster, key, payload, opts) do
+      :ok -> :ok
+      {:error, %Aerospike.Error{} = err} -> raise err
     end
   end
 
@@ -1902,30 +2009,35 @@ defmodule Aerospike do
   end
 
   defp validate_role_whitelist(opts) do
-    case Keyword.get(opts, :whitelist, []) do
-      whitelist when is_list(whitelist) ->
-        if Enum.all?(whitelist, &is_binary/1) do
-          {:ok, whitelist}
-        else
-          invalid_role_whitelist(whitelist)
-        end
+    Keyword.get(opts, :whitelist, [])
+    |> validate_role_whitelist_value()
+  end
 
-      other ->
-        invalid_role_whitelist(other)
+  defp validate_role_whitelist_value(whitelist) when is_list(whitelist) do
+    if Enum.all?(whitelist, &is_binary/1) do
+      {:ok, whitelist}
+    else
+      invalid_role_whitelist(whitelist)
     end
   end
 
-  defp validate_role_quota(opts, key) when key in [:read_quota, :write_quota] do
-    case Keyword.get(opts, key, 0) do
-      quota when is_integer(quota) and quota >= 0 ->
-        {:ok, quota}
+  defp validate_role_whitelist_value(other), do: invalid_role_whitelist(other)
 
-      other ->
-        {:error,
-         Error.from_result_code(:invalid_argument,
-           message: ":#{key} must be a non-negative integer, got: #{inspect(other)}"
-         )}
-    end
+  defp validate_role_quota(opts, key) when key in [:read_quota, :write_quota] do
+    opts
+    |> Keyword.get(key, 0)
+    |> validate_role_quota_value(key)
+  end
+
+  defp validate_role_quota_value(quota, _key) when is_integer(quota) and quota >= 0 do
+    {:ok, quota}
+  end
+
+  defp validate_role_quota_value(other, key) when key in [:read_quota, :write_quota] do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: ":#{key} must be a non-negative integer, got: #{inspect(other)}"
+     )}
   end
 
   defp format_supported_opts([opt]), do: inspect(opt)

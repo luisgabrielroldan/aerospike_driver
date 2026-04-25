@@ -86,6 +86,32 @@ defmodule Aerospike.Integration.SecurityAdminTest do
     end)
   end
 
+  test "PKI user lifecycle works against the secured cluster", %{conn: conn} do
+    user_name = unique_name("sec_pki")
+
+    on_exit(fn ->
+      safe_cleanup(fn -> Aerospike.drop_user(conn, user_name) end)
+    end)
+
+    assert :ok = Aerospike.create_pki_user(conn, user_name, ["read"])
+
+    IntegrationSupport.assert_eventually("created PKI user appears with the initial role", fn ->
+      case Aerospike.query_user(conn, user_name) do
+        {:ok, %User{name: ^user_name, roles: roles}} -> roles == ["read"]
+        _ -> false
+      end
+    end)
+
+    assert :ok = Aerospike.drop_user(conn, user_name)
+
+    IntegrationSupport.assert_eventually("query_users no longer lists the dropped PKI user", fn ->
+      case Aerospike.query_users(conn) do
+        {:ok, users} -> not Enum.any?(users, &(&1.name == user_name))
+        _ -> false
+      end
+    end)
+  end
+
   test "self password change rotates the running cluster auth source", %{conn: conn} do
     user_name = unique_name("sec_rotate")
     initial_password = "pw-#{IntegrationSupport.unique_name("sec_rotate_pw")}"
@@ -183,6 +209,42 @@ defmodule Aerospike.Integration.SecurityAdminTest do
 
         _ ->
           false
+      end
+    end)
+
+    assert :ok = Aerospike.set_whitelist(conn, role_name, ["127.0.0.1", "10.0.0.0/24"])
+
+    IntegrationSupport.assert_eventually("set_whitelist updates the role whitelist", fn ->
+      case Aerospike.query_role(conn, role_name) do
+        {:ok, %Role{whitelist: whitelist}} -> Enum.sort(whitelist) == ["10.0.0.0/24", "127.0.0.1"]
+        _ -> false
+      end
+    end)
+
+    assert :ok = Aerospike.set_whitelist(conn, role_name, [])
+
+    IntegrationSupport.assert_eventually("set_whitelist clears the role whitelist", fn ->
+      case Aerospike.query_role(conn, role_name) do
+        {:ok, %Role{whitelist: []}} -> true
+        _ -> false
+      end
+    end)
+
+    assert :ok = Aerospike.set_quotas(conn, role_name, 25, 50)
+
+    IntegrationSupport.assert_eventually("set_quotas updates the role quotas", fn ->
+      case Aerospike.query_role(conn, role_name) do
+        {:ok, %Role{read_quota: 25, write_quota: 50}} -> true
+        _ -> false
+      end
+    end)
+
+    assert :ok = Aerospike.set_quotas(conn, role_name, 0, 0)
+
+    IntegrationSupport.assert_eventually("set_quotas clears the role quotas", fn ->
+      case Aerospike.query_role(conn, role_name) do
+        {:ok, %Role{read_quota: 0, write_quota: 0}} -> true
+        _ -> false
       end
     end)
 

@@ -25,7 +25,14 @@ defmodule Aerospike.Command.UnaryCommand do
   alias Aerospike.Runtime.Executor
 
   @enforce_keys [:name, :dispatch, :build_request, :parse_response]
-  defstruct [:name, :dispatch, :build_request, :parse_response, retry_transport?: true]
+  defstruct [
+    :name,
+    :dispatch,
+    :build_request,
+    :parse_response,
+    retry_transport?: true,
+    prepare_transport_opts: nil
+  ]
 
   @type hook_input :: term()
   @type dispatch_kind :: :read | :write
@@ -43,6 +50,7 @@ defmodule Aerospike.Command.UnaryCommand do
   @type checkout_fun :: Executor.checkout_fun()
   @type build_request_fun :: (hook_input() -> iodata())
   @type parse_response_fun :: (body :: binary(), hook_input() -> command_result() | Error.t())
+  @type prepare_transport_opts_fun :: (keyword() -> keyword())
   @type dispatch_ctx :: %{
           required(:tables) => term(),
           required(:tender) => GenServer.server(),
@@ -60,6 +68,7 @@ defmodule Aerospike.Command.UnaryCommand do
           dispatch: dispatch_kind(),
           build_request: build_request_fun(),
           parse_response: parse_response_fun(),
+          prepare_transport_opts: prepare_transport_opts_fun() | nil,
           retry_transport?: boolean()
         }
 
@@ -75,6 +84,7 @@ defmodule Aerospike.Command.UnaryCommand do
       dispatch: validate_dispatch!(dispatch),
       build_request: Keyword.fetch!(opts, :build_request),
       parse_response: Keyword.fetch!(opts, :parse_response),
+      prepare_transport_opts: Keyword.get(opts, :prepare_transport_opts),
       retry_transport?: Keyword.get(opts, :retry_transport, true)
     }
   end
@@ -149,7 +159,12 @@ defmodule Aerospike.Command.UnaryCommand do
     %__MODULE__{build_request: build_request, parse_response: parse_response} = command
     request = build_request.(input)
 
-    case transport.command(conn, request, deadline_ms, command_opts) do
+    case transport.command(
+           conn,
+           request,
+           deadline_ms,
+           prepare_transport_opts(command, command_opts)
+         ) do
       {:ok, body} ->
         result = normalize_result(parse_response.(body, input))
         {result, checkin_value(result, conn)}
@@ -161,6 +176,13 @@ defmodule Aerospike.Command.UnaryCommand do
   end
 
   defp retry_transport?(%__MODULE__{retry_transport?: retry_transport?}), do: retry_transport?
+
+  defp prepare_transport_opts(%__MODULE__{prepare_transport_opts: nil}, opts), do: opts
+
+  defp prepare_transport_opts(%__MODULE__{prepare_transport_opts: fun}, opts)
+       when is_function(fun, 1) do
+    fun.(opts)
+  end
 
   defp normalize_result({:ok, _} = ok), do: ok
   defp normalize_result({:error, %Error{}} = err), do: err

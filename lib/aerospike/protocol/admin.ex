@@ -18,6 +18,8 @@ defmodule Aerospike.Protocol.Admin do
   @drop_role 11
   @grant_privileges 12
   @revoke_privileges 13
+  @set_whitelist 14
+  @set_quotas 15
   @query_roles 16
 
   @user 0
@@ -63,6 +65,12 @@ defmodule Aerospike.Protocol.Admin do
       encode_field(@password, credential),
       encode_roles_field(roles)
     ])
+  end
+
+  @spec encode_create_pki_user(String.t(), binary(), [String.t()]) :: binary()
+  def encode_create_pki_user(user, no_password_credential, roles)
+      when is_binary(user) and is_binary(no_password_credential) and is_list(roles) do
+    encode_create_user(user, no_password_credential, roles)
   end
 
   @spec encode_drop_user(String.t()) :: binary()
@@ -150,6 +158,27 @@ defmodule Aerospike.Protocol.Admin do
       {:ok,
        encode_command(@revoke_privileges, [encode_field(@role, role_name), privileges_field])}
     end
+  end
+
+  @spec encode_set_whitelist(String.t(), [String.t()]) :: binary()
+  def encode_set_whitelist(role_name, whitelist)
+      when is_binary(role_name) and is_list(whitelist) do
+    fields =
+      [encode_field(@role, role_name)]
+      |> maybe_append(whitelist != [], encode_whitelist_field(whitelist))
+
+    encode_command(@set_whitelist, fields)
+  end
+
+  @spec encode_set_quotas(String.t(), non_neg_integer(), non_neg_integer()) :: binary()
+  def encode_set_quotas(role_name, read_quota, write_quota)
+      when is_binary(role_name) and is_integer(read_quota) and read_quota >= 0 and
+             is_integer(write_quota) and write_quota >= 0 do
+    encode_command(@set_quotas, [
+      encode_field(@role, role_name),
+      encode_uint32_field(@read_quota, read_quota),
+      encode_uint32_field(@write_quota, write_quota)
+    ])
   end
 
   @spec encode_query_roles() :: binary()

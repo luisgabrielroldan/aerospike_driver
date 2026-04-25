@@ -18,6 +18,7 @@ defmodule Aerospike.Command.Admin do
   alias Aerospike.UDF
   alias Aerospike.User
 
+  @pki_user_min {8, 1, 0, 0}
   @sindex_modern_min {8, 1, 0, 0}
 
   @spec info(GenServer.server(), String.t(), keyword()) ::
@@ -124,6 +125,26 @@ defmodule Aerospike.Command.Admin do
       when is_binary(user_name) and is_binary(password) and is_list(roles) and is_list(opts) do
     wire = AdminProtocol.encode_create_user(user_name, Login.hash_password(password), roles)
     execute_security_command(cluster, wire, opts)
+  end
+
+  @spec create_pki_user(GenServer.server(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def create_pki_user(cluster, user_name, roles, opts)
+      when is_binary(user_name) and is_list(roles) and is_list(opts) do
+    with {:ok, security_policy} <- Policy.security_admin(opts),
+         {:ok, info_policy} <- Policy.admin_info(opts),
+         {:ok, node_name, handle, transport} <- pick_node(cluster),
+         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, info_policy),
+         :ok <- ensure_pki_user_supported(server_version),
+         wire <-
+           AdminProtocol.encode_create_pki_user(
+             user_name,
+             Login.no_password_credential(),
+             roles
+           ),
+         {:ok, body} <- checkout_admin(node_name, handle, transport, wire, security_policy) do
+      parse_admin_result(body)
+    end
   end
 
   @spec drop_user(GenServer.server(), String.t(), keyword()) :: :ok | {:error, Error.t()}
@@ -243,6 +264,35 @@ defmodule Aerospike.Command.Admin do
   def drop_role(cluster, role_name, opts)
       when is_binary(role_name) and is_list(opts) do
     execute_security_command(cluster, AdminProtocol.encode_drop_role(role_name), opts)
+  end
+
+  @spec set_whitelist(GenServer.server(), String.t(), [String.t()], keyword()) ::
+          :ok | {:error, Error.t()}
+  def set_whitelist(cluster, role_name, whitelist, opts)
+      when is_binary(role_name) and is_list(whitelist) and is_list(opts) do
+    execute_security_command(
+      cluster,
+      AdminProtocol.encode_set_whitelist(role_name, whitelist),
+      opts
+    )
+  end
+
+  @spec set_quotas(
+          GenServer.server(),
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          keyword()
+        ) ::
+          :ok | {:error, Error.t()}
+  def set_quotas(cluster, role_name, read_quota, write_quota, opts)
+      when is_binary(role_name) and is_integer(read_quota) and read_quota >= 0 and
+             is_integer(write_quota) and write_quota >= 0 and is_list(opts) do
+    execute_security_command(
+      cluster,
+      AdminProtocol.encode_set_quotas(role_name, read_quota, write_quota),
+      opts
+    )
   end
 
   @spec grant_privileges(GenServer.server(), String.t(), [Privilege.t()], keyword()) ::
@@ -524,6 +574,17 @@ defmodule Aerospike.Command.Admin do
       {:error,
        Error.from_result_code(:parameter_error,
          message: "expression-backed secondary indexes require Aerospike server 8.1.0 or newer"
+       )}
+    end
+  end
+
+  defp ensure_pki_user_supported(server_version) when is_tuple(server_version) do
+    if server_version >= @pki_user_min do
+      :ok
+    else
+      {:error,
+       Error.from_result_code(:parameter_error,
+         message: "PKI user creation requires Aerospike server 8.1.0 or newer"
        )}
     end
   end

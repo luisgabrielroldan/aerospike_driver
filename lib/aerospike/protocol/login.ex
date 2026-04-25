@@ -110,6 +110,15 @@ defmodule Aerospike.Protocol.Login do
   end
 
   @doc """
+  Returns the internal credential Aerospike expects for PKI users that do not
+  have a password.
+  """
+  @spec no_password_credential() :: binary()
+  def no_password_credential do
+    hash_password("nopassword")
+  end
+
+  @doc """
   Encodes an internal-auth login request. `hashed_password` must already be
   the bcrypt hash produced by `hash_password/1`; the server rejects a raw
   password here.

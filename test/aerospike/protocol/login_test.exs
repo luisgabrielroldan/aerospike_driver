@@ -20,6 +20,13 @@ defmodule Aerospike.Protocol.LoginTest do
     test "distinct passwords produce distinct hashes" do
       refute Login.hash_password("left") == Login.hash_password("right")
     end
+
+    test "exposes the no-password credential used by PKI users" do
+      assert Login.no_password_credential() == Login.hash_password("nopassword")
+
+      assert Login.no_password_credential() ==
+               "$2a$10$7EqJtq98hPqEX7fNZaFWoOePA2sZy..tlOF99W2N0g5KZ3dLaw8WO"
+    end
   end
 
   describe "encode_login_internal/2" do

@@ -16,6 +16,8 @@ The library currently proves these command families through the public
 `Aerospike` entry point:
 
 - Unary CRUD: `get/3`, `put/4`, `exists/2`, `touch/2`, `delete/2`
+- Raw single-record write/delete payloads: `put_payload/4` and
+  `put_payload!/4`
 - Unary operate: `operate/4` with the currently admitted write/read subset plus
   `Aerospike.Op`, `Aerospike.Op.List`, `Aerospike.Op.Map`, `Aerospike.Op.Exp`,
   `Aerospike.Op.Bit`, `Aerospike.Op.HLL`, and `Aerospike.Ctx`
@@ -38,6 +40,8 @@ The library currently proves these command families through the public
 - Typed geo values through `Aerospike.Geo` and geo secondary-index filters
   through `Aerospike.Filter.geo_within/2` and `Aerospike.Filter.geo_contains/2`
 - Enterprise XDR filter management through `set_xdr_filter/4`
+- Enterprise security administration through user, PKI user, role, whitelist,
+  quota, and privilege helpers
 - Transactions: `transaction/2`, `transaction/3`, `commit/2`, `abort/2`,
   `txn_status/2`
 
@@ -79,6 +83,27 @@ Required startup options are `:name`, `:transport`, `:hosts`, and
 are validated synchronously by `Aerospike.start_link/1` before the cluster
 runtime boots. Use `Aerospike.Cluster.ready?/1` to observe when the published
 cluster view is ready to route commands.
+
+## Raw Payload Writes
+
+`put_payload/4` is an advanced escape hatch for callers that already have a
+complete Aerospike single-record write or delete frame.
+
+```elixir
+:ok = Aerospike.put_payload(:aerospike, key, payload)
+:ok = Aerospike.put_payload!(:aerospike, key, payload)
+```
+
+The client uses `key` only for partition routing. It forwards `payload` bytes
+unchanged and parses only the standard write response. The payload must already
+contain every server-visible write attribute, including generation checks, TTL,
+send-key state, delete flags, filters, and any transaction fields.
+
+Policy options are still validated for routing and I/O budgets, but they do
+not rewrite the raw frame. Passing `:txn` validates the transaction option
+shape without registering the key with the transaction monitor and without
+injecting MRT fields. Callers that need transaction-aware raw frames must embed
+the required transaction protocol fields themselves.
 
 ## Batch APIs
 
@@ -349,6 +374,37 @@ filter =
 :ok = Aerospike.set_xdr_filter(:aerospike, "dc-west", "test", filter)
 :ok = Aerospike.set_xdr_filter(:aerospike, "dc-west", "test", nil)
 ```
+
+## Security Administration
+
+Security administration helpers require Aerospike Enterprise with security
+enabled and a cluster connection authenticated with the corresponding admin
+privileges.
+
+Create a certificate-authenticated user by assigning roles without storing a
+password credential:
+
+```elixir
+:ok = Aerospike.create_pki_user(:aerospike, "svc-ingest", ["read-write"])
+```
+
+Update role network access and throughput limits independently from role
+creation:
+
+```elixir
+:ok =
+  Aerospike.set_whitelist(:aerospike, "read-write", [
+    "10.0.0.0/8",
+    "192.168.10.20"
+  ])
+
+:ok = Aerospike.set_whitelist(:aerospike, "read-write", [])
+:ok = Aerospike.set_quotas(:aerospike, "read-write", 5_000, 2_500)
+:ok = Aerospike.set_quotas(:aerospike, "read-write", 0, 0)
+```
+
+An empty whitelist clears the role whitelist. A zero read or write quota clears
+that limit when the server is configured to support quotas.
 
 ## Telemetry Contract
 

@@ -291,6 +291,8 @@ defmodule Aerospike.PublicApiTest do
     Fake.script_command_stream(fake, "A1", {:ok, user_query})
 
     assert :ok = Aerospike.create_user(conn, "ada", "secret", ["read"])
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+    assert :ok = Aerospike.create_pki_user(conn, "cert-ada", ["read"])
     assert :ok = Aerospike.grant_roles(conn, "ada", ["read-write"])
     assert :ok = Aerospike.revoke_roles(conn, "ada", ["read"])
 
@@ -309,10 +311,21 @@ defmodule Aerospike.PublicApiTest do
 
     assert message =~ "roles must be a list of strings"
 
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: pki_roles_message}} =
+             Aerospike.create_pki_user(conn, "cert-ada", [:read])
+
+    assert pki_roles_message =~ "roles must be a list of strings"
+
     assert {:error, %Aerospike.Error{code: :invalid_argument, message: opt_message}} =
              Aerospike.query_users(conn, bogus: true)
 
     assert opt_message =~
+             "security admin commands support only :timeout and :pool_checkout_timeout"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: pki_opt_message}} =
+             Aerospike.create_pki_user(conn, "cert-ada", ["read"], bogus: true)
+
+    assert pki_opt_message =~
              "security admin commands support only :timeout and :pool_checkout_timeout"
   end
 
@@ -324,6 +337,8 @@ defmodule Aerospike.PublicApiTest do
     privilege = %Privilege{code: :read, namespace: "test", set: "reports"}
     extra_privilege = %Privilege{code: :read_write, namespace: "test", set: "reports_rw"}
 
+    Fake.script_command(fake, "A1", {:ok, ok_body})
+    Fake.script_command(fake, "A1", {:ok, ok_body})
     Fake.script_command(fake, "A1", {:ok, ok_body})
     Fake.script_command(fake, "A1", {:ok, ok_body})
     Fake.script_command(fake, "A1", {:ok, ok_body})
@@ -352,6 +367,8 @@ defmodule Aerospike.PublicApiTest do
                write_quota: 200
              )
 
+    assert :ok = Aerospike.set_whitelist(conn, "analyst", [])
+    assert :ok = Aerospike.set_quotas(conn, "analyst", 0, 0)
     assert :ok = Aerospike.grant_privileges(conn, "analyst", [extra_privilege])
     assert :ok = Aerospike.revoke_privileges(conn, "analyst", [extra_privilege])
 
@@ -377,6 +394,33 @@ defmodule Aerospike.PublicApiTest do
 
     assert opt_message =~
              "Aerospike.create_role/4 supports only :whitelist, :read_quota, :write_quota, :timeout, and :pool_checkout_timeout options"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: whitelist_message}} =
+             Aerospike.set_whitelist(conn, "analyst", [:local])
+
+    assert whitelist_message =~ ":whitelist must be a list of strings"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: quota_message}} =
+             Aerospike.set_quotas(conn, "analyst", -1, 0)
+
+    assert quota_message =~ ":read_quota must be a non-negative integer"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: write_quota_message}} =
+             Aerospike.set_quotas(conn, "analyst", 0, "fast")
+
+    assert write_quota_message =~ ":write_quota must be a non-negative integer"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: role_opt_message}} =
+             Aerospike.set_whitelist(conn, "analyst", [], bogus: true)
+
+    assert role_opt_message =~
+             "security admin commands support only :timeout and :pool_checkout_timeout"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: quota_opt_message}} =
+             Aerospike.set_quotas(conn, "analyst", 0, 0, bogus: true)
+
+    assert quota_opt_message =~
+             "security admin commands support only :timeout and :pool_checkout_timeout"
   end
 
   test "public scan and query wrappers return records, counts, pages, and task handles", %{
