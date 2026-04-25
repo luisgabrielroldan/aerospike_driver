@@ -58,8 +58,9 @@ defmodule Aerospike do
       UDF calls while returning one `%Aerospike.BatchResult{}` per input
     * `child_spec/1`, `close/2`, `key/3`, and `key_digest/3` round out
       the root lifecycle and key-construction boundary
-    * `info/3`, `nodes/1`, and `node_names/1` expose one-node operator
-      reads over the published cluster view
+    * `info/3`, `info_node/4`, `nodes/1`, and `node_names/1` expose
+      one-node operator reads over the published cluster view; `info_node/4`
+      targets one named active node discovered from `node_names/1` or `nodes/1`
     * `set_xdr_filter/4` sets or clears Enterprise XDR expression filters
       through a one-node info command
     * `query_stream!/3`, `query_all/3`, `query_count/3`, and
@@ -75,7 +76,8 @@ defmodule Aerospike do
       scan/runtime setup, again with lazy outer streams and node-buffered
       record delivery
     * scan/query helpers that already support node targeting accept
-      `node: node_name` in `opts`
+      `node: node_name` in `opts`; discover names with `node_names/1` or
+      `nodes/1`
 
   Quick-start shape:
 
@@ -593,8 +595,8 @@ defmodule Aerospike do
   The returned stream is lazy at the Enumerable boundary, but the current
   runtime drains each node response fully before yielding that node's
   records downstream. It does not promise frame-by-frame backpressure or
-  an explicit cancellation API. Node-targeted scans pass `node: node_name`
-  in `opts`.
+  an explicit cancellation API. Pass `node: node_name` in `opts` to scan one
+  active node, using a name returned by `node_names/1` or `nodes/1`.
   """
   @spec scan_stream(cluster(), Scan.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
@@ -623,7 +625,8 @@ defmodule Aerospike do
 
   Like `scan_stream/3`, this is lazy only at the outer Enumerable boundary.
   The current runtime buffers each node's query results before yielding
-  them to the caller. Node-targeted queries pass `node: node_name` in `opts`.
+  them to the caller. Pass `node: node_name` in `opts` to query one active
+  node, using a name returned by `node_names/1` or `nodes/1`.
   """
   @spec query_stream(cluster(), Query.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
@@ -645,7 +648,8 @@ defmodule Aerospike do
   @doc """
   Eagerly collects scan records into a list.
 
-  Node-targeted scans pass `node: node_name` in `opts`.
+  Pass `node: node_name` in `opts` to scan one active node, using a name
+  returned by `node_names/1` or `nodes/1`.
   """
   @spec scan_all(cluster(), Scan.t(), keyword()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
@@ -663,7 +667,8 @@ defmodule Aerospike do
 
   `query.max_records` must be set because this helper advances through
   the query in repeated page-sized steps until the cursor is exhausted.
-  Node-targeted queries pass `node: node_name` in `opts`.
+  Pass `node: node_name` in `opts` to query one active node, using a name
+  returned by `node_names/1` or `nodes/1`.
   """
   @spec query_all(cluster(), Query.t(), keyword()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
@@ -701,7 +706,8 @@ defmodule Aerospike do
   @doc """
   Counts scan matches without materializing the records.
 
-  Node-targeted scans pass `node: node_name` in `opts`.
+  Pass `node: node_name` in `opts` to count records from one active node,
+  using a name returned by `node_names/1` or `nodes/1`.
   """
   @spec scan_count(cluster(), Scan.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
@@ -718,8 +724,9 @@ defmodule Aerospike do
   Counts query matches without materializing the records.
 
   This still walks the query stream and counts client-side. It is not a
-  separate server-side count primitive. Node-targeted queries pass
-  `node: node_name` in `opts`.
+  separate server-side count primitive. Pass `node: node_name` in `opts` to
+  count records from one active node, using a name returned by `node_names/1`
+  or `nodes/1`.
   """
   @spec query_count(cluster(), Query.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
@@ -746,6 +753,30 @@ defmodule Aerospike do
   def info(cluster, command, opts \\ [])
       when is_binary(command) and is_list(opts) do
     Admin.info(cluster, command, opts)
+  end
+
+  @doc """
+  Sends one info command to the named active cluster node and returns that
+  node's reply.
+
+  `node_name` must be one of the names returned by `node_names/1` or
+  `nodes/1`. Stale or unknown names return an
+  `%Aerospike.Error{code: :invalid_node}` instead of falling back to a
+  different node.
+
+      {:ok, [node_name | _]} = Aerospike.node_names(:aerospike)
+      {:ok, response} = Aerospike.info_node(:aerospike, node_name, "statistics")
+
+  Supported options:
+
+    * `:pool_checkout_timeout` — non-negative pool checkout timeout in
+      milliseconds.
+  """
+  @spec info_node(cluster(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Aerospike.Error.t()}
+  def info_node(cluster, node_name, command, opts \\ [])
+      when is_binary(node_name) and is_binary(command) and is_list(opts) do
+    Admin.info_node(cluster, node_name, command, opts)
   end
 
   @doc """
@@ -986,7 +1017,8 @@ defmodule Aerospike do
   distributed across active nodes, so a page is resumable but not
   guaranteed to contain exactly `query.max_records` records. The cursor
   resumes partition progress from the prior page; it is not a stable
-  snapshot token. Node-targeted queries pass `node: node_name` in `opts`.
+  snapshot token. Pass `node: node_name` in `opts` to collect a page from one
+  active node, using a name returned by `node_names/1` or `nodes/1`.
   """
   @spec query_page(cluster(), Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Aerospike.Error.t()}
@@ -1341,7 +1373,8 @@ defmodule Aerospike do
   Starts a background query write job that applies the given operations.
 
   This returns a pollable task handle, not a resumable record stream.
-  Node-targeted jobs pass `node: node_name` in `opts`.
+  Pass `node: node_name` in `opts` to start the job on one active node,
+  using a name returned by `node_names/1` or `nodes/1`.
   """
   @spec query_execute(cluster(), Query.t(), list(), keyword()) ::
           {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
@@ -1354,7 +1387,8 @@ defmodule Aerospike do
   Starts a background query UDF job.
 
   This returns a pollable task handle, not a resumable record stream.
-  Node-targeted jobs pass `node: node_name` in `opts`.
+  Pass `node: node_name` in `opts` to start the job on one active node,
+  using a name returned by `node_names/1` or `nodes/1`.
   """
   @spec query_udf(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}

@@ -37,6 +37,8 @@ The library currently proves these command families through the public
   `Scan.filter/2` and `Query.filter/2`.
 - Query admin/runtime helpers: `create_index/4`, `create_expression_index/5`,
   `drop_index/4`, `query_aggregate/6`, `query_execute/4`, `query_udf/6`
+- Operator info helpers: `info/3`, `info_node/4`, `nodes/1`, and
+  `node_names/1`
 - Typed geo values through `Aerospike.Geo` and geo secondary-index filters
   through `Aerospike.Filter.geo_within/2` and `Aerospike.Filter.geo_contains/2`
 - Enterprise XDR filter management through `set_xdr_filter/4`
@@ -312,7 +314,11 @@ This library is not yet claiming full Aerospike feature parity.
   current runtime still buffers each node before yielding that node's records
 - `query_all/3` and `query_page/3` require `query.max_records`
 - scan/query helpers that support node targeting take `node: node_name` in
-  `opts` instead of separate `_node` function families
+  `opts` instead of separate `_node` function families. Use `node_names/1` or
+  `nodes/1` to discover valid names.
+- `info_node/4` is the explicit node-pinned root helper for operator info
+  commands. It targets one named active node and returns an
+  `%Aerospike.Error{}` for stale or unknown names.
 - the older bare scan names (`stream!/3`, `all/3`, `all!/3`, `count/3`,
   `count!/3`) remain as deprecated compatibility aliases for one transition
   window

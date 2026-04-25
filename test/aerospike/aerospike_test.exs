@@ -83,6 +83,46 @@ defmodule Aerospike.PublicApiTest do
            ]
   end
 
+  test "info_node targets a named active node and preserves stale node errors", %{
+    conn: conn,
+    fake: fake
+  } do
+    Fake.script_info(fake, "B1", ["statistics"], %{"statistics" => "objects=99"})
+
+    assert {:ok, "objects=99"} = Aerospike.info_node(conn, "B1", "statistics")
+
+    assert {:error, %Aerospike.Error{code: :invalid_node, node: "missing"}} =
+             Aerospike.info_node(conn, "missing", "statistics")
+  end
+
+  test "scan and query node targeting does not expose duplicate root helpers" do
+    absent_helpers = [
+      {:query_stream_node, 4},
+      {:query_stream_node!, 4},
+      {:query_all_node, 4},
+      {:query_all_node!, 4},
+      {:query_count_node, 4},
+      {:query_count_node!, 4},
+      {:query_page_node, 4},
+      {:query_page_node!, 4},
+      {:query_execute_node, 5},
+      {:query_execute_node!, 5},
+      {:query_udf_node, 7},
+      {:query_udf_node!, 7},
+      {:scan_stream_node, 4},
+      {:scan_stream_node!, 4},
+      {:scan_all_node, 4},
+      {:scan_all_node!, 4},
+      {:scan_count_node, 4},
+      {:scan_count_node!, 4},
+      {:scan_page_node, 4}
+    ]
+
+    for {name, arity} <- absent_helpers do
+      refute function_exported?(Aerospike, name, arity), "#{name}/#{arity} should not be public"
+    end
+  end
+
   test "metrics and warm-up helpers stay explicit and opt-in", %{conn: conn} do
     refute Aerospike.metrics_enabled?(conn)
 

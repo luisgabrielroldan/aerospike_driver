@@ -8,7 +8,8 @@ defmodule Aerospike.Scan do
   Scan execution lives in explicit facade calls such as
   `Aerospike.scan_stream/3`, `Aerospike.scan_all/3`, and
   `Aerospike.scan_count/3`. Node-targeted execution uses `node: node_name`
-  in facade opts where supported.
+  in facade opts where supported; discover valid names with
+  `Aerospike.node_names/1` or `Aerospike.nodes/1`.
 
   Filters are server-side expressions. Append expressions with
   `filter/2` to keep returned records scoped by
