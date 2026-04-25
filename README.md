@@ -36,7 +36,8 @@ The library currently proves these command families through the public
 - Scan and query builders support expression filtering through
   `Scan.filter/2` and `Query.filter/2`.
 - Query admin/runtime helpers: `create_index/4`, `create_expression_index/5`,
-  `drop_index/4`, `query_aggregate/6`, `query_execute/4`, `query_udf/6`
+  `drop_index/4`, `query_aggregate/6`, `query_aggregate_result/6`,
+  `query_aggregate_result!/6`, `query_execute/4`, `query_udf/6`
 - Operator info helpers: `info/3`, `info_node/4`, `nodes/1`, and
   `node_names/1`
 - Typed geo values through `Aerospike.Geo` and geo secondary-index filters
@@ -261,6 +262,79 @@ query =
 {:ok, records} = Aerospike.query_all(:aerospike, query)
 ```
 
+## Aggregate Queries
+
+Aggregate queries have two public result shapes.
+
+Use `query_aggregate/6` when callers need the server-emitted aggregate values
+directly. It returns `{:ok, stream}` and the stream yields the partial values
+decoded from each server response:
+
+```elixir
+query =
+  Aerospike.Query.new("test", "users")
+  |> Aerospike.Query.where(Aerospike.Filter.range("age", 18, 65))
+
+{:ok, partials} =
+  Aerospike.query_aggregate(:aerospike, query, "user_stats", "sum_age", ["age"])
+
+total = partials |> Enum.to_list() |> Enum.sum()
+```
+
+Use `query_aggregate_result/6` when the caller wants one finalized value. It
+runs the same server aggregate query, drains the server partial stream once,
+and locally executes the Lua package's client-side stream finalization over
+those values:
+
+```elixir
+{:ok, task} =
+  Aerospike.register_udf(:aerospike, "priv/udf/user_stats.lua", "user_stats.lua")
+
+:ok = Aerospike.RegisterTask.wait(task)
+
+{:ok, total} =
+  Aerospike.query_aggregate_result(
+    :aerospike,
+    query,
+    "user_stats",
+    "sum_age",
+    ["age"],
+    source_path: "priv/udf/user_stats.lua",
+    timeout: 10_000
+  )
+
+total = Aerospike.query_aggregate_result!(
+  :aerospike,
+  query,
+  "user_stats",
+  "sum_age",
+  ["age"],
+  source_path: "priv/udf/user_stats.lua"
+)
+```
+
+The local Lua source is required even when the package has already been
+registered on the server. Pass exactly one of `source: lua_source` or
+`source_path: path`; the client does not derive a local path from the package
+name and does not fetch source from the server. Missing source, both source
+options, unreadable files, unsupported local arguments, or `node: node_name`
+return `{:error, %Aerospike.Error{code: :invalid_argument}}` before the server
+query is opened.
+
+The local reducer runs in a fresh bounded Lua state. The existing `:timeout`
+option bounds local execution when it is a positive integer; otherwise a finite
+default is used. Supported local stream helpers are `map`, `filter`,
+`aggregate`, and `reduce`, with logging helpers treated as no-ops. Filesystem,
+OS, package loading, dynamic loading, debug access, `require`, `groupby`,
+`list`, `bytes`, and record/database mutation or lookup helpers fail
+explicitly with `%Aerospike.Error{code: :query_generic}`.
+
+Values crossing the local Lua boundary are limited to `nil`, booleans,
+integers, floats, binaries, lists, and maps with scalar keys. Blob, geo, raw,
+HLL, and other unsupported values fail instead of being coerced. Empty
+finalization returns `{:ok, nil}`; multiple final values return
+`{:error, %Aerospike.Error{code: :query_generic}}`.
+
 ## Runtime Model
 
 This client is deliberately OTP-first. These runtime modules are internal
@@ -305,6 +379,9 @@ This library is not yet claiming full Aerospike feature parity.
 - scan and query paths support `Scan.filter/2` and `Query.filter/2`
   for server-side expression filters. Queries keep secondary-index predicates in
   `Query.where/2` with `Aerospike.Filter`.
+- `query_aggregate/6` exposes server-emitted aggregate partial values;
+  `query_aggregate_result/6` is the separate finalized aggregate API and
+  requires local Lua source through `:source` or `:source_path`
 - expression-backed secondary indexes require Aerospike 8.1 or newer
 - `set_xdr_filter/4` requires an Enterprise server with XDR configured; it can
   set a `%Aerospike.Exp{}` filter or clear the existing filter with `nil`

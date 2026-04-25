@@ -63,8 +63,9 @@ defmodule Aerospike do
       targets one named active node discovered from `node_names/1` or `nodes/1`
     * `set_xdr_filter/4` sets or clears Enterprise XDR expression filters
       through a one-node info command
-    * `query_stream!/3`, `query_all/3`, `query_count/3`, and
-      `query_aggregate/6` run secondary-index queries through the same
+    * `query_stream!/3`, `query_all/3`, `query_count/3`,
+      `query_aggregate/6`, and `query_aggregate_result/6` run
+      secondary-index queries through the same
       node-preparation pipeline, with lazy outer streams but
       node-buffered record delivery
       and optional `%Aerospike.Exp{}` filters through `Query.filter/2`
@@ -1361,12 +1362,87 @@ defmodule Aerospike do
   @doc """
   Streams aggregate query values over the same node-buffered query
   runtime used by `query_stream/3`.
+
+  The returned stream yields the aggregate values emitted by the server. It
+  does not run local Lua finalization. Use `query_aggregate_result/6` when
+  the caller wants one locally finalized aggregate result.
   """
   @spec query_aggregate(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
   def query_aggregate(cluster, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
     ScanOps.query_aggregate(cluster, query, package, function, args, opts)
+  end
+
+  @doc """
+  Returns one finalized aggregate query result.
+
+  This runs the same server aggregate query as `query_aggregate/6`, then
+  locally executes the package's Lua stream finalization over the
+  server-emitted aggregate values. Use `query_aggregate/6` when callers need
+  the partial server values themselves.
+
+  The local Lua package source must be supplied with exactly one of:
+
+    * `:source` - inline Lua source as a binary
+    * `:source_path` - readable local Lua source path
+
+  Source loading is local-only and separate from server UDF registration. The
+  client does not derive a local path from `package` and does not fetch source
+  from the server. Source option errors, unsupported local argument values, and
+  `node: node_name` fail with `{:error, %Aerospike.Error{code:
+  :invalid_argument}}` before opening the server query stream.
+
+  The local reducer runs in a fresh bounded Lua state. The existing `:timeout`
+  option bounds local execution when it is a positive integer; otherwise a
+  finite default is used. Supported local stream helpers are `map`, `filter`,
+  `aggregate`, and `reduce`. Logging helpers are no-ops. Filesystem, OS,
+  package loading, dynamic loading, debug access, `require`, `groupby`, `list`,
+  `bytes`, and record/database mutation or lookup helpers fail explicitly with
+  `%Aerospike.Error{code: :query_generic}`.
+
+  Values crossing the local Lua boundary are limited to `nil`, booleans,
+  integers, floats, binaries, lists, and maps with scalar keys. Blob, geo, raw,
+  HLL, and other unsupported values fail instead of being coerced.
+
+  Example:
+
+      query =
+        Aerospike.Query.new("test", "users")
+        |> Aerospike.Query.where(Aerospike.Filter.range("age", 18, 65))
+
+      Aerospike.query_aggregate_result(
+        :aerospike,
+        query,
+        "user_stats",
+        "sum_age",
+        ["age"],
+        source_path: "priv/udf/user_stats.lua",
+        timeout: 10_000
+      )
+
+  Returns `{:ok, nil}` when local finalization produces no value. Returns an
+  error when finalization produces multiple values or local Lua execution fails.
+  """
+  @spec query_aggregate_result(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          {:ok, term() | nil} | {:error, Aerospike.Error.t()}
+  def query_aggregate_result(cluster, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    ScanOps.query_aggregate_result(cluster, query, package, function, args, opts)
+  end
+
+  @doc """
+  Same as `query_aggregate_result/6` but returns the value or raises
+  `Aerospike.Error`.
+  """
+  @spec query_aggregate_result!(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+          term() | nil
+  def query_aggregate_result!(cluster, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    case query_aggregate_result(cluster, query, package, function, args, opts) do
+      {:ok, result} -> result
+      {:error, %Aerospike.Error{} = err} -> raise err
+    end
   end
 
   @doc """

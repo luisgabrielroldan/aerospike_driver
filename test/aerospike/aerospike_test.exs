@@ -12,6 +12,7 @@ defmodule Aerospike.PublicApiTest do
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.AsmMsg.Value
   alias Aerospike.Protocol.Message
   alias Aerospike.Query
   alias Aerospike.RegisterTask
@@ -24,6 +25,15 @@ defmodule Aerospike.PublicApiTest do
   alias Aerospike.User
 
   @namespace "test"
+  @aggregate_sum_source """
+  local function reducer(left, right)
+    return left + right
+  end
+
+  function sum_values(stream)
+    return stream : reduce(reducer)
+  end
+  """
 
   setup context do
     name = :"aerospike_test_#{:erlang.phash2(context.test)}"
@@ -539,6 +549,52 @@ defmodule Aerospike.PublicApiTest do
              Aerospike.query_udf(conn, query, "pkg", "fun", [], node: "A1")
   end
 
+  test "aggregate facade keeps partial streams distinct from finalized results", %{
+    conn: conn,
+    fake: fake
+  } do
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+
+    Fake.script_stream(fake, "A1", {:ok, [aggregate_frame(1), last_frame()]})
+    Fake.script_stream(fake, "B1", {:ok, [aggregate_frame(2), last_frame()]})
+
+    assert {:ok, partial_stream} = Aerospike.query_aggregate(conn, query, "pkg", "sum_values", [])
+    assert Enum.sort(Enum.to_list(partial_stream)) == [1, 2]
+
+    Fake.script_stream(fake, "A1", {:ok, [aggregate_frame(1), last_frame()]})
+    Fake.script_stream(fake, "B1", {:ok, [aggregate_frame(2), last_frame()]})
+
+    assert {:ok, 3} =
+             Aerospike.query_aggregate_result(conn, query, "pkg", "sum_values", [],
+               source: @aggregate_sum_source
+             )
+  end
+
+  test "finalized aggregate facade validates local options before querying", %{conn: conn} do
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: missing_source}} =
+             Aerospike.query_aggregate_result(conn, query, "pkg", "sum_values", [])
+
+    assert missing_source =~ "missing aggregate Lua source"
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: unsupported_node}} =
+             Aerospike.query_aggregate_result(conn, query, "pkg", "sum_values", [],
+               source: @aggregate_sum_source,
+               node: "A1"
+             )
+
+    assert unsupported_node =~ ":node"
+
+    assert_raise Aerospike.Error, ~r/missing aggregate Lua source/, fn ->
+      Aerospike.query_aggregate_result!(conn, query, "pkg", "sum_values", [])
+    end
+  end
+
   test "bare scan aliases stay compatible with the explicit scan helpers", %{
     conn: conn,
     fake: fake
@@ -740,6 +796,11 @@ defmodule Aerospike.PublicApiTest do
     {:frame, encode_bin(record_msg(payload))}
   end
 
+  defp aggregate_frame(value) do
+    {:ok, {particle_type, data}} = Value.encode_value(value)
+    {:frame, encode_bin(aggregate_msg(particle_type, data))}
+  end
+
   defp partition_done_frame(payload) do
     {:frame, encode_bin(partition_done_msg(payload))}
   end
@@ -765,6 +826,22 @@ defmodule Aerospike.PublicApiTest do
           particle_type: 3,
           bin_name: "payload",
           data: payload
+        }
+      ]
+    }
+  end
+
+  defp aggregate_msg(particle_type, data) do
+    %AsmMsg{
+      info1: AsmMsg.info1_read(),
+      result_code: 0,
+      fields: [],
+      operations: [
+        %Operation{
+          op_type: Operation.op_read(),
+          particle_type: particle_type,
+          bin_name: "SUCCESS",
+          data: data
         }
       ]
     }

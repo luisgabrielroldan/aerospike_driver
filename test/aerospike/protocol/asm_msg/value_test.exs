@@ -106,4 +106,14 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
 
     assert message =~ "trailing bytes"
   end
+
+  test "decode_value/2 decodes map particles returned by collection operations" do
+    assert Value.decode_value(19, MessagePack.pack!(%{"a" => 1, "b" => [2]})) ==
+             {:ok, %{"a" => 1, "b" => [2]}}
+
+    assert {:error, %Error{code: :parse_error, message: message}} =
+             Value.decode_value(19, <<0x81, 0xA1, ?a, 0x01, 0x02>>)
+
+    assert message =~ "trailing bytes"
+  end
 end

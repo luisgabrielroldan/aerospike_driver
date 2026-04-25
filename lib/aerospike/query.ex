@@ -7,11 +7,14 @@ defmodule Aerospike.Query do
 
   Query execution lives in explicit facade calls such as
   `Aerospike.query_stream/3`, `Aerospike.query_aggregate/6`,
-  `Aerospike.query_execute/4`, and `Aerospike.query_udf/6`.
+  `Aerospike.query_aggregate_result/6`, `Aerospike.query_execute/4`, and
+  `Aerospike.query_udf/6`.
   Node-targeted execution uses `node: node_name` in facade opts where that
   query helper supports it. Discover valid names with
-  `Aerospike.node_names/1` or `Aerospike.nodes/1`. `query_all/3` and
-  `query_page/3` require `query.max_records`.
+  `Aerospike.node_names/1` or `Aerospike.nodes/1`. Finalized aggregate
+  queries do not support node targeting because they must consume every server
+  partial needed for one local final result. `query_all/3` and `query_page/3`
+  require `query.max_records`.
 
   Use `where/2` for secondary-index predicates (`Aerospike.Filter`), and
   `filter/2` for server-side expression filters (`Aerospike.Exp`). Both can be

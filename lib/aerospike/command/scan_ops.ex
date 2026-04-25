@@ -11,6 +11,7 @@ defmodule Aerospike.Command.ScanOps do
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
   alias Aerospike.Query
+  alias Aerospike.Query.AggregateReducer
   alias Aerospike.Scan
 
   @spec stream(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
@@ -78,6 +79,23 @@ defmodule Aerospike.Command.ScanOps do
   def query_aggregate(tender, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
     StreamRunner.query_aggregate(tender, query, opts, package, function, args)
+  end
+
+  @spec query_aggregate_result(
+          GenServer.server(),
+          Query.t(),
+          String.t(),
+          String.t(),
+          list(),
+          keyword()
+        ) :: {:ok, term() | nil} | {:error, Error.t()}
+  def query_aggregate_result(tender, %Query{} = query, package, function, args, opts \\ [])
+      when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
+    with {:ok, reducer} <- AggregateReducer.prepare(package, function, args, opts),
+         {:ok, stream} <-
+           query_aggregate(tender, query, package, function, args, aggregate_transport_opts(opts)) do
+      AggregateReducer.run(reducer, stream)
+    end
   end
 
   @spec query_execute(GenServer.server(), Query.t(), list(), keyword()) ::
@@ -215,6 +233,10 @@ defmodule Aerospike.Command.ScanOps do
 
   defp query_udf_with_node(tender, query, package, function, args, node_name, opts),
     do: StreamRunner.query_udf_node(tender, node_name, query, package, function, args, opts)
+
+  defp aggregate_transport_opts(opts) do
+    Keyword.drop(opts, [:source, :source_path])
+  end
 
   defp normalize_node_opt(opts) when is_list(opts) do
     case Keyword.pop(opts, :node) do

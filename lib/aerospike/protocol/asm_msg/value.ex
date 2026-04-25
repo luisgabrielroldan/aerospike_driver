@@ -12,6 +12,7 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @particle_string 3
   @particle_blob 4
   @particle_bool 17
+  @particle_map 19
   @particle_list 20
   @particle_geojson 23
   @op_write Operation.op_write()
@@ -139,6 +140,10 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
 
   def decode_value(@particle_bool, <<0>>), do: {:ok, false}
   def decode_value(@particle_bool, <<1>>), do: {:ok, true}
+
+  def decode_value(@particle_map, data) when is_binary(data) do
+    decode_message_pack_particle(data, "map")
+  end
 
   def decode_value(@particle_list, data) when is_binary(data) do
     decode_message_pack_particle(data, "list")
