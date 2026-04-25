@@ -53,6 +53,28 @@ defmodule Aerospike.Op.BitTest do
            ]
   end
 
+  test "default-arity wrappers encode expected default flags" do
+    cases = [
+      {Bit.resize("bits", 16, 4), [0, 16, 0, 4]},
+      {Bit.insert("bits", 1, <<0x0F>>), [1, 1, <<4, 0x0F>>, 0]},
+      {Bit.remove("bits", 1, 2), [2, 1, 2, 0]},
+      {Bit.set("bits", 0, 8, <<0xF0>>), [3, 0, 8, <<4, 0xF0>>, 0]},
+      {Bit.bw_or("bits", 0, 8, <<0x0F>>), [4, 0, 8, <<4, 0x0F>>, 0]},
+      {Bit.bw_xor("bits", 0, 8, <<0xFF>>), [5, 0, 8, <<4, 0xFF>>, 0]},
+      {Bit.bw_and("bits", 0, 8, <<0xF0>>), [6, 0, 8, <<4, 0xF0>>, 0]},
+      {Bit.bw_not("bits", 0, 8), [7, 0, 8, 0]},
+      {Bit.lshift("bits", 0, 8, 2), [8, 0, 8, 2, 0]},
+      {Bit.rshift("bits", 0, 8, 3), [9, 0, 8, 3, 0]},
+      {Bit.add("bits", 0, 8, 1), [10, 0, 8, 1, 0, 0]},
+      {Bit.subtract("bits", 0, 8, 1), [11, 0, 8, 1, 0, 0]},
+      {Bit.set_int("bits", 0, 8, 42), [12, 0, 8, 42, 0]}
+    ]
+
+    Enum.each(cases, fn {op, expected_payload} ->
+      assert_op(op, Operation.op_bit_modify(), expected_payload)
+    end)
+  end
+
   test "read builders encode reference op codes and payloads" do
     cases = [
       {Bit.get("bits", 0, 8), [50, 0, 8]},
@@ -76,6 +98,17 @@ defmodule Aerospike.Op.BitTest do
              255,
              [0x22, "outer", 0x10, 0],
              [3, 4, 2, <<4, 0b1100_0000>>, 0]
+           ]
+  end
+
+  test "ctx option is encoded for bit read operations" do
+    ctx = [Ctx.map_key("outer"), Ctx.list_index(0)]
+    op = Bit.get_int("bits", 0, 8, true, ctx: ctx)
+
+    assert payload(op) == [
+             255,
+             [0x22, "outer", 0x10, 0],
+             [54, 0, 8, 1]
            ]
   end
 end

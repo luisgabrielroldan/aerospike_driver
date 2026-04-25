@@ -221,6 +221,16 @@ defmodule Aerospike.Query.AggregateReducer do
     validate_values(values, code)
   end
 
+  defp validate_value(%Geo.Point{}, code), do: unsupported_value(code, "geo values")
+  defp validate_value(%Geo.Polygon{}, code), do: unsupported_value(code, "geo values")
+  defp validate_value(%Geo.Circle{}, code), do: unsupported_value(code, "geo values")
+  defp validate_value({:blob, _binary}, code), do: unsupported_value(code, "blob values")
+
+  defp validate_value({:raw, _particle_type, _data}, code),
+    do: unsupported_value(code, "raw particles")
+
+  defp validate_value({:geojson, _json}, code), do: unsupported_value(code, "geo values")
+
   defp validate_value(%{} = values, code) do
     Enum.reduce_while(values, :ok, fn {key, value}, :ok ->
       with :ok <- validate_map_key(key, code),
@@ -231,16 +241,6 @@ defmodule Aerospike.Query.AggregateReducer do
       end
     end)
   end
-
-  defp validate_value(%Geo.Point{}, code), do: unsupported_value(code, "geo values")
-  defp validate_value(%Geo.Polygon{}, code), do: unsupported_value(code, "geo values")
-  defp validate_value(%Geo.Circle{}, code), do: unsupported_value(code, "geo values")
-  defp validate_value({:blob, _binary}, code), do: unsupported_value(code, "blob values")
-
-  defp validate_value({:raw, _particle_type, _data}, code),
-    do: unsupported_value(code, "raw particles")
-
-  defp validate_value({:geojson, _json}, code), do: unsupported_value(code, "geo values")
 
   defp validate_value(value, code),
     do: error(code, "unsupported aggregate Lua value #{inspect(value)}")

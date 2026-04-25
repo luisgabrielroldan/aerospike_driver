@@ -2,6 +2,7 @@ defmodule Aerospike.Query.AggregateReducerTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Error
+  alias Aerospike.Geo
   alias Aerospike.Query.AggregateReducer
 
   @sum_source """
@@ -55,6 +56,18 @@ defmodule Aerospike.Query.AggregateReducerTest do
              AggregateReducer.prepare("pkg", "sum_values", [], source_path: "/no/such/source.lua")
 
     assert unreadable =~ "unable to read aggregate Lua source"
+
+    assert {:error, %Error{code: :invalid_argument, message: non_binary_path}} =
+             AggregateReducer.prepare("pkg", "sum_values", [], source_path: :bad)
+
+    assert non_binary_path =~ "source_path must be a path binary"
+  end
+
+  test "falls back to the default timeout for invalid timeout options" do
+    assert {:ok, reducer} =
+             AggregateReducer.prepare("pkg", "sum_values", [], source: @sum_source, timeout: 0)
+
+    assert reducer.timeout == 5_000
   end
 
   test "validates unsupported local arguments before reduction" do
@@ -62,6 +75,22 @@ defmodule Aerospike.Query.AggregateReducerTest do
              AggregateReducer.prepare("pkg", "sum_values", [{:blob, <<1>>}], source: @sum_source)
 
     assert message =~ "blob values"
+  end
+
+  test "rejects unsupported geo local arguments before reduction" do
+    values = [
+      Geo.point(1, 2),
+      Geo.circle(1, 2, 3),
+      Geo.polygon([[{0, 0}, {1, 0}, {1, 1}, {0, 0}]]),
+      {:geojson, ~s({"type":"Point","coordinates":[1,2]})}
+    ]
+
+    Enum.each(values, fn value ->
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               AggregateReducer.prepare("pkg", "sum_values", [value], source: @sum_source)
+
+      assert message =~ "geo values"
+    end)
   end
 
   test "rejects unsupported node targeting" do
@@ -108,6 +137,44 @@ defmodule Aerospike.Query.AggregateReducerTest do
 
     assert AggregateReducer.run(reducer, values) ==
              {:ok, %{"count" => 2, "labels" => ["a", "b"], "sum" => 8}}
+  end
+
+  test "runs reduce, map, and filter helpers during final reduction" do
+    source = """
+    function final_total(stream)
+      return stream
+        : reduce(function(total, value) return total + value end)
+        : map(function(value) return value * 2 end)
+        : filter(function(value) return value > 10 end)
+    end
+    """
+
+    assert {:ok, reducer} = AggregateReducer.prepare("pkg", "final_total", [], source: source)
+
+    assert AggregateReducer.run(reducer, [1, 2, 3]) == {:ok, 12}
+  end
+
+  test "decodes scalar and contiguous array outputs from Lua" do
+    scalar_source = """
+    function scalar(stream)
+      return stream : reduce(function(_left, _right) return true end)
+    end
+    """
+
+    array_source = """
+    function array_value(stream)
+      return stream : reduce(function(_left, _right) return {"a", false, 3.5} end)
+    end
+    """
+
+    assert {:ok, scalar_reducer} =
+             AggregateReducer.prepare("pkg", "scalar", [], source: scalar_source)
+
+    assert {:ok, array_reducer} =
+             AggregateReducer.prepare("pkg", "array_value", [], source: array_source)
+
+    assert AggregateReducer.run(scalar_reducer, [1, 2]) == {:ok, true}
+    assert AggregateReducer.run(array_reducer, [1, 2]) == {:ok, ["a", false, 3.5]}
   end
 
   test "returns nil for empty final output" do
@@ -162,6 +229,57 @@ defmodule Aerospike.Query.AggregateReducerTest do
              AggregateReducer.run(reducer, [{:blob, <<1>>}])
 
     assert message =~ "blob values"
+  end
+
+  test "propagates stream error tuples without remapping them" do
+    assert {:ok, reducer} = AggregateReducer.prepare("pkg", "sum_values", [], source: @sum_source)
+
+    assert {:error, %Error{code: :network_error}} =
+             AggregateReducer.run(reducer, [{:error, Error.from_result_code(:network_error)}])
+  end
+
+  test "rejects unsupported nested stream values and map keys" do
+    assert {:ok, reducer} = AggregateReducer.prepare("pkg", "sum_values", [], source: @sum_source)
+
+    assert {:error, %Error{code: :query_generic, message: nested_value}} =
+             AggregateReducer.run(reducer, [%{"bad" => {:raw, 1, <<1>>}}])
+
+    assert nested_value =~ "raw particles"
+
+    assert {:error, %Error{code: :query_generic, message: bad_key}} =
+             AggregateReducer.run(reducer, [%{{:tuple, :key} => 1}])
+
+    assert bad_key =~ "unsupported aggregate Lua map key"
+  end
+
+  test "rejects unsupported Lua output shapes" do
+    unsupported_key_source = """
+    function bad_key(stream)
+      return stream : reduce(function(_left, _right) return {[{}] = 1} end)
+    end
+    """
+
+    unsupported_list_source = """
+    function bad_list(stream)
+      return stream : reduce(function(_left, _right) return function() end end)
+    end
+    """
+
+    assert {:ok, key_reducer} =
+             AggregateReducer.prepare("pkg", "bad_key", [], source: unsupported_key_source)
+
+    assert {:ok, list_reducer} =
+             AggregateReducer.prepare("pkg", "bad_list", [], source: unsupported_list_source)
+
+    assert {:error, %Error{code: :query_generic, message: key_message}} =
+             AggregateReducer.run(key_reducer, [1, 2])
+
+    assert key_message =~ "unsupported aggregate Lua map key"
+
+    assert {:error, %Error{code: :query_generic, message: list_message}} =
+             AggregateReducer.run(list_reducer, [1, 2])
+
+    assert list_message =~ "unsupported aggregate Lua output"
   end
 
   test "propagates stream errors without remapping them" do

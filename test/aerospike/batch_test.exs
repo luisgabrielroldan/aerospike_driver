@@ -9,6 +9,8 @@ defmodule Aerospike.Command.BatchTest do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Command.Batch
   alias Aerospike.Command.BatchCommand.Entry
+  alias Aerospike.Command.BatchDelete
+  alias Aerospike.Command.BatchUdf
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
@@ -49,6 +51,10 @@ defmodule Aerospike.Command.BatchTest do
                BatchEntry.udf(tuple, "pkg", "fun")
 
       assert BatchEntry.key(BatchEntry.read(key)) == key
+      assert BatchEntry.key(BatchEntry.put(key, %{n: 1})) == key
+      assert BatchEntry.key(BatchEntry.delete(key)) == key
+      assert BatchEntry.key(BatchEntry.operate(key, [])) == key
+      assert BatchEntry.key(BatchEntry.udf(key, "pkg", "fun", ["arg"])) == key
     end
   end
 
@@ -266,6 +272,15 @@ defmodule Aerospike.Command.BatchTest do
       assert message =~ "set must be a string"
     end
 
+    test "rejects non-key values at the command boundary" do
+      key = Key.new("test", "batch", "k1")
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               BatchDelete.execute(:unused_tender, [key, :not_a_key])
+
+      assert message =~ "expects a list of %Aerospike.Key{} values"
+    end
+
     test "returns caller-ordered public results across multiple nodes", ctx do
       script_two_node_cluster(ctx.fake)
       {:ok, tender} = start_tender(ctx)
@@ -368,6 +383,15 @@ defmodule Aerospike.Command.BatchTest do
                Aerospike.batch_udf(:unused_tender, [{"test", :batch, "k1"}], "pkg", "fun", [])
 
       assert message =~ "set must be a string"
+    end
+
+    test "rejects non-key values at the command boundary" do
+      key = Key.new("test", "batch", "k1")
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               BatchUdf.execute(:unused_tender, [key, :not_a_key], "pkg", "fun", [])
+
+      assert message =~ "expects a list of %Aerospike.Key{} values"
     end
 
     test "returns caller-ordered public results across multiple nodes", ctx do
