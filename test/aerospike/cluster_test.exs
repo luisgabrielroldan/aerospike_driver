@@ -80,6 +80,37 @@ defmodule Aerospike.ClusterTest do
     end
   end
 
+  describe "warm_up/2" do
+    test "rejects clusters that are not ready", ctx do
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} = Cluster.warm_up(ctx.name)
+    end
+
+    test "rejects invalid warm-up counts", ctx do
+      :ets.insert(ctx.tables.meta, {:ready, true})
+      :ets.insert(ctx.tables.meta, {{:runtime, :config, :pool_size}, 2})
+      :ets.insert(ctx.tables.meta, {:active_nodes, ["A1"]})
+
+      assert {:error, %Aerospike.Error{code: :invalid_argument, message: message}} =
+               Cluster.warm_up(ctx.name, count: -1)
+
+      assert message =~ ":count must be a non-negative integer"
+    end
+
+    test "rejects warm-up when the configured pool size is unavailable", ctx do
+      :ets.insert(ctx.tables.meta, {:ready, true})
+      :ets.insert(ctx.tables.meta, {:active_nodes, ["A1"]})
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} = Cluster.warm_up(ctx.name)
+    end
+
+    test "rejects warm-up when the cluster has no active nodes", ctx do
+      :ets.insert(ctx.tables.meta, {:ready, true})
+      :ets.insert(ctx.tables.meta, {{:runtime, :config, :pool_size}, 2})
+
+      assert {:error, %Aerospike.Error{code: :cluster_not_ready}} = Cluster.warm_up(ctx.name)
+    end
+  end
+
   describe "route_for_write/2" do
     test "delegates master routing through Router", ctx do
       key = Key.new("test", "set", 1)

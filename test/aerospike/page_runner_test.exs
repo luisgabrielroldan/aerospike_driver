@@ -103,6 +103,34 @@ defmodule Aerospike.Command.ScanOps.PageRunnerTest do
     assert message =~ "query requires a ready cluster"
   end
 
+  test "prepare_node_requests supports node-scoped scans and rejects invalid runtime opts", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    scan = Scan.new(@namespace, "scan_ops") |> Scan.max_records(2)
+
+    assert {:ok, runtime} = PageRunner.runtime(tender, scan)
+
+    assert {:ok, tracker, [%{node_name: "A1"} = request]} =
+             PageRunner.prepare_node_requests(runtime, scan, "A1", [])
+
+    assert tracker.node_filter == "A1"
+    assert match?(%Scan{}, request.scannable)
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument}} =
+             PageRunner.prepare_node_requests(runtime, scan, "A1", timeout: -1)
+  end
+
+  test "prepare_node_requests rejects cluster snapshots with no active nodes", ctx do
+    runtime = %{tender: ctx.name, transport: Fake, tables: ctx.tables}
+
+    assert {:error, %Aerospike.Error{code: :cluster_not_ready, message: message}} =
+             PageRunner.prepare_node_requests(runtime, Scan.new(@namespace, "scan_ops"), nil, [])
+
+    assert message =~ "scan requires active nodes"
+  end
+
   test "page accepts a Cursor struct and surfaces unexpected frame types as parse errors", ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
@@ -142,6 +170,49 @@ defmodule Aerospike.Command.ScanOps.PageRunnerTest do
              PageRunner.page(tender, query, [])
 
     assert message =~ "unexpected stream frame type"
+  end
+
+  test "page accepts an encoded cursor string", ctx do
+    {:ok, tender} = start_tender(ctx)
+
+    cursor =
+      %Cursor{
+        partitions: [%{id: 10, digest: digest_fixture("cursor"), bval: 12}]
+      }
+      |> Cursor.encode()
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+
+    assert {:error, %Aerospike.Error{code: :cluster_not_ready}} =
+             PageRunner.page(tender, query, cursor: cursor)
+  end
+
+  test "page_node builds scan requests and folds returned records", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("scan-page"), partition_done_frame("scan-page"), last_frame()]}
+    )
+
+    assert {:ok, page} = PageRunner.page_node(tender, "A1", Scan.new(@namespace, "scan_ops"), [])
+    assert [%{bins: %{"payload" => "scan-page"}}] = page.records
+  end
+
+  test "page marks unavailable node partitions and keeps partial results", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    Fake.script_stream(ctx.fake, "A1", {:error, Aerospike.Error.from_result_code(:pool_timeout)})
+
+    assert {:error, %Aerospike.Error{code: :no_script}} =
+             PageRunner.page_node(tender, "A1", Scan.new(@namespace, "scan_ops"), [])
   end
 
   test "all and all_node follow page cursors until completion", ctx do

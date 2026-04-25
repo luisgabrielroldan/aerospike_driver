@@ -136,6 +136,40 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     assert info.bval == nil
   end
 
+  test "parse/3 accepts nil default sets and applies returned user keys" do
+    digest = digest_fixture("nil-set")
+
+    msg =
+      record_msg(digest: digest)
+      |> Map.update!(:fields, fn fields ->
+        fields
+        |> Enum.reject(&(&1.type == Field.type_table()))
+        |> Kernel.++([Field.key(3, "user-key")])
+      end)
+
+    body = encode_bin(msg) <> encode_bin(last_msg())
+
+    assert {:ok, [record], []} = ScanResponse.parse(body, @namespace, nil)
+    assert record.key.set == ""
+    assert record.key.user_key == "user-key"
+  end
+
+  test "parse_stream_chunk/3 treats partition skip and terminal result codes as empty frames" do
+    assert {:ok, [], [], false} =
+             ScanResponse.parse_stream_chunk(
+               encode_bin(%AsmMsg{result_code: 2, fields: [], operations: []}),
+               @namespace,
+               @set
+             )
+
+    assert {:ok, [], [], true} =
+             ScanResponse.parse_stream_chunk(
+               encode_bin(%{last_msg(rc: 213) | info3: 0}),
+               @namespace,
+               @set
+             )
+  end
+
   test "parse_frame/3 decodes partition unavailable metadata including bval" do
     digest = digest_fixture("unavailable")
     body = encode_bin(partition_done_msg(digest, partition_id: 42, rc: 11, bval: 7))
@@ -212,9 +246,53 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     assert message =~ "exactly one operation"
   end
 
+  test "parse_aggregate_stream_chunk/3 captures partition progress frames" do
+    digest = digest_fixture("aggregate-part")
+    body = encode_bin(partition_done_msg(digest, bval: 11)) <> encode_bin(last_msg())
+
+    assert {:ok, [], [info], true} =
+             ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+
+    assert info.digest == digest
+    assert info.bval == 11
+  end
+
+  test "aggregate parser rejects multiple result operations" do
+    body =
+      encode_bin(%AsmMsg{
+        info1: AsmMsg.info1_read(),
+        result_code: 0,
+        fields: [],
+        operations: [
+          %Operation{
+            op_type: Operation.op_read(),
+            particle_type: 3,
+            bin_name: "SUCCESS",
+            data: "one"
+          },
+          %Operation{
+            op_type: Operation.op_read(),
+            particle_type: 3,
+            bin_name: "SUCCESS",
+            data: "two"
+          }
+        ]
+      })
+
+    assert {:error, %{code: :parse_error, message: message}} =
+             ScanResponse.parse_aggregate_stream_chunk(body, @namespace, @set)
+
+    assert message =~ "exactly one operation"
+  end
+
   test "lazy_stream_chunk_terminal?/1 treats terminal frames and malformed input as terminal" do
     assert ScanResponse.lazy_stream_chunk_terminal?(encode_bin(last_msg())) == true
     assert ScanResponse.lazy_stream_chunk_terminal?(encode_bin(record_msg())) == false
+
+    assert ScanResponse.lazy_stream_chunk_terminal?(
+             encode_bin(last_msg()) <> encode_bin(record_msg())
+           ) == true
+
     assert ScanResponse.lazy_stream_chunk_terminal?(<<1, 2, 3>>) == true
   end
 
@@ -239,5 +317,10 @@ defmodule Aerospike.Protocol.ScanResponseTest do
 
     assert {:error, %{code: :parse_error, message: ":short_header"}} =
              ScanResponse.count_records(<<1, 2, 3>>)
+
+    assert {:error, %{code: :parse_error, message: trailing_message}} =
+             ScanResponse.count_records(encode_bin(last_msg()) <> <<1>>)
+
+    assert trailing_message =~ "trailing bytes"
   end
 end

@@ -292,8 +292,10 @@ defmodule Aerospike.RuntimeMetrics do
       {{:runtime, :config, _key}, _value} ->
         :ok
 
-      {{:runtime, _rest}, _value} = entry ->
-        :ets.delete_object(table, entry)
+      {key, _value} = entry when is_tuple(key) and tuple_size(key) > 0 ->
+        if elem(key, 0) == :runtime do
+          :ets.delete_object(table, entry)
+        end
 
       _entry ->
         :ok
@@ -330,7 +332,7 @@ defmodule Aerospike.RuntimeMetrics do
   defp active_node_name({node_name, %{status: :active}}), do: [node_name]
   defp active_node_name(_entry), do: []
 
-  defp known_node_name({{:runtime, :node, node_name, _metric}, _value}) when is_binary(node_name),
+  defp known_node_name({:runtime, :node, node_name, _metric}) when is_binary(node_name),
     do: [node_name]
 
   defp known_node_name(_entry), do: []

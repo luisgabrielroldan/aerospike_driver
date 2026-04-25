@@ -37,4 +37,22 @@ defmodule Aerospike.OpTest do
     assert %Operation{op_type: prepend_type, bin_name: "name"} = Op.prepend(:name, "x")
     assert prepend_type == Operation.op_prepend()
   end
+
+  test "mutating constructors raise argument errors for invalid operation inputs" do
+    assert_raise ArgumentError, ~r/write bin name must be a non-empty binary/, fn ->
+      Op.put("", 7)
+    end
+
+    assert_raise ArgumentError, ~r/add requires an integer or float value/, fn ->
+      Op.add(:count, "not-a-number")
+    end
+
+    assert_raise ArgumentError, ~r/append requires a binary value/, fn ->
+      Op.append(:name, 7)
+    end
+
+    assert_raise ArgumentError, ~r/prepend requires a binary value/, fn ->
+      Op.prepend(:name, 7)
+    end
+  end
 end

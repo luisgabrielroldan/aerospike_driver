@@ -7,6 +7,49 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
   alias Aerospike.Role
   alias Aerospike.User
 
+  describe "user and role command encoders" do
+    test "encode fixed command ids and counted string fields" do
+      assert_command(Admin.encode_create_user("ada", "secret", ["read", "write"]), 1, 3)
+      assert_command(Admin.encode_drop_user("ada"), 2, 1)
+      assert_command(Admin.encode_set_password("ada", "next"), 3, 2)
+      assert_command(Admin.encode_change_password("ada", "old", "new"), 4, 3)
+      assert_command(Admin.encode_grant_roles("ada", ["read"]), 5, 2)
+      assert_command(Admin.encode_revoke_roles("ada", ["read"]), 6, 2)
+      assert_command(Admin.encode_query_users(), 9, 0)
+      assert_command(Admin.encode_query_users("ada"), 9, 1)
+      assert_command(Admin.encode_drop_role("reader"), 11, 1)
+      assert_command(Admin.encode_query_roles(), 16, 0)
+      assert_command(Admin.encode_query_roles("reader"), 16, 1)
+    end
+
+    test "encode all supported privilege codes with optional role fields" do
+      privileges = [
+        %Privilege{code: :user_admin},
+        %Privilege{code: :sys_admin},
+        %Privilege{code: :data_admin},
+        %Privilege{code: :udf_admin},
+        %Privilege{code: :sindex_admin},
+        %Privilege{code: :masking_admin},
+        %Privilege{code: :read, namespace: "test"},
+        %Privilege{code: :read_write, namespace: "test", set: "demo"},
+        %Privilege{code: :read_write_udf, namespace: "test"},
+        %Privilege{code: :write, namespace: "test"},
+        %Privilege{code: :truncate, namespace: "test"},
+        %Privilege{code: :read_masked, namespace: "test"},
+        %Privilege{code: :write_masked, namespace: "test"}
+      ]
+
+      assert {:ok, frame} = Admin.encode_create_role("analyst", privileges, ["10.0.0.1"], 5, 6)
+      assert_command(frame, 10, 5)
+
+      assert {:ok, frame} = Admin.encode_grant_privileges("analyst", privileges)
+      assert_command(frame, 12, 2)
+
+      assert {:ok, frame} = Admin.encode_revoke_privileges("analyst", privileges)
+      assert_command(frame, 13, 2)
+    end
+  end
+
   describe "encode_create_role/5" do
     test "omits optional fields when privileges, whitelist, and quotas are empty" do
       assert {:ok, frame} = Admin.encode_create_role("analyst", [], [], 0, 0)
@@ -85,6 +128,10 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
 
     test "surfaces truncated fields and malformed list payloads" do
       assert {:error, :truncated_record_header} = Admin.decode_users_block(<<0, 0, 0>>)
+      assert {:ok, %{done?: false, users: []}} = Admin.decode_users_block(admin_body(0, 9, []))
+
+      assert {:error, :truncated_field_header} =
+               Admin.decode_users_block(admin_body_with_count(0, 9, 1, <<1, 2>>))
 
       assert {:error, :truncated_field_data} =
                Admin.decode_users_block(admin_body(0, 9, [<<5::32-big, 0, "abc">>]))
@@ -94,11 +141,20 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
 
       assert {:error, :invalid_connections_field} =
                Admin.decode_users_block(admin_body(0, 9, [admin_field(18, <<1, 2, 3>>)]))
+
+      assert {:error, :invalid_info_field} =
+               Admin.decode_users_block(admin_body(0, 9, [admin_field(16, <<1, 0, 0, 0, 1, 0>>)]))
+
+      assert {:error, :truncated_info_field} =
+               Admin.decode_users_block(admin_body(0, 9, [admin_field(17, <<1, 2>>)]))
     end
 
     test "returns result-code errors for non-success admin frames" do
       assert {:error, {:result_code, :invalid_user, 60}} =
                Admin.decode_users_block(admin_body(60, 9, []))
+
+      assert {:error, {:result_code, {:unknown_result_code, 240}, 240}} =
+               Admin.decode_users_block(admin_body(240, 9, []))
     end
   end
 
@@ -138,8 +194,20 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
     end
 
     test "surfaces malformed privilege and quota payloads" do
+      assert {:error, :truncated_record_header} = Admin.decode_roles_block(<<0, 0, 0>>)
+      assert {:ok, %{done?: false, roles: []}} = Admin.decode_roles_block(admin_body(0, 16, []))
+
+      assert {:error, :truncated_field_header} =
+               Admin.decode_roles_block(admin_body_with_count(0, 16, 1, <<1, 2>>))
+
       assert {:error, {:unknown_privilege_code, 99}} =
                Admin.decode_roles_block(admin_body(0, 16, [admin_field(12, <<1, 99>>)]))
+
+      assert {:error, :invalid_privileges_field} =
+               Admin.decode_roles_block(admin_body(0, 16, [admin_field(12, <<0, 1>>)]))
+
+      assert {:error, :truncated_privileges_field} =
+               Admin.decode_roles_block(admin_body(0, 16, [admin_field(12, <<1>>)]))
 
       assert {:error, :truncated_privilege_scope} =
                Admin.decode_roles_block(admin_body(0, 16, [admin_field(12, <<1, 11, 4, "tes">>)]))
@@ -149,11 +217,23 @@ defmodule Aerospike.Protocol.AdminProtocolTest do
 
       assert {:error, :invalid_write_quota_field} =
                Admin.decode_roles_block(admin_body(0, 16, [admin_field(15, <<1, 2>>)]))
+
+      assert {:error, {:result_code, :invalid_role, 70}} =
+               Admin.decode_roles_block(admin_body(70, 16, []))
     end
+  end
+
+  defp assert_command(frame, command, field_count) do
+    assert {:ok, {2, 2, <<0, 0, ^command, ^field_count, _::binary-size(12), _::binary>>}} =
+             Message.decode(frame)
   end
 
   defp admin_body(result_code, command, fields) when is_list(fields) do
     IO.iodata_to_binary([<<0, result_code, command, length(fields), 0::96>>, fields])
+  end
+
+  defp admin_body_with_count(result_code, command, field_count, payload) do
+    <<0, result_code, command, field_count, 0::96, payload::binary>>
   end
 
   defp admin_field(id, value) when is_integer(id) and is_binary(value) do

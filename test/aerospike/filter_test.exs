@@ -18,6 +18,16 @@ defmodule Aerospike.FilterTest do
     test "rejects begin > end" do
       assert_raise ArgumentError, fn -> Filter.range("score", 5, 2) end
     end
+
+    test "rejects out-of-range integer bounds and empty bin names" do
+      assert_raise ArgumentError, ~r/range begin must fit in signed int64/, fn ->
+        Filter.range("score", 9_223_372_036_854_775_808, 10)
+      end
+
+      assert_raise ArgumentError, ~r/bin_name must be a non-empty string/, fn ->
+        Filter.range("", 1, 2)
+      end
+    end
   end
 
   describe "equal/2" do
@@ -34,6 +44,16 @@ defmodule Aerospike.FilterTest do
       assert filter.begin == "ada"
       assert filter.end == "ada"
     end
+
+    test "rejects unsupported values and empty bin names" do
+      assert_raise ArgumentError, ~r/equal\/2 value must be integer or string/, fn ->
+        Filter.equal("name", :ada)
+      end
+
+      assert_raise ArgumentError, ~r/bin_name must be a non-empty string/, fn ->
+        Filter.equal("", "ada")
+      end
+    end
   end
 
   describe "contains/3" do
@@ -49,6 +69,16 @@ defmodule Aerospike.FilterTest do
       assert filter.index_type == :mapkeys
       assert filter.particle_type == :string
     end
+
+    test "rejects invalid index types and unsupported values" do
+      assert_raise ArgumentError, ~r/contains\/3 index_type must be :list, :mapkeys, or :mapvalues/, fn ->
+        Filter.contains("tags", :default, "k")
+      end
+
+      assert_raise ArgumentError, ~r/contains\/3 value must be integer or string/, fn ->
+        Filter.contains("tags", :list, :vip)
+      end
+    end
   end
 
   describe "advanced helpers" do
@@ -62,6 +92,18 @@ defmodule Aerospike.FilterTest do
       filter = Filter.contains("profile", :mapvalues, "admin") |> Filter.with_ctx(ctx)
 
       assert filter.ctx == ctx
+    end
+
+    test "using_index/2 and with_ctx/2 validate their inputs" do
+      filter = Filter.equal("age", 21)
+
+      assert_raise ArgumentError, ~r/index_name must be a non-empty string/, fn ->
+        Filter.using_index(filter, "")
+      end
+
+      assert_raise ArgumentError, ~r/ctx must be a non-empty list/, fn ->
+        Filter.with_ctx(filter, [])
+      end
     end
   end
 end

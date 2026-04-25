@@ -119,6 +119,68 @@ defmodule Aerospike.Command.BatchCommandTest do
                  attempt: 0
                )
     end
+
+    test "supports single-frame command transport and normalizes parser error shapes" do
+      key = Key.new("test", "users", "user-a")
+
+      command =
+        BatchCommand.new!(
+          name: __MODULE__,
+          build_request: fn _request -> "request" end,
+          parse_response: fn
+            "error-struct", _request -> Error.from_result_code(:timeout, message: "slow")
+            "error-tuple", _request -> {:error, Error.from_result_code(:parse_error)}
+            "error-atom", _request -> {:error, :unknown_node}
+            "ok", _request -> {:ok, :parsed}
+          end,
+          merge_results: fn _results, _input -> :ok end
+        )
+
+      node_request = %NodeRequest{
+        node_name: "A1",
+        entries: [%Entry{index: 0, key: key, kind: :read, dispatch: {:read, :master, 0}}]
+      }
+
+      assert {{:ok, :parsed}, :conn_a1} =
+               BatchCommand.run_transport(
+                 command,
+                 __MODULE__.CommandTransportStub,
+                 :conn_a1,
+                 node_request,
+                 25,
+                 reply: "ok"
+               )
+
+      assert {{:error, %Error{code: :timeout}}, {:close, :failure}} =
+               BatchCommand.run_transport(
+                 command,
+                 __MODULE__.CommandTransportStub,
+                 :conn_a1,
+                 node_request,
+                 25,
+                 reply: "error-struct"
+               )
+
+      assert {{:error, :unknown_node}, :conn_a1} =
+               BatchCommand.run_transport(
+                 command,
+                 __MODULE__.CommandTransportStub,
+                 :conn_a1,
+                 node_request,
+                 25,
+                 reply: "error-atom"
+               )
+
+      assert {{:error, %Error{code: :parse_error}}, :close} =
+               BatchCommand.run_transport(
+                 command,
+                 __MODULE__.CommandTransportStub,
+                 :conn_a1,
+                 node_request,
+                 25,
+                 reply: "error-tuple"
+               )
+    end
   end
 
   defmodule TransportStub do
@@ -129,5 +191,9 @@ defmodule Aerospike.Command.BatchCommandTest do
     def command_stream(:conn_a1, "request", 25, attempt: 0) do
       {:error, Error.from_result_code(:network_error, message: "boom")}
     end
+  end
+
+  defmodule CommandTransportStub do
+    def command(:conn_a1, "request", 25, reply: reply), do: {:ok, reply}
   end
 end

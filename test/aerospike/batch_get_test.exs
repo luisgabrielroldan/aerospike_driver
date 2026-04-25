@@ -33,6 +33,10 @@ defmodule Aerospike.Command.BatchGetTest do
   end
 
   describe "batch_get/4" do
+    test "returns an empty result for an empty key list when opts are valid" do
+      assert {:ok, []} = Aerospike.batch_get(:unused_tender, [])
+    end
+
     test "returns per-key results in caller order across multiple nodes", ctx do
       script_two_node_cluster(ctx.fake)
       {:ok, tender} = start_tender(ctx)
@@ -134,6 +138,22 @@ defmodule Aerospike.Command.BatchGetTest do
                Aerospike.batch_get(:unused_tender, [{"test", :batch, "k1"}])
 
       assert message =~ "set must be a string"
+    end
+
+    test "rejects direct non-key inputs after tuple coercion" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Aerospike.batch_get(:unused_tender, [:bad])
+
+      assert message =~ "expected %Aerospike.Key{} or {namespace, set, user_key} tuple"
+    end
+
+    test "rejects unsupported batch modes on the internal execute boundary" do
+      key = Key.new("test", "batch", "k1")
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Aerospike.Command.BatchGet.execute(:unused_tender, [key], :bins, [])
+
+      assert message =~ "supports only :all bins in the spike"
     end
   end
 
