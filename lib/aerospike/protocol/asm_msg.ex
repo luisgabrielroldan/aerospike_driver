@@ -207,30 +207,28 @@ defmodule Aerospike.Protocol.AsmMsg do
   defp decode_fields(binary, 0), do: {:ok, [], binary}
 
   defp decode_fields(binary, count) do
-    decode_fields(binary, count, [])
-  end
-
-  defp decode_fields(binary, 0, acc), do: {:ok, Enum.reverse(acc), binary}
-
-  defp decode_fields(binary, count, acc) do
     case Field.decode(binary) do
-      {:ok, field, rest} -> decode_fields(rest, count - 1, [field | acc])
-      {:error, _} = error -> error
+      {:ok, field, rest} ->
+        with {:ok, fields, rest} <- decode_fields(rest, count - 1) do
+          {:ok, [field | fields], rest}
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 
   defp decode_operations(binary, 0), do: {:ok, [], binary}
 
   defp decode_operations(binary, count) do
-    decode_operations(binary, count, [])
-  end
-
-  defp decode_operations(binary, 0, acc), do: {:ok, Enum.reverse(acc), binary}
-
-  defp decode_operations(binary, count, acc) do
     case Operation.decode(binary) do
-      {:ok, op, rest} -> decode_operations(rest, count - 1, [op | acc])
-      {:error, _} = error -> error
+      {:ok, op, rest} ->
+        with {:ok, operations, rest} <- decode_operations(rest, count - 1) do
+          {:ok, [op | operations], rest}
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 
