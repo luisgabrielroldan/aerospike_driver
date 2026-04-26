@@ -795,9 +795,9 @@ defmodule Aerospike.Cluster.Tender do
         register_success(state, updated_node.name)
 
       {:error, %Error{} = err} ->
-        Logger.debug(
+        Logger.debug(fn ->
           "Aerospike.Cluster.Tender: #{entry.node.name} refresh-node info failed: #{err.message}"
-        )
+        end)
 
         register_failure(state, entry.node.name)
 
@@ -1168,9 +1168,9 @@ defmodule Aerospike.Cluster.Tender do
           apply_replicas(state, entry, segments)
 
         {:error, %Error{} = err} ->
-          Logger.debug(
+          Logger.debug(fn ->
             "Aerospike.Cluster.Tender: #{entry.node.name} replicas failed: #{err.message}"
-          )
+          end)
 
           register_failure(state, entry.node.name)
 
@@ -1320,7 +1320,7 @@ defmodule Aerospike.Cluster.Tender do
         :ok
 
       {:error, :not_found} ->
-        Logger.debug("Aerospike.Cluster.Tender: pool for #{name} already gone")
+        Logger.debug(fn -> "Aerospike.Cluster.Tender: pool for #{name} already gone" end)
         :ok
     end
   end
