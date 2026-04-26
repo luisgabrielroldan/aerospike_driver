@@ -27,7 +27,7 @@ defmodule Aerospike.Cluster.Router do
   @spec pick_for_write(tables(), Key.t()) :: {:ok, node_name()} | {:error, reason()}
   def pick_for_write(tables, %Key{} = key) do
     if ready?(tables) do
-      resolve_master(tables.owners, key)
+      pick_for_write_ready(tables, key)
     else
       {:error, :cluster_not_ready}
     end
@@ -42,9 +42,32 @@ defmodule Aerospike.Cluster.Router do
   def pick_for_read(tables, %Key{} = key, policy, attempt)
       when policy in [:master, :sequence] and is_integer(attempt) and attempt >= 0 do
     if ready?(tables) do
-      resolve_read(tables.owners, key, policy, attempt)
+      pick_for_read_ready(tables, key, policy, attempt)
     else
       {:error, :cluster_not_ready}
+    end
+  end
+
+  @doc false
+  @spec pick_for_write_ready(tables(), Key.t()) :: {:ok, node_name()} | {:error, :no_master}
+  def pick_for_write_ready(%{owners: owners}, %Key{} = key) do
+    resolve_master(owners, key)
+  end
+
+  @doc false
+  @spec pick_for_read_ready(tables(), Key.t(), replica_policy(), non_neg_integer()) ::
+          {:ok, node_name()} | {:error, :no_master}
+  def pick_for_read_ready(%{owners: owners}, %Key{} = key, policy, attempt)
+      when policy in [:master, :sequence] and is_integer(attempt) and attempt >= 0 do
+    resolve_read(owners, key, policy, attempt)
+  end
+
+  @doc false
+  @spec ready?(tables()) :: boolean()
+  def ready?(%{meta: meta}) do
+    case :ets.lookup(meta, :ready) do
+      [{:ready, true}] -> true
+      _ -> false
     end
   end
 
@@ -80,13 +103,6 @@ defmodule Aerospike.Cluster.Router do
 
       available ->
         {:ok, Enum.at(available, rem(attempt, length(available)))}
-    end
-  end
-
-  defp ready?(%{meta: meta}) do
-    case :ets.lookup(meta, :ready) do
-      [{:ready, true}] -> true
-      _ -> false
     end
   end
 end

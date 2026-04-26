@@ -102,6 +102,12 @@ defmodule Aerospike.Command.BatchRouterTest do
       assert {:error, :cluster_not_ready} =
                BatchRouter.group_keys(tables, [key], dispatch: {:read, :master, 0})
     end
+
+    test "keeps empty batches independent from cluster readiness", %{tables: tables} do
+      assert {:ok, grouping} = BatchRouter.group_keys(tables, [], dispatch: {:read, :master, 0})
+      assert grouping.node_requests == []
+      assert grouping.routing_failures == []
+    end
   end
 
   describe "group_entries/2" do

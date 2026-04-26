@@ -83,22 +83,25 @@ defmodule Aerospike.Command.BatchRouter do
     group_entries(tables, entries)
   end
 
+  defp reduce_entries([], _tables), do: {:ok, %{}, [], []}
+
   defp reduce_entries(entries, tables) do
-    Enum.reduce_while(entries, {:ok, %{}, [], []}, fn %Entry{} = entry,
-                                                      {:ok, grouped, node_order, failures} ->
-      case route_entry(tables, entry) do
-        {:ok, node_name} ->
-          {next_grouped, next_node_order} = put_entry(grouped, node_order, node_name, entry)
-          {:cont, {:ok, next_grouped, next_node_order, failures}}
+    if Router.ready?(tables) do
+      Enum.reduce(entries, {:ok, %{}, [], []}, fn %Entry{} = entry,
+                                                  {:ok, grouped, node_order, failures} ->
+        case route_entry_ready(tables, entry) do
+          {:ok, node_name} ->
+            {next_grouped, next_node_order} = put_entry(grouped, node_order, node_name, entry)
+            {:ok, next_grouped, next_node_order, failures}
 
-        {:error, :cluster_not_ready} ->
-          {:halt, {:error, :cluster_not_ready}}
-
-        {:error, reason} ->
-          failure = %RoutingFailure{entry: entry, reason: reason}
-          {:cont, {:ok, grouped, node_order, [failure | failures]}}
-      end
-    end)
+          {:error, reason} ->
+            failure = %RoutingFailure{entry: entry, reason: reason}
+            {:ok, grouped, node_order, [failure | failures]}
+        end
+      end)
+    else
+      {:error, :cluster_not_ready}
+    end
   end
 
   defp put_entry(grouped, node_order, node_name, entry) do
@@ -107,12 +110,14 @@ defmodule Aerospike.Command.BatchRouter do
         {Map.put(grouped, node_name, [entry | entries]), node_order}
 
       %{} ->
-        {Map.put(grouped, node_name, [entry]), node_order ++ [node_name]}
+        {Map.put(grouped, node_name, [entry]), [node_name | node_order]}
     end
   end
 
   defp build_node_requests(grouped, node_order) do
-    Enum.map(node_order, fn node_name ->
+    node_order
+    |> Enum.reverse()
+    |> Enum.map(fn node_name ->
       %NodeRequest{
         node_name: node_name,
         entries: grouped |> Map.fetch!(node_name) |> Enum.reverse(),
@@ -121,12 +126,15 @@ defmodule Aerospike.Command.BatchRouter do
     end)
   end
 
-  defp route_entry(tables, %Entry{key: %Key{} = key, dispatch: :write}) do
-    Router.pick_for_write(tables, key)
+  defp route_entry_ready(tables, %Entry{key: %Key{} = key, dispatch: :write}) do
+    Router.pick_for_write_ready(tables, key)
   end
 
-  defp route_entry(tables, %Entry{key: %Key{} = key, dispatch: {:read, replica_policy, attempt}}) do
-    Router.pick_for_read(tables, key, replica_policy, attempt)
+  defp route_entry_ready(tables, %Entry{
+         key: %Key{} = key,
+         dispatch: {:read, replica_policy, attempt}
+       }) do
+    Router.pick_for_read_ready(tables, key, replica_policy, attempt)
   end
 
   defp default_kind(:write), do: :put
