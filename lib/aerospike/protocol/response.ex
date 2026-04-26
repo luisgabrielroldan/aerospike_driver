@@ -135,19 +135,37 @@ defmodule Aerospike.Protocol.Response do
   end
 
   defp record_bins_from_operations(operations) do
-    {:ok, decode_record_bins(operations, %{}, nil)}
+    {pairs, count} = decode_record_bin_pairs(operations, [], 0)
+    bins = Map.new(pairs)
+
+    case map_size(bins) do
+      ^count -> {:ok, bins}
+      _duplicates -> {:ok, repeated_record_bins(pairs)}
+    end
   end
 
-  defp decode_record_bins([], bins, _repeated), do: bins
+  defp decode_record_bin_pairs([], pairs, count), do: {pairs, count}
 
-  defp decode_record_bins([%Operation{bin_name: ""} | rest], bins, repeated) do
-    decode_record_bins(rest, bins, repeated)
+  defp decode_record_bin_pairs([%Operation{bin_name: ""} | rest], pairs, count) do
+    decode_record_bin_pairs(rest, pairs, count)
   end
 
-  defp decode_record_bins([%Operation{bin_name: name} = op | rest], bins, repeated) do
+  defp decode_record_bin_pairs([%Operation{bin_name: name} = op | rest], pairs, count) do
     {:ok, value} = Value.decode_value(op.particle_type, op.data)
+    decode_record_bin_pairs(rest, [{name, value} | pairs], count + 1)
+  end
+
+  defp repeated_record_bins(pairs) do
+    pairs
+    |> Enum.reverse()
+    |> put_repeated_record_bins(%{}, nil)
+  end
+
+  defp put_repeated_record_bins([], bins, _repeated), do: bins
+
+  defp put_repeated_record_bins([{name, value} | rest], bins, repeated) do
     {bins, repeated} = put_operation_value(bins, repeated, name, value)
-    decode_record_bins(rest, bins, repeated)
+    put_repeated_record_bins(rest, bins, repeated)
   end
 
   defp put_operation_value(bins, repeated, name, value) do

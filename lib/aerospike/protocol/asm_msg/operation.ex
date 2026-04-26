@@ -22,7 +22,11 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   @op_hll_read 15
   @op_hll_modify 16
   @particle_null 0
+  @particle_integer 1
+  @particle_float 2
+  @particle_string 3
   @particle_blob 4
+  @particle_bool 17
 
   # `read_header`: when true, this is a header-only read (generation/TTL, no bins).
   # Wire `op_type` matches `READ` (1); flagging is used only for operate header flags.
@@ -160,15 +164,41 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   Builds a simple write operation for the supported current-driver value subset.
   """
   @spec write(String.t(), term()) :: {:ok, t()} | {:error, Error.t()}
+  def write(bin_name, nil) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    {:ok, write_operation(bin_name, @particle_null, <<>>)}
+  end
+
+  def write(bin_name, value)
+      when is_binary(bin_name) and byte_size(bin_name) > 0 and is_integer(value) do
+    {:ok, write_operation(bin_name, @particle_integer, <<value::64-signed-big>>)}
+  end
+
+  def write(bin_name, value)
+      when is_binary(bin_name) and byte_size(bin_name) > 0 and is_float(value) do
+    {:ok, write_operation(bin_name, @particle_float, <<value::64-float-big>>)}
+  end
+
+  def write(bin_name, value)
+      when is_binary(bin_name) and byte_size(bin_name) > 0 and is_binary(value) do
+    {:ok, write_operation(bin_name, @particle_string, value)}
+  end
+
+  def write(bin_name, true) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    {:ok, write_operation(bin_name, @particle_bool, <<1>>)}
+  end
+
+  def write(bin_name, false) when is_binary(bin_name) and byte_size(bin_name) > 0 do
+    {:ok, write_operation(bin_name, @particle_bool, <<0>>)}
+  end
+
+  def write(bin_name, {:blob, value})
+      when is_binary(bin_name) and byte_size(bin_name) > 0 and is_binary(value) do
+    {:ok, write_operation(bin_name, @particle_blob, value)}
+  end
+
   def write(bin_name, value) when is_binary(bin_name) and byte_size(bin_name) > 0 do
     with {:ok, {particle_type, data}} <- Value.encode_value(value) do
-      {:ok,
-       %__MODULE__{
-         op_type: @op_write,
-         particle_type: particle_type,
-         bin_name: bin_name,
-         data: data
-       }}
+      {:ok, write_operation(bin_name, particle_type, data)}
     end
   end
 
@@ -177,6 +207,15 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
      Error.from_result_code(:invalid_argument,
        message: "write bin name must be a non-empty binary, got: #{inspect(bin_name)}"
      )}
+  end
+
+  defp write_operation(bin_name, particle_type, data) do
+    %__MODULE__{
+      op_type: @op_write,
+      particle_type: particle_type,
+      bin_name: bin_name,
+      data: data
+    }
   end
 
   @doc """

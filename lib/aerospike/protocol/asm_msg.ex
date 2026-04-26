@@ -140,10 +140,16 @@ defmodule Aerospike.Protocol.AsmMsg do
         msg.result_code::8, msg.generation::32-big, msg.expiration::32-big,
         msg.timeout::32-big-signed, field_count::16-big, op_count::16-big>>
 
-    [
-      header
-      | Enum.map(msg.fields, &Field.encode/1) ++ Enum.map(msg.operations, &Operation.encode/1)
-    ]
+    [header | encode_fields(msg.fields, encode_operations(msg.operations))]
+  end
+
+  defp encode_fields([], tail), do: tail
+  defp encode_fields([field | rest], tail), do: [Field.encode(field) | encode_fields(rest, tail)]
+
+  defp encode_operations([]), do: []
+
+  defp encode_operations([operation | rest]) do
+    [Operation.encode(operation) | encode_operations(rest)]
   end
 
   @doc """
