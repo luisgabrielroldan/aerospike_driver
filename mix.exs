@@ -277,8 +277,10 @@ defmodule Aerospike.MixProject do
 
     Enum.each(scripts, &validate_bench_script!/1)
 
-    Mix.Task.reenable("run")
-    Mix.Task.run("run", scripts)
+    Enum.each(scripts, fn script ->
+      Mix.Task.reenable("run")
+      Mix.Task.run("run", [script])
+    end)
   end
 
   defp validate_bench_script!(path) do

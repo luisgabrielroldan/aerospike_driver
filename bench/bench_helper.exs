@@ -13,7 +13,7 @@ defmodule Aerospike.Bench do
   def load_config(overrides \\ %{}), do: Aerospike.Bench.Config.load(overrides)
 
   def run_metadata(config, overrides \\ %{}) when is_map(config) and is_map(overrides) do
-    %{
+    base = %{
       git_sha: git_sha(),
       elixir_version: System.version(),
       otp_release: System.otp_release(),
@@ -22,6 +22,8 @@ defmodule Aerospike.Bench do
       scenario_config: config,
       host_summary: host_summary()
     }
+
+    Map.merge(base, Map.delete(overrides, :aerospike_server_version))
   end
 
   def benchee_options(config, overrides \\ [])

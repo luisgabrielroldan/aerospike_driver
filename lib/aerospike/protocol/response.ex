@@ -135,37 +135,38 @@ defmodule Aerospike.Protocol.Response do
   end
 
   defp record_bins_from_operations(operations) do
-    bins =
-      Enum.reduce(operations, %{bins: %{}, counts: %{}}, fn
-        %Operation{bin_name: ""}, acc ->
-          acc
-
-        %Operation{bin_name: name} = op, acc ->
-          {:ok, value} = Value.decode_value(op.particle_type, op.data)
-          put_operation_value(acc, name, value)
-      end)
-
-    {:ok, bins.bins}
+    {:ok, decode_record_bins(operations, %{}, nil)}
   end
 
-  defp put_operation_value(%{bins: bins, counts: counts} = acc, name, value) do
-    count = Map.get(counts, name, 0) + 1
+  defp decode_record_bins([], bins, _repeated), do: bins
 
-    bins =
-      case count do
-        1 ->
-          Map.put(bins, name, value)
-
-        2 ->
-          first_value = Map.fetch!(bins, name)
-          Map.put(bins, name, [first_value, value])
-
-        _ ->
-          Map.update!(bins, name, fn values -> values ++ [value] end)
-      end
-
-    %{acc | bins: bins, counts: Map.put(counts, name, count)}
+  defp decode_record_bins([%Operation{bin_name: ""} | rest], bins, repeated) do
+    decode_record_bins(rest, bins, repeated)
   end
+
+  defp decode_record_bins([%Operation{bin_name: name} = op | rest], bins, repeated) do
+    {:ok, value} = Value.decode_value(op.particle_type, op.data)
+    {bins, repeated} = put_operation_value(bins, repeated, name, value)
+    decode_record_bins(rest, bins, repeated)
+  end
+
+  defp put_operation_value(bins, repeated, name, value) do
+    case Map.fetch(bins, name) do
+      {:ok, existing} -> put_repeated_operation_value(bins, repeated, name, existing, value)
+      :error -> {Map.put(bins, name, value), repeated}
+    end
+  end
+
+  defp put_repeated_operation_value(bins, repeated, name, existing, value) do
+    if repeated != nil and MapSet.member?(repeated, name) do
+      {Map.put(bins, name, existing ++ [value]), repeated}
+    else
+      {Map.put(bins, name, [existing, value]), put_repeated_name(repeated, name)}
+    end
+  end
+
+  defp put_repeated_name(nil, name), do: MapSet.new([name])
+  defp put_repeated_name(repeated, name), do: MapSet.put(repeated, name)
 
   defp result_atom(code) when is_integer(code) do
     ResultCode.from_integer(code)

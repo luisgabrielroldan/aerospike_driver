@@ -4,6 +4,7 @@ defmodule Aerospike.Protocol.ResponseTest do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.MessagePack
   alias Aerospike.Protocol.Response
   alias Aerospike.Record
 
@@ -85,6 +86,38 @@ defmodule Aerospike.Protocol.ResponseTest do
       key = Key.new(@namespace, @set, @user_key)
 
       assert {:ok, %Record{bins: %{"count" => [1, 2]}}} =
+               Response.parse_record_response(msg, key)
+    end
+
+    test "repeated bin reads preserve list-valued first results" do
+      msg =
+        %AsmMsg{
+          result_code: 0,
+          operations: [
+            %AsmMsg.Operation{
+              op_type: 1,
+              particle_type: 20,
+              bin_name: "items",
+              data: MessagePack.pack!(["a", "b"])
+            },
+            %AsmMsg.Operation{
+              op_type: 1,
+              particle_type: 3,
+              bin_name: "items",
+              data: "tail"
+            },
+            %AsmMsg.Operation{
+              op_type: 1,
+              particle_type: 1,
+              bin_name: "items",
+              data: <<3::64-signed-big>>
+            }
+          ]
+        }
+
+      key = Key.new(@namespace, @set, @user_key)
+
+      assert {:ok, %Record{bins: %{"items" => [["a", "b"], "tail", 3]}}} =
                Response.parse_record_response(msg, key)
     end
   end

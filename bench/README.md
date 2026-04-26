@@ -9,6 +9,7 @@ actually being built.
 The first pass intentionally covers only benchmarks that match the current driver's public API:
 
 - L1 microbench: `bench/tests/micro/key_construction_bench.exs`
+- L1 protocol codec microbench: `bench/tests/micro/protocol_message_bench.exs`
 - L2 single-node E2E: `bench/tests/e2e/crud_baseline_bench.exs`
 - L4 multi-node fan-out: `bench/tests/fanout/batch_get_bench.exs`
 
@@ -63,6 +64,7 @@ Run one benchmark:
 
 ```bash
 mix bench bench/tests/micro/key_construction_bench.exs
+mix bench bench/tests/micro/protocol_message_bench.exs
 mix bench bench/tests/e2e/crud_baseline_bench.exs
 mix bench bench/tests/fanout/batch_get_bench.exs
 ```
@@ -79,6 +81,10 @@ mix bench.clean --all
 Each run writes JSON artifacts under:
 
 `bench/results/<run-id>/<benchmark-title>.json`
+
+Some microbenchmarks batch tiny operations inside each Benchee sample to reduce scheduler and
+timer noise. When an artifact contains `iterations_per_sample`, divide the reported average by
+that value to estimate per-operation cost.
 
 Use explicit run IDs when comparing before/after changes:
 
