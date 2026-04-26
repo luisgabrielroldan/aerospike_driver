@@ -154,6 +154,32 @@ defmodule Aerospike.Protocol.ScanResponseTest do
     assert record.key.user_key == "user-key"
   end
 
+  test "parse/3 preserves first value for duplicate bins" do
+    digest = digest_fixture("duplicate-bins")
+
+    msg =
+      record_msg(digest: digest)
+      |> Map.put(:operations, [
+        %Operation{
+          op_type: Operation.op_read(),
+          particle_type: 1,
+          bin_name: "age",
+          data: <<42::64-signed-big>>
+        },
+        %Operation{
+          op_type: Operation.op_read(),
+          particle_type: 1,
+          bin_name: "age",
+          data: <<99::64-signed-big>>
+        }
+      ])
+
+    body = encode_bin(msg) <> encode_bin(last_msg())
+
+    assert {:ok, [record], []} = ScanResponse.parse(body, @namespace, @set)
+    assert record.bins == %{"age" => 42}
+  end
+
   test "parse_stream_chunk/3 treats partition skip and terminal result codes as empty frames" do
     assert {:ok, [], [], false} =
              ScanResponse.parse_stream_chunk(

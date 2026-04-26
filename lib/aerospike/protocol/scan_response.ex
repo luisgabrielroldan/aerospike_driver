@@ -476,26 +476,63 @@ defmodule Aerospike.Protocol.ScanResponse do
   defp skip_operations(data, 0), do: {:ok, data}
 
   defp skip_operations(data, n) when n > 0 do
-    case Operation.decode(data) do
-      {:ok, _operation, rest} -> skip_operations(rest, n - 1)
-      {:error, _} = err -> err
+    with {:ok, rest} <- skip_operation(data) do
+      skip_operations(rest, n - 1)
     end
   end
+
+  defp skip_operation(
+         <<size::32-big, _op::8, _particle::8, _reserved::8, name_len::8, rest::binary>>
+       )
+       when size >= 4 and name_len <= size - 4 do
+    data_len = size - 4 - name_len
+
+    case rest do
+      <<_bin_name::binary-size(name_len), _data::binary-size(data_len), remaining::binary>> ->
+        {:ok, remaining}
+
+      _ ->
+        {:error, :incomplete_operation}
+    end
+  end
+
+  defp skip_operation(<<_size::32-big, _rest::binary>>), do: {:error, :invalid_operation_size}
+  defp skip_operation(_), do: {:error, :incomplete_operation_header}
 
   defp decode_operations_to_bins(data, 0), do: {:ok, %{}, data}
 
   defp decode_operations_to_bins(data, n) when n > 0 do
-    case Operation.decode(data) do
-      {:ok, operation, rest} ->
-        with {:ok, value} <- Value.decode_value(operation.particle_type, operation.data),
-             {:ok, bins, tail} <- decode_operations_to_bins(rest, n - 1) do
-          {:ok, Map.put(bins, operation.bin_name, value), tail}
-        end
+    decode_operations_to_bins(data, n, %{})
+  end
 
-      {:error, _} = err ->
-        err
+  defp decode_operations_to_bins(data, 0, bins), do: {:ok, bins, data}
+
+  defp decode_operations_to_bins(data, n, bins) when n > 0 do
+    with {:ok, bin_name, particle_type, value_data, rest} <- decode_operation_parts(data),
+         {:ok, value} <- Value.decode_value(particle_type, value_data) do
+      decode_operations_to_bins(rest, n - 1, Map.put_new(bins, bin_name, value))
     end
   end
+
+  defp decode_operation_parts(
+         <<size::32-big, _op::8, particle_type::8, _reserved::8, name_len::8, rest::binary>>
+       )
+       when size >= 4 and name_len <= size - 4 do
+    data_len = size - 4 - name_len
+
+    case rest do
+      <<bin_name::binary-size(name_len), data::binary-size(data_len), remaining::binary>> ->
+        {:ok, bin_name, particle_type, data, remaining}
+
+      _ ->
+        {:error, :incomplete_operation}
+    end
+  end
+
+  defp decode_operation_parts(<<_size::32-big, _rest::binary>>),
+    do: {:error, :invalid_operation_size}
+
+  defp decode_operation_parts(_), do: {:error, :incomplete_operation_header}
 
   defp decode_aggregate_bins(data, 0), do: {:ok, [], data}
 
