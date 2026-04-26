@@ -25,7 +25,7 @@ defmodule Aerospike.Command.Batch do
   @doc false
   @spec to_public_results([Result.t()]) :: [BatchResult.t()]
   def to_public_results(results) when is_list(results) do
-    Enum.map(results, &BatchResult.from_command_result/1)
+    BatchResult.from_command_results(results)
   end
 
   @spec execute(GenServer.server(), [Entry.t()], keyword()) :: result()

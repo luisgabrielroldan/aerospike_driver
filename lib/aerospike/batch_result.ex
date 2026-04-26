@@ -33,7 +33,64 @@ defmodule Aerospike.BatchResult do
         }
 
   @doc false
-  @spec from_command_result(term()) :: t()
+  @spec from_command_results([Result.t()]) :: [t()]
+  def from_command_results(results) when is_list(results) do
+    from_command_results(results, [])
+  end
+
+  defp from_command_results([], acc), do: Enum.reverse(acc)
+
+  defp from_command_results(
+         [
+           %Result{
+             key: key,
+             status: :ok,
+             record: record,
+             error: nil,
+             in_doubt: in_doubt
+           }
+           | rest
+         ],
+         acc
+       ) do
+    result = %__MODULE__{
+      key: key,
+      status: :ok,
+      record: record,
+      error: nil,
+      in_doubt: in_doubt
+    }
+
+    from_command_results(rest, [result | acc])
+  end
+
+  defp from_command_results(
+         [
+           %Result{
+             key: key,
+             status: :error,
+             record: nil,
+             error: error,
+             in_doubt: in_doubt
+           }
+           | rest
+         ],
+         acc
+       )
+       when not is_nil(error) do
+    result = %__MODULE__{
+      key: key,
+      status: :error,
+      record: nil,
+      error: error,
+      in_doubt: in_doubt
+    }
+
+    from_command_results(rest, [result | acc])
+  end
+
+  @doc false
+  @spec from_command_result(Result.t()) :: t()
   def from_command_result(%Result{
         key: key,
         status: :ok,

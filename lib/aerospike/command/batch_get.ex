@@ -44,7 +44,7 @@ defmodule Aerospike.Command.BatchGet do
     with :ok <- validate_keys(keys),
          {:ok, policy} <- batch_policy(tender, opts),
          {:ok, results} <- MixedBatch.execute(tender, entries(keys, policy, mode), opts) do
-      {:ok, Enum.map(results, &item_result(&1, mode))}
+      {:ok, to_public_results(results, mode)}
     end
   end
 
@@ -71,8 +71,17 @@ defmodule Aerospike.Command.BatchGet do
          {:ok, policy} <- batch_policy(tender, opts),
          {:ok, results} <-
            MixedBatch.execute(tender, operate_entries(keys, policy, operations, flags), opts) do
-      {:ok, Enum.map(results, &item_result(&1, :all))}
+      {:ok, to_public_results(results, :all)}
     end
+  end
+
+  @doc false
+  @spec to_public_results([BatchCommand.Result.t()], mode()) :: [
+          record_item_result() | exists_item_result()
+        ]
+  def to_public_results(results, mode)
+      when is_list(results) and mode in [:all, :header, :exists] do
+    do_to_public_results(results, mode, [])
   end
 
   defp entries(keys, %Policy.BatchRead{} = policy, mode) do
@@ -107,34 +116,82 @@ defmodule Aerospike.Command.BatchGet do
     end)
   end
 
-  defp item_result(%BatchCommand.Result{status: :ok, record: %Record{} = record}, :all),
-    do: {:ok, record}
+  defp do_to_public_results([], _mode, acc), do: Enum.reverse(acc)
 
-  defp item_result(
-         %BatchCommand.Result{
-           status: :ok,
-           key: key,
-           record: %{generation: generation, ttl: ttl}
-         },
-         :header
+  defp do_to_public_results(
+         [%BatchCommand.Result{status: :ok, record: %Record{} = record} | rest],
+         :all,
+         acc
        ) do
-    {:ok, %Record{key: key, bins: %{}, generation: generation, ttl: ttl}}
+    do_to_public_results(rest, :all, [{:ok, record} | acc])
   end
 
-  defp item_result(%BatchCommand.Result{status: :ok}, :exists), do: {:ok, true}
+  defp do_to_public_results(
+         [
+           %BatchCommand.Result{
+             status: :ok,
+             key: key,
+             record: %{generation: generation, ttl: ttl}
+           }
+           | rest
+         ],
+         :header,
+         acc
+       ) do
+    record = %Record{key: key, bins: %{}, generation: generation, ttl: ttl}
+    do_to_public_results(rest, :header, [{:ok, record} | acc])
+  end
 
-  defp item_result(
-         %BatchCommand.Result{status: :error, error: %Error{code: :key_not_found}},
-         :exists
-       ),
-       do: {:ok, false}
+  defp do_to_public_results(
+         [%BatchCommand.Result{status: :ok} | rest],
+         :exists,
+         acc
+       ) do
+    do_to_public_results(rest, :exists, [{:ok, true} | acc])
+  end
 
-  defp item_result(%BatchCommand.Result{status: :error, error: %Error{} = error}, _mode),
-    do: {:error, error}
+  defp do_to_public_results(
+         [
+           %BatchCommand.Result{
+             status: :error,
+             error: %Error{code: :key_not_found}
+           }
+           | rest
+         ],
+         :exists,
+         acc
+       ) do
+    do_to_public_results(rest, :exists, [{:ok, false} | acc])
+  end
 
-  defp item_result(%BatchCommand.Result{status: :error, error: reason}, _mode)
-       when is_atom(reason),
-       do: {:error, reason}
+  defp do_to_public_results(
+         [
+           %BatchCommand.Result{
+             status: :error,
+             error: %Error{} = error
+           }
+           | rest
+         ],
+         mode,
+         acc
+       ) do
+    do_to_public_results(rest, mode, [{:error, error} | acc])
+  end
+
+  defp do_to_public_results(
+         [
+           %BatchCommand.Result{
+             status: :error,
+             error: reason
+           }
+           | rest
+         ],
+         mode,
+         acc
+       )
+       when is_atom(reason) do
+    do_to_public_results(rest, mode, [{:error, reason} | acc])
+  end
 
   defp validate_keys(keys), do: validate_keys(keys, "Aerospike.batch_get/4")
 
