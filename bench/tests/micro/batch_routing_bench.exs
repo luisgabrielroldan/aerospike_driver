@@ -5,6 +5,7 @@ defmodule Aerospike.Bench.Micro.BatchRouting do
 
   alias Aerospike.Bench.Support.Runtime
   alias Aerospike.Cluster.PartitionMap
+  alias Aerospike.Cluster.Router
   alias Aerospike.Command.BatchCommand.Entry
   alias Aerospike.Command.BatchRouter
   alias Aerospike.Key
@@ -13,7 +14,7 @@ defmodule Aerospike.Bench.Micro.BatchRouting do
   @set "batch_routing"
   @batch_sizes [100, 1_000]
   @iterations 32
-  @node_count 8
+  @node_counts [1, 3, 8]
 
   def run do
     config = Aerospike.Bench.load_config()
@@ -48,19 +49,27 @@ defmodule Aerospike.Bench.Micro.BatchRouting do
       end,
       "BR-003 Group read keys x#{@iterations}" => fn %{tables: tables, keys: keys} ->
         repeat(keys, &BatchRouter.group_keys(tables, &1, dispatch: {:read, :master, 0}))
+      end,
+      "BR-004 Route master reads x#{@iterations}" => fn %{tables: tables, keys: keys} ->
+        repeat(keys, &route_keys(tables, &1, :master))
+      end,
+      "BR-005 Route sequence reads x#{@iterations}" => fn %{tables: tables, keys: keys} ->
+        repeat(keys, &route_keys(tables, &1, :sequence))
       end
     }
   end
 
   defp inputs do
-    Map.new(@batch_sizes, fn batch_size ->
-      {"#{batch_size} keys", build_input(batch_size)}
-    end)
+    for batch_size <- @batch_sizes,
+        node_count <- @node_counts,
+        into: %{} do
+      {"#{batch_size} keys / #{node_count} nodes", build_input(batch_size, node_count)}
+    end
   end
 
-  defp build_input(batch_size) do
+  defp build_input(batch_size, node_count) do
     tables = create_tables(batch_size)
-    seed_partitions(tables)
+    seed_partitions(tables, node_count)
 
     key_runs =
       Enum.map(1..@iterations, fn iteration ->
@@ -85,14 +94,14 @@ defmodule Aerospike.Bench.Micro.BatchRouting do
     %{owners: owners, node_gens: node_gens, meta: meta}
   end
 
-  defp seed_partitions(%{owners: owners}) do
+  defp seed_partitions(%{owners: owners}, node_count) do
     Enum.each(0..4095, fn partition_id ->
-      master_index = rem(partition_id, @node_count)
+      master_index = rem(partition_id, node_count)
 
       replicas = [
-        node_name(master_index),
-        node_name(master_index + 1),
-        node_name(master_index + 2)
+        node_name(master_index, node_count),
+        node_name(master_index + 1, node_count),
+        node_name(master_index + 2, node_count)
       ]
 
       :ok = PartitionMap.update(owners, @namespace, partition_id, 1, replicas)
@@ -123,7 +132,15 @@ defmodule Aerospike.Bench.Micro.BatchRouting do
     Enum.reduce(inputs, nil, fn input, _acc -> fun.(input) end)
   end
 
-  defp node_name(index), do: "bench-node-#{rem(index, @node_count)}"
+  defp route_keys(tables, keys, policy) do
+    keys
+    |> Enum.with_index()
+    |> Enum.reduce(nil, fn {key, attempt}, _acc ->
+      Router.pick_for_read_ready(tables, key, policy, attempt)
+    end)
+  end
+
+  defp node_name(index, node_count), do: "bench-node-#{rem(index, node_count)}"
 end
 
 Aerospike.Bench.Micro.BatchRouting.run()

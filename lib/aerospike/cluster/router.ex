@@ -97,12 +97,26 @@ defmodule Aerospike.Cluster.Router do
   end
 
   defp pick_sequence(replicas, attempt) do
-    case Enum.reject(replicas, &is_nil/1) do
-      [] ->
+    case available_count(replicas, 0) do
+      0 ->
         {:error, :no_master}
 
-      available ->
-        {:ok, Enum.at(available, rem(attempt, length(available)))}
+      count ->
+        {:ok, pick_available(replicas, rem(attempt, count))}
     end
+  end
+
+  defp available_count([], count), do: count
+  defp available_count([nil | rest], count), do: available_count(rest, count)
+
+  defp available_count([node_name | rest], count) when is_binary(node_name),
+    do: available_count(rest, count + 1)
+
+  defp pick_available([nil | rest], index), do: pick_available(rest, index)
+  defp pick_available([node_name | _rest], 0) when is_binary(node_name), do: node_name
+
+  defp pick_available([node_name | rest], index)
+       when is_binary(node_name) and index > 0 do
+    pick_available(rest, index - 1)
   end
 end
