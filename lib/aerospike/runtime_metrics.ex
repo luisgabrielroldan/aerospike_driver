@@ -252,7 +252,7 @@ defmodule Aerospike.RuntimeMetrics do
   defp maybe_record(cluster, fun) do
     case meta_table(cluster) do
       {:ok, table} ->
-        if metrics_enabled?(cluster) do
+        if metrics_enabled_table?(table) do
           fun.(table)
         end
 
@@ -261,6 +261,13 @@ defmodule Aerospike.RuntimeMetrics do
     end
 
     :ok
+  end
+
+  defp metrics_enabled_table?(table) do
+    case :ets.lookup(table, @metrics_enabled_key) do
+      [{@metrics_enabled_key, true}] -> true
+      _ -> false
+    end
   end
 
   defp meta_table(cluster) do
