@@ -115,6 +115,35 @@ defmodule Aerospike.Command.Batch do
   end
 
   defp ordered_results(outcomes, entries) do
+    case ordered_results_if_sorted(outcomes, entries, -1, []) do
+      {:ok, ordered} ->
+        {:ok, ordered}
+
+      :unsorted ->
+        sorted_ordered_results(outcomes, entries)
+    end
+  end
+
+  defp ordered_results_if_sorted(_outcomes, [], _previous_index, acc) do
+    {:ok, Enum.reverse(acc)}
+  end
+
+  defp ordered_results_if_sorted(
+         outcomes,
+         [%Entry{index: index} = entry | rest],
+         previous_index,
+         acc
+       )
+       when index >= previous_index do
+    result = Map.get(outcomes, index, missing_merge_result(entry))
+    ordered_results_if_sorted(outcomes, rest, index, [result | acc])
+  end
+
+  defp ordered_results_if_sorted(_outcomes, [%Entry{} | _rest], _previous_index, _acc) do
+    :unsorted
+  end
+
+  defp sorted_ordered_results(outcomes, entries) do
     ordered =
       entries
       |> Enum.sort_by(& &1.index)
