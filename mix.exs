@@ -80,7 +80,10 @@ defmodule Aerospike.MixProject do
 
   defp docs do
     [
+      canonical: "https://hexdocs.pm/aerospike_driver",
+      homepage_url: "https://hexdocs.pm/aerospike_driver",
       main: "readme",
+      source_ref: "v#{@version}",
       extras: [
         {"README.md", [title: "Overview"]},
         {"guides/getting-started.md", [title: "Getting Started"]},
@@ -94,8 +97,76 @@ defmodule Aerospike.MixProject do
         {"guides/transactions.md", [title: "Transactions"]},
         {"guides/telemetry-and-runtime-metrics.md", [title: "Telemetry And Runtime Metrics"]}
       ],
+      nest_modules_by_prefix: [
+        Aerospike.Batch,
+        Aerospike.Geo,
+        Aerospike.Op,
+        Aerospike.Transport
+      ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/
+      ],
+      groups_for_modules: [
+        "Core API": [
+          Aerospike,
+          Aerospike.Cluster,
+          Aerospike.Key,
+          Aerospike.Record,
+          Aerospike.Error,
+          Aerospike.RetryPolicy
+        ],
+        "Record Operations": [
+          Aerospike.Op,
+          Aerospike.Op.Bit,
+          Aerospike.Op.Exp,
+          Aerospike.Op.HLL,
+          Aerospike.Op.List,
+          Aerospike.Op.Map,
+          Aerospike.Ctx,
+          Aerospike.Exp
+        ],
+        Batch: [
+          Aerospike.Batch,
+          Aerospike.Batch.Delete,
+          Aerospike.Batch.Operate,
+          Aerospike.Batch.Put,
+          Aerospike.Batch.Read,
+          Aerospike.Batch.UDF,
+          Aerospike.BatchResult
+        ],
+        "Queries, Scans, And Indexes": [
+          Aerospike.Cursor,
+          Aerospike.ExecuteTask,
+          Aerospike.Filter,
+          Aerospike.IndexTask,
+          Aerospike.Page,
+          Aerospike.PartitionFilter,
+          Aerospike.Query,
+          Aerospike.Scan
+        ],
+        "Server Features": [
+          Aerospike.Geo,
+          Aerospike.Geo.Circle,
+          Aerospike.Geo.Point,
+          Aerospike.Geo.Polygon,
+          Aerospike.RegisterTask,
+          Aerospike.Txn,
+          Aerospike.UDF
+        ],
+        Runtime: [
+          Aerospike.Cluster.Supervisor,
+          Aerospike.Cluster.NodeTransport,
+          Aerospike.Telemetry
+        ],
+        Security: [
+          Aerospike.Privilege,
+          Aerospike.Role,
+          Aerospike.User
+        ],
+        Transports: [
+          Aerospike.Transport.Tcp,
+          Aerospike.Transport.Tls
+        ]
       ]
     ]
   end
@@ -172,7 +243,7 @@ defmodule Aerospike.MixProject do
       {:benchee, "~> 1.3", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end
 

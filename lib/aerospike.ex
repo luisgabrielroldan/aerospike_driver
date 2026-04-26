@@ -2,13 +2,10 @@ defmodule Aerospike do
   @moduledoc """
   Public entry point for the Aerospike Elixir driver.
 
-  Internally this codebase may still be called "the spike", but the
-  public package identity is the new `aerospike_driver` intended to
-  replace the older driver that remains in the workspace as a migration
-  reference. The useful contract here is still narrower than "full
-  client parity": start-up should be explicit, supported command
-  families should be discoverable, and the named proof suites should
-  match the public surface.
+  The public package identity is `aerospike_driver`. The useful contract here
+  is still narrower than "full client parity": start-up should be explicit,
+  supported command families should be discoverable, and the named proof suites
+  should match the public surface.
 
   The driver currently proves a small unary command family on one shared execution
   path plus batch, scan, query, and transaction helpers over the same
@@ -84,14 +81,14 @@ defmodule Aerospike do
 
       {:ok, _sup} =
         Aerospike.start_link(
-          name: :spike,
+          name: :aerospike,
           transport: Aerospike.Transport.Tcp,
           hosts: ["127.0.0.1:3000"],
           namespaces: ["test"],
           pool_size: 2
         )
 
-      Aerospike.Cluster.ready?(:spike)
+      Aerospike.Cluster.ready?(:aerospike)
 
   The repo README names the supported validation profiles:
 
@@ -860,7 +857,7 @@ defmodule Aerospike do
   Verifies that the active node pools can serve checkouts through the normal path.
 
   This is an explicit operator action; it does not toggle metrics and it does
-  not change the pool startup mode. The current spike pools are already eager at
+  not change the pool startup mode. The current driver pools are already eager at
   cluster start. `warm_up/2` simply proves that the active pools can hand out
   the requested number of workers right now.
 
@@ -1519,7 +1516,7 @@ defmodule Aerospike do
 
   This only works for a transaction handle whose tracking row is already
   initialized on `cluster`. A fresh `%Aerospike.Txn{}` is not enough by itself.
-  In the current spike, public code initializes that runtime state only when
+  In the current driver, public code initializes that runtime state only when
   `transaction/2` or `transaction/3` enters its callback. Transaction
   tracking is keyed off the started cluster name, so this helper currently
   requires that registered atom.
@@ -1547,7 +1544,7 @@ defmodule Aerospike do
   Returns the current state of a transaction on the named cluster `cluster`.
 
   This reflects only the in-flight states backed by the runtime tracking row.
-  After commit or abort, the spike cleans that row up, so `txn_status/2`
+  After commit or abort, the driver cleans that row up, so `txn_status/2`
   returns an error instead of a terminal `:committed` or `:aborted` state.
   Like the other transaction lifecycle helpers, this currently requires the
   registered cluster atom.
@@ -1562,7 +1559,7 @@ defmodule Aerospike do
   @doc """
   Runs a function within a new transaction on the named cluster `cluster`.
 
-  The callback owns the public transaction lifecycle. The spike initializes the
+  The callback owns the public transaction lifecycle. The driver initializes the
   runtime tracking row before invoking `fun`, then commits on success or aborts
   on any failure path. Do not call `commit/2` or `abort/2` from inside the
   callback.
@@ -1583,7 +1580,7 @@ defmodule Aerospike do
   Runs a function within a transaction on the named cluster `cluster` using a
   provided handle or options.
 
-  When `txn_or_opts` is a `%Aerospike.Txn{}`, the spike initializes fresh
+  When `txn_or_opts` is a `%Aerospike.Txn{}`, the driver initializes fresh
   runtime tracking for that handle on `cluster` at callback entry. Reusing the
   same handle concurrently or against another cluster is unsupported. This
   helper currently requires the registered cluster atom.
@@ -1614,7 +1611,7 @@ defmodule Aerospike do
   @doc """
   Writes `bins` for `key` to `cluster`.
 
-  The spike accepts only a non-empty bin map and only scalar, list, map,
+  The driver accepts only a non-empty bin map and only scalar, list, map,
   bytes, geo, and HyperLogLog values supported by the command encoder.
   Supported write opts are:
 

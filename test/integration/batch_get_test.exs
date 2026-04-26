@@ -17,7 +17,7 @@ defmodule Aerospike.Integration.BatchGetTest do
   setup do
     IntegrationSupport.probe_aerospike!(
       @seeds,
-      "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver_spike/` first."
+      "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver/` first."
     )
 
     IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)

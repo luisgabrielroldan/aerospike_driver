@@ -157,7 +157,7 @@ defmodule Aerospike.Protocol.AsmMsg.Operation do
   end
 
   @doc """
-  Builds a simple write operation for the supported spike value subset.
+  Builds a simple write operation for the supported current-driver value subset.
   """
   @spec write(String.t(), term()) :: {:ok, t()} | {:error, Error.t()}
   def write(bin_name, value) when is_binary(bin_name) and byte_size(bin_name) > 0 do

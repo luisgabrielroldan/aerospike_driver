@@ -16,7 +16,7 @@ defmodule Aerospike.Txn do
   state behind it, so transaction commands reject it.
 
   Passing the same `%Aerospike.Txn{}` to multiple concurrent processes is
-  undefined behavior. The tracking row is shared mutable state, and the spike
+  undefined behavior. The tracking row is shared mutable state, and the driver
   does not serialize concurrent updates around one transaction handle.
   """
 

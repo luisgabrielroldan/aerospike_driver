@@ -155,7 +155,7 @@ defmodule Aerospike.Command.BatchGetTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                BatchGet.execute(:unused_tender, [key], :bins, [])
 
-      assert message =~ "supports only :all bins in the spike"
+      assert message =~ "supports only :all bins in the current driver"
     end
   end
 

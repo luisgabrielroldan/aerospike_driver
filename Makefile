@@ -1,4 +1,4 @@
-SPIKE_COMPOSE ?= docker compose
+DRIVER_COMPOSE ?= docker compose
 SECURITY_USER ?= admin
 SECURITY_PASSWORD ?= admin
 PROFILE ?= unit
@@ -29,7 +29,7 @@ help:
 		'deps-cluster-up      Compatibility shim for `make deps PROFILE=cluster`' \
 		'deps-enterprise-up   Compatibility shim for `make deps PROFILE=enterprise`' \
 		'deps-all-up          Compatibility shim for `make deps PROFILE=all`' \
-		'deps-down            Stop all spike docker stacks'
+		'deps-down            Stop all driver docker stacks'
 
 test:
 	@case "$(PROFILE)" in \
@@ -90,32 +90,32 @@ deps:
 	esac
 
 deps-up:
-	@$(SPIKE_COMPOSE) up -d aerospike
+	@$(DRIVER_COMPOSE) up -d aerospike
 	@$(MAKE) wait-service SERVICE=aerospike1 EXPECTED_SIZE=1
-	@echo "Spike CE single-node ready on localhost:3000"
+	@echo "Driver CE single-node ready on localhost:3000"
 
 deps-cluster-up:
-	@$(SPIKE_COMPOSE) --profile cluster up -d aerospike aerospike2 aerospike3
+	@$(DRIVER_COMPOSE) --profile cluster up -d aerospike aerospike2 aerospike3
 	@$(MAKE) wait-service SERVICE=aerospike1 EXPECTED_SIZE=3
 	@$(MAKE) wait-service SERVICE=aerospike2 EXPECTED_SIZE=3
 	@$(MAKE) wait-service SERVICE=aerospike3 EXPECTED_SIZE=3
-	@echo "Spike cluster ready on localhost:3000, :3010, :3020"
+	@echo "Driver cluster ready on localhost:3000, :3010, :3020"
 
 deps-enterprise-up:
-	@$(SPIKE_COMPOSE) --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki aerospike-ee-security aerospike-ee-security-tls
+	@$(DRIVER_COMPOSE) --profile enterprise up -d aerospike-ee aerospike-ee-tls aerospike-ee-pki aerospike-ee-security aerospike-ee-security-tls
 	@$(MAKE) wait-service SERVICE=aerospike-ee EXPECTED_SIZE=1
 	@$(MAKE) wait-service SERVICE=aerospike-ee-tls EXPECTED_SIZE=1
 	@$(MAKE) wait-service SERVICE=aerospike-ee-pki EXPECTED_SIZE=1
 	@$(MAKE) wait-service SERVICE=aerospike-ee-security EXPECTED_SIZE=1
 	@$(MAKE) wait-service SERVICE=aerospike-ee-security-tls EXPECTED_SIZE=1
-	@echo "Spike enterprise stack ready on localhost:3100, :3200, :4333, :4334, :4433"
+	@echo "Driver enterprise stack ready on localhost:3100, :3200, :4333, :4334, :4433"
 
 deps-all-up: deps-cluster-up deps-enterprise-up
-	@echo "All documented spike test dependencies are ready"
+	@echo "All documented driver test dependencies are ready"
 
 deps-down:
-	@$(SPIKE_COMPOSE) --profile cluster --profile enterprise down
-	@echo "Spike docker stacks stopped"
+	@$(DRIVER_COMPOSE) --profile cluster --profile enterprise down
+	@echo "Driver docker stacks stopped"
 
 wait-service:
 	@echo "Waiting for $(SERVICE) (expected cluster size $(EXPECTED_SIZE))..."

@@ -55,7 +55,7 @@ defmodule Aerospike.Command.GetRetryTest do
       stop_quietly(fake)
     end)
 
-    # Sanity check: if the partition id for the canonical spike key ever
+    # Sanity check: if the partition id for the canonical retry key ever
     # shifts, the multi-replica scripting below is wrong. Fail fast.
     assert Key.partition_id(Key.new(@namespace, @set, @user_key)) == @partition_id
 

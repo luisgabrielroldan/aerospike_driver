@@ -19,7 +19,7 @@ defmodule Aerospike.Integration.QueryAggregateResultTest do
     IntegrationSupport.probe_aerospike!(
       @host,
       @port,
-      "Run `docker compose up -d` in `aerospike_driver_spike/` first."
+      "Run `docker compose up -d` in `aerospike_driver/` first."
     )
 
     name = IntegrationSupport.unique_atom("spike_query_aggregate_result")

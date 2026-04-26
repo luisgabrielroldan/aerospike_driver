@@ -19,7 +19,7 @@ defmodule Aerospike.Integration.UdfApplyTest do
     IntegrationSupport.probe_aerospike!(
       @host,
       @port,
-      "Run `docker compose up -d` in `aerospike_driver_spike/` first."
+      "Run `docker compose up -d` in `aerospike_driver/` first."
     )
 
     register_fixture_udf!()

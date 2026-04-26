@@ -14,7 +14,7 @@ defmodule Aerospike.Integration.OperatorSurfaceSmokeTest do
 
   The scenario:
 
-    1. open an `Aerospike.Transport.Tls` cluster with a `spike` data
+    1. open an `Aerospike.Transport.Tls` cluster with a dedicated data
        user, client cert trust, and auto-tend enabled;
     2. attach a `:telemetry` handler to every event the driver emits
        (pool checkout, command send/recv, info RPC, tend cycle,

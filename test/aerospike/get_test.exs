@@ -122,7 +122,7 @@ defmodule Aerospike.Command.GetTest do
   end
 
   describe "unsupported GET shapes" do
-    test "Get.execute/4 rejects named-bin requests in the spike" do
+    test "Get.execute/4 rejects named-bin requests in the current driver" do
       key = Key.new("test", "spike", "any")
 
       assert {:error, %Error{code: :invalid_argument}} =

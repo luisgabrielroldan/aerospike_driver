@@ -16,7 +16,7 @@ defmodule Aerospike.Integration.UdfLifecycleTest do
     IntegrationSupport.probe_aerospike!(
       @host,
       @port,
-      "Run `docker compose up -d` in `aerospike_driver_spike/` first."
+      "Run `docker compose up -d` in `aerospike_driver/` first."
     )
 
     :ok

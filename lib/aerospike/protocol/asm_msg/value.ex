@@ -23,7 +23,7 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @doc """
   Encodes an Elixir value into `{particle_type, data}` for a simple write op.
 
-  Supported values are the narrow subset this spike phase needs:
+  Supported values are the narrow subset the current driver needs:
   `nil`, integers, floats, strings, booleans, explicit blobs via
   `{:blob, binary}`, typed geo values, and explicit GeoJSON via
   `{:geojson, binary}`.

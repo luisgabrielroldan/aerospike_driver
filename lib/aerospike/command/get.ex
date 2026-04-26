@@ -24,7 +24,7 @@ defmodule Aerospike.Command.Get do
   Reads `key` from the cluster identified by `tender`.
 
   `tender` is a running `Aerospike.Cluster.Tender` (pid or registered name). The
-  spike only supports reading every bin (`mode = :all`) or record metadata only
+  current driver only supports reading every bin (`mode = :all`) or record metadata only
   (`mode = :header`); other shapes return
   `{:error, %Aerospike.Error{code: :invalid_argument}}` so future tasks can widen
   the API without changing the signature.
@@ -67,7 +67,8 @@ defmodule Aerospike.Command.Get do
     {:error,
      %Error{
        code: :invalid_argument,
-       message: "Aerospike.Command.Get supports only :all and :header read modes in the spike"
+       message:
+         "Aerospike.Command.Get supports only :all and :header read modes in the current driver"
      }}
   end
 

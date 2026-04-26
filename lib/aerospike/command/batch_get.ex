@@ -49,7 +49,7 @@ defmodule Aerospike.Command.BatchGet do
   end
 
   def execute(_tender, _keys, _bins, _opts) do
-    invalid_argument("Aerospike.batch_get/4 supports only :all bins in the spike")
+    invalid_argument("Aerospike.batch_get/4 supports only :all bins in the current driver")
   end
 
   @spec execute_operate(GenServer.server(), [Key.t()], [Aerospike.Op.t()], [option()]) ::

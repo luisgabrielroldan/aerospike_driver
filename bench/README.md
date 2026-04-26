@@ -1,23 +1,23 @@
 # Benchmark Suite Guide
 
-This benchmark suite ports the useful, current benchmarks from `../aerospike_driver/bench/`
-into the spike repo so performance work can happen against the implementation that is
+This benchmark suite ports the useful, current benchmarks from `../aerospike_driver_old/bench/`
+into the current driver repo so performance work can happen against the implementation that is
 actually being built.
 
 ## Current Scope
 
-The first pass intentionally covers only benchmarks that match the spike's current public API:
+The first pass intentionally covers only benchmarks that match the current driver's public API:
 
 - L1 microbench: `bench/tests/micro/key_construction_bench.exs`
 - L2 single-node E2E: `bench/tests/e2e/crud_baseline_bench.exs`
 - L4 multi-node fan-out: `bench/tests/fanout/batch_get_bench.exs`
 
 Not every legacy benchmark was copied. Some depend on behavior or internal surfaces that are
-not equivalent in the spike yet, so copying them now would create misleading comparisons.
+not equivalent in the current driver yet, so copying them now would create misleading comparisons.
 
 ## Start Here
 
-From `aerospike_driver_spike/`:
+From `aerospike_driver/`:
 
 ```bash
 mix deps.get
