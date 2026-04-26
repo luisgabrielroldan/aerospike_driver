@@ -54,7 +54,7 @@ defmodule Aerospike.Protocol.Batch do
 
   @spec parse_response(binary(), NodeRequest.t()) :: {:ok, Reply.t()} | {:error, Error.t()}
   def parse_response(body, %NodeRequest{} = node_request) when is_binary(body) do
-    allowed = Map.new(node_request.entries, &{&1.index, &1})
+    allowed = entries_lookup(node_request.entries)
 
     with {:ok, results} <- decode_rows(body, allowed, []) do
       {:ok, %Reply{results: Enum.reverse(results)}}
@@ -343,9 +343,8 @@ defmodule Aerospike.Protocol.Batch do
     else
       with {:ok, entry} <- fetch_entry(allowed, batch_index),
            {:ok, fields_rest} <- skip_fields(rest, field_count),
-           {:ok, operations, remaining} <- decode_operations(fields_rest, op_count),
-           {:ok, result} <-
-             build_result(entry, result_code, generation, expiration, operations) do
+           {:ok, result, remaining} <-
+             decode_row_result(entry, result_code, generation, expiration, fields_rest, op_count) do
         decode_rows(remaining, allowed, [result | acc])
       end
     end
@@ -377,17 +376,57 @@ defmodule Aerospike.Protocol.Batch do
      )}
   end
 
-  defp fetch_entry(allowed, batch_index) do
+  defp entries_lookup(entries) do
+    if contiguous_entries?(entries) do
+      [%Entry{index: offset} | _rest] = entries
+      {:contiguous, offset, List.to_tuple(entries)}
+    else
+      {:map, Map.new(entries, &{&1.index, &1})}
+    end
+  end
+
+  defp contiguous_entries?([]), do: false
+
+  defp contiguous_entries?([%Entry{index: index} | rest]) do
+    contiguous_entries?(rest, index + 1)
+  end
+
+  defp contiguous_entries?([], _next_index), do: true
+
+  defp contiguous_entries?([%Entry{index: index} | rest], next_index) when index == next_index do
+    contiguous_entries?(rest, next_index + 1)
+  end
+
+  defp contiguous_entries?([%Entry{} | _rest], _next_index), do: false
+
+  defp fetch_entry({:contiguous, offset, entries}, batch_index) do
+    position = batch_index - offset
+
+    if position >= 0 and position < tuple_size(entries) do
+      case elem(entries, position) do
+        %Entry{index: ^batch_index} = entry -> {:ok, entry}
+        %Entry{} -> unknown_batch_index(batch_index)
+      end
+    else
+      unknown_batch_index(batch_index)
+    end
+  end
+
+  defp fetch_entry({:map, allowed}, batch_index) do
     case Map.fetch(allowed, batch_index) do
       {:ok, %Entry{} = entry} ->
         {:ok, entry}
 
       :error ->
-        {:error,
-         Error.from_result_code(:parse_error,
-           message: "batch reply referenced unknown batch index #{batch_index}"
-         )}
+        unknown_batch_index(batch_index)
     end
+  end
+
+  defp unknown_batch_index(batch_index) do
+    {:error,
+     Error.from_result_code(:parse_error,
+       message: "batch reply referenced unknown batch index #{batch_index}"
+     )}
   end
 
   defp build_result(%Entry{} = entry, 0, generation, expiration, operations) do
@@ -405,6 +444,90 @@ defmodule Aerospike.Protocol.Batch do
        error: result_error(result_code, "batch row returned an error"),
        in_doubt: false
      }}
+  end
+
+  defp decode_row_result(%Entry{} = entry, result_code, generation, expiration, binary, op_count)
+       when result_code != 0 do
+    with {:ok, operations, remaining} <- decode_operations(binary, op_count),
+         {:ok, result} <- build_result(entry, result_code, generation, expiration, operations) do
+      {:ok, result, remaining}
+    end
+  end
+
+  defp decode_row_result(
+         %Entry{kind: kind} = entry,
+         0,
+         generation,
+         expiration,
+         binary,
+         op_count
+       )
+       when kind in [:read, :operate] do
+    with {:ok, bins, remaining} <- decode_bins_from_operations(binary, op_count) do
+      {:ok,
+       %BatchCommand.Result{
+         index: entry.index,
+         key: entry.key,
+         kind: entry.kind,
+         status: :ok,
+         record: %Record{key: entry.key, bins: bins, generation: generation, ttl: expiration},
+         error: nil,
+         in_doubt: false
+       }, remaining}
+    end
+  end
+
+  defp decode_row_result(%Entry{kind: :udf} = entry, 0, generation, expiration, binary, op_count) do
+    with {:ok, bins, remaining} <- decode_bins_from_operations(binary, op_count) do
+      record =
+        case bins do
+          %{} when op_count == 0 -> nil
+          %{} -> %Record{key: entry.key, bins: bins, generation: generation, ttl: expiration}
+        end
+
+      {:ok,
+       %BatchCommand.Result{
+         index: entry.index,
+         key: entry.key,
+         kind: entry.kind,
+         status: :ok,
+         record: record,
+         error: nil,
+         in_doubt: false
+       }, remaining}
+    end
+  end
+
+  defp decode_row_result(%Entry{kind: kind} = entry, 0, generation, expiration, binary, op_count)
+       when kind in [:put, :delete] do
+    with {:ok, remaining} <- skip_operations(binary, op_count),
+         {:ok, result} <- success_result(entry, generation, expiration, []) do
+      {:ok, result, remaining}
+    end
+  end
+
+  defp decode_row_result(
+         %Entry{kind: kind},
+         0,
+         _generation,
+         _expiration,
+         _binary,
+         op_count
+       )
+       when kind in [:read_header, :exists] and op_count > 0 do
+    message =
+      case kind do
+        :read_header -> "header-only batch read reply contained #{op_count} operations"
+        :exists -> "exists batch reply contained #{op_count} operations"
+      end
+
+    {:error, Error.from_result_code(:parse_error, message: message)}
+  end
+
+  defp decode_row_result(%Entry{kind: kind} = entry, 0, generation, expiration, binary, 0)
+       when kind in [:read_header, :exists] do
+    {:ok, result} = success_result(entry, generation, expiration, [])
+    {:ok, result, binary}
   end
 
   defp success_result(%Entry{kind: :read} = entry, generation, expiration, operations) do
@@ -540,6 +663,84 @@ defmodule Aerospike.Protocol.Batch do
       {:ok, %{bins: bins}} -> {:ok, bins}
       {:error, %Error{} = error} -> {:error, error}
     end
+  end
+
+  defp decode_bins_from_operations(binary, count) do
+    decode_bins_from_operations(binary, count, %{bins: %{}, counts: %{}})
+  end
+
+  defp decode_bins_from_operations(binary, 0, %{bins: bins}), do: {:ok, bins, binary}
+
+  defp decode_bins_from_operations(
+         <<size::32-big, _op_type::8, particle_type::8, _reserved::8, name_len::8, rest::binary>>,
+         count,
+         acc
+       )
+       when count > 0 and size >= 4 do
+    data_len = size - 4 - name_len
+
+    cond do
+      data_len < 0 ->
+        {:error, parse_operation_error(:invalid_operation_size)}
+
+      byte_size(rest) < name_len + data_len ->
+        {:error, parse_operation_error(:incomplete_operation)}
+
+      true ->
+        <<bin_name::binary-size(name_len), data::binary-size(data_len), remaining::binary>> = rest
+
+        acc =
+          if bin_name == "" do
+            acc
+          else
+            {:ok, value} = Value.decode_value(particle_type, data)
+            put_bin_value(acc, bin_name, value)
+          end
+
+        decode_bins_from_operations(remaining, count - 1, acc)
+    end
+  end
+
+  defp decode_bins_from_operations(<<_size::32-big, _rest::binary>>, count, _acc)
+       when count > 0 do
+    {:error, parse_operation_error(:invalid_operation_size)}
+  end
+
+  defp decode_bins_from_operations(_binary, count, _acc) when count > 0 do
+    {:error, parse_operation_error(:incomplete_operation_header)}
+  end
+
+  defp skip_operations(binary, 0), do: {:ok, binary}
+
+  defp skip_operations(
+         <<size::32-big, _op_type::8, _particle_type::8, _reserved::8, name_len::8,
+           rest::binary>>,
+         count
+       )
+       when count > 0 and size >= 4 do
+    data_len = size - 4 - name_len
+
+    cond do
+      data_len < 0 ->
+        {:error, parse_operation_error(:invalid_operation_size)}
+
+      byte_size(rest) < name_len + data_len ->
+        {:error, parse_operation_error(:incomplete_operation)}
+
+      true ->
+        <<_bin_name::binary-size(name_len), _data::binary-size(data_len), remaining::binary>> =
+          rest
+
+        skip_operations(remaining, count - 1)
+    end
+  end
+
+  defp skip_operations(<<_size::32-big, _rest::binary>>, count) when count > 0 do
+    {:error, parse_operation_error(:invalid_operation_size)}
+  end
+
+  defp skip_operations(_binary, count) when count > 0 do
+    {:error, parse_operation_error(:incomplete_operation_header)}
   end
 
   defp put_bin_value(%{bins: bins, counts: counts} = acc, name, value) do
