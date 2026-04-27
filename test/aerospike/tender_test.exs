@@ -219,6 +219,34 @@ defmodule Aerospike.Cluster.TenderTest do
       snapshot = Tender.nodes_status(pid)
       assert MapSet.new([:compression, :pipelining]) == snapshot["B1"].features
     end
+
+    test "seed-only clusters skip peer discovery", ctx do
+      register_node(ctx.fake, "B1", "10.0.0.2", 3000)
+
+      script_bootstrap_info(ctx.fake, "A1")
+
+      Fake.script_info(
+        ctx.fake,
+        "A1",
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
+
+      Fake.script_info(ctx.fake, "A1", ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master("test", 1)
+      })
+
+      {:ok, pid} = start_tender(ctx, "test", seed_only_cluster: true)
+      :ok = Tender.tend_now(pid)
+
+      snapshot = Tender.nodes_status(pid)
+      assert Map.has_key?(snapshot, "A1")
+      refute Map.has_key?(snapshot, "B1")
+    end
   end
 
   describe "tend_now/1 synchronisation" do
@@ -2357,6 +2385,7 @@ defmodule Aerospike.Cluster.TenderTest do
       |> maybe_put(:replica_policy, Keyword.get(opts, :replica_policy))
       |> maybe_put(:use_compression, Keyword.get(opts, :use_compression))
       |> maybe_put(:use_services_alternate, Keyword.get(opts, :use_services_alternate))
+      |> maybe_put(:seed_only_cluster, Keyword.get(opts, :seed_only_cluster))
 
     {:ok, pid} = Tender.start_link(tender_opts)
 

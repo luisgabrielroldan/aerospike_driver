@@ -46,6 +46,56 @@ defmodule Aerospike.Cluster.NodeTest do
       assert node.features == MapSet.new()
     end
 
+    test "validates configured cluster name during bootstrap", %{fake: fake} do
+      Fake.script_info(fake, "A1", ["node", "features", "cluster-name"], %{
+        "node" => "A1",
+        "features" => "",
+        "cluster-name" => "prod"
+      })
+
+      assert {:ok, %Node{name: "A1"}} =
+               Node.seed(Fake, "10.0.0.1", 3000, [fake: fake],
+                 user: nil,
+                 password: nil,
+                 cluster_name: "prod"
+               )
+    end
+
+    test "rejects a node from the wrong configured cluster", %{fake: fake} do
+      Fake.script_info(fake, "A1", ["node", "features", "cluster-name"], %{
+        "node" => "A1",
+        "features" => "",
+        "cluster-name" => "other"
+      })
+
+      assert {:error, %Error{code: :invalid_node}} =
+               Node.seed(Fake, "10.0.0.1", 3000, [fake: fake],
+                 user: nil,
+                 password: nil,
+                 cluster_name: "prod"
+               )
+    end
+
+    test "sends application identity when the server supports user-agent info", %{fake: fake} do
+      app_id = "analytics"
+
+      Fake.script_info(fake, "A1", ["node", "features", "build"], %{
+        "node" => "A1",
+        "features" => "",
+        "build" => "8.1.0.0"
+      })
+
+      command = user_agent_command(app_id)
+      Fake.script_info(fake, "A1", [command], %{command => "ok"})
+
+      assert {:ok, %Node{name: "A1"}} =
+               Node.seed(Fake, "10.0.0.1", 3000, [fake: fake],
+                 user: nil,
+                 password: nil,
+                 application_id: app_id
+               )
+    end
+
     test "connect failure surfaces verbatim", %{fake: fake} do
       err = %Error{code: :connection_error, message: "refused"}
       Fake.script_connect(fake, "A1", {:error, err})
@@ -366,6 +416,11 @@ defmodule Aerospike.Cluster.NodeTest do
 
   defp sample_node do
     %Node{name: "A1", host: "10.0.0.1", port: 3000, conn: :fake_conn}
+  end
+
+  defp user_agent_command(app_id) do
+    version = Application.spec(:aerospike_driver, :vsn) |> List.to_string()
+    "user-agent-set:value=" <> Base.encode64("1,elixir-#{version},#{app_id}")
   end
 
   defp stop_if_alive(pid) when is_pid(pid) do

@@ -11,18 +11,22 @@ defmodule Aerospike.UnaryRuntimeTest do
     test "accepts a validated unary policy struct" do
       executor =
         Executor.new!(
-          policy: %Policy.UnaryRead{
-            timeout: 5_000,
-            filter: nil,
-            retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
-          }
+          policy:
+            read_policy(%{
+              timeout: 5_000,
+              socket_timeout: 0,
+              filter: nil,
+              retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
+            })
         )
 
-      assert executor.policy == %Policy.UnaryRead{
-               timeout: 5_000,
-               filter: nil,
-               retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
-             }
+      assert executor.policy ==
+               read_policy(%{
+                 timeout: 5_000,
+                 socket_timeout: 0,
+                 filter: nil,
+                 retry: %{max_retries: 1, sleep_between_retries_ms: 10, replica_policy: :sequence}
+               })
     end
 
     test "returns the most recent error when retries are exhausted" do
@@ -171,8 +175,8 @@ defmodule Aerospike.UnaryRuntimeTest do
       assert_receive :resolved
       assert_receive :allowed
       assert_receive :checked_out
-      assert_receive {:transport, :request, [use_compression: false, attempt: 0]}
-      refute_receive {:transport, _, [use_compression: false, attempt: 1]}
+      assert_receive {:transport, :request, _deadline, [use_compression: false, attempt: 0]}
+      refute_receive {:transport, _, _, [use_compression: false, attempt: 1]}
     end
 
     test "returns breaker refusal without checking out a worker" do
@@ -232,6 +236,35 @@ defmodule Aerospike.UnaryRuntimeTest do
       assert is_integer(timeout_a)
       assert_receive {:checkout, "B1", {:pool, "B1"}, timeout_b}
       assert is_integer(timeout_b)
+    end
+
+    test "passes per-attempt socket timeout to the transport edge" do
+      executor = executor_for(timeout: 1_000, socket_timeout: 30)
+      command = test_command()
+      parent = self()
+      __MODULE__.TransportStub.put_results([{:ok, {:ok, :done}}])
+      __MODULE__.TransportStub.notify(parent)
+      on_exit(fn -> __MODULE__.TransportStub.notify(nil) end)
+
+      assert {:ok, :done} =
+               UnaryCommand.run(command, executor, %{
+                 tables: :fake_tables,
+                 tender: :fake_tender,
+                 transport: __MODULE__.TransportStub,
+                 route_key: :route_key,
+                 command_input: :payload,
+                 pick_node: fn :read, :fake_tables, :route_key, :sequence, 0 -> {:ok, "A1"} end,
+                 resolve_handle: fn :fake_tender, "A1" -> {:ok, fake_handle()} end,
+                 allow_dispatch: fn _counters, _breaker -> :ok end,
+                 checkout: fn _node_name, _pool, fun, checkout_timeout ->
+                   send(parent, {:checkout_timeout, checkout_timeout})
+                   elem(fun.(:conn), 0)
+                 end
+               })
+
+      assert_receive {:checkout_timeout, checkout_timeout}
+      assert is_integer(checkout_timeout) and checkout_timeout >= 30
+      assert_receive {:transport, :request, 30, [use_compression: false, attempt: 0]}
     end
 
     test "commands that opt out do not retry after the transport edge returns an error" do
@@ -384,16 +417,38 @@ defmodule Aerospike.UnaryRuntimeTest do
     on_rebalance = Keyword.get(opts, :on_rebalance, fn -> :ok end)
 
     Executor.new!(
-      policy: %Policy.UnaryRead{
-        timeout: Keyword.get(opts, :timeout, 5_000),
-        filter: nil,
-        retry: %{
-          max_retries: Keyword.get(opts, :max_retries, 2),
-          sleep_between_retries_ms: Keyword.get(opts, :sleep_between_retries_ms, 0),
-          replica_policy: Keyword.get(opts, :replica_policy, :sequence)
-        }
-      },
+      policy:
+        read_policy(%{
+          timeout: Keyword.get(opts, :timeout, 5_000),
+          socket_timeout: Keyword.get(opts, :socket_timeout, 0),
+          filter: nil,
+          retry: %{
+            max_retries: Keyword.get(opts, :max_retries, 2),
+            sleep_between_retries_ms: Keyword.get(opts, :sleep_between_retries_ms, 0),
+            replica_policy: Keyword.get(opts, :replica_policy, :sequence)
+          }
+        }),
       on_rebalance: on_rebalance
+    )
+  end
+
+  defp read_policy(attrs) do
+    struct!(
+      Policy.UnaryRead,
+      Map.merge(
+        %{
+          timeout: 5_000,
+          socket_timeout: 0,
+          filter: nil,
+          read_mode_ap: :one,
+          read_mode_sc: :session,
+          read_touch_ttl_percent: 0,
+          send_key: false,
+          use_compression: nil,
+          retry: %{max_retries: 2, sleep_between_retries_ms: 0, replica_policy: :sequence}
+        },
+        attrs
+      )
     )
   end
 
@@ -442,9 +497,9 @@ defmodule Aerospike.UnaryRuntimeTest do
     def put_results(results), do: Process.put({__MODULE__, :results}, results)
     def notify(pid), do: Process.put({__MODULE__, :notify}, pid)
 
-    def command(_conn, request, _deadline_ms, command_opts) do
+    def command(_conn, request, deadline_ms, command_opts) do
       if pid = Process.get({__MODULE__, :notify}) do
-        send(pid, {:transport, request, command_opts})
+        send(pid, {:transport, request, deadline_ms, command_opts})
       end
 
       case Process.get({__MODULE__, :results}, []) do

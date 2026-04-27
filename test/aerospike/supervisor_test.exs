@@ -156,6 +156,19 @@ defmodule Aerospike.Cluster.SupervisorTest do
           pool_size: 0
         )
       end
+
+      assert_raise ArgumentError,
+                   ~r/:min_connections_per_node must be less than or equal to :pool_size/,
+                   fn ->
+                     ClusterSupervisor.start_link(
+                       name: :x,
+                       transport: Fake,
+                       hosts: ["10.0.0.1:3000"],
+                       namespaces: ["test"],
+                       pool_size: 2,
+                       min_connections_per_node: 3
+                     )
+                   end
     end
 
     test "rejects non-positive :idle_timeout_ms" do
@@ -230,6 +243,74 @@ defmodule Aerospike.Cluster.SupervisorTest do
                        user: "admin"
                      )
                    end
+    end
+
+    test "validates startup auth mode shape" do
+      assert_raise ArgumentError, ~r/:auth_mode must be :internal, :external, or :pki/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          hosts: ["10.0.0.1:3000"],
+          namespaces: ["test"],
+          auth_mode: :ldap
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:external auth requires Aerospike.Transport.Tls/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          hosts: ["10.0.0.1:3000"],
+          namespaces: ["test"],
+          auth_mode: :external,
+          user: "admin",
+          password: "secret"
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:pki auth uses the TLS client certificate/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Aerospike.Transport.Tls,
+          hosts: ["10.0.0.1:3000"],
+          namespaces: ["test"],
+          auth_mode: :pki,
+          user: "admin",
+          password: "secret"
+        )
+      end
+    end
+
+    test "validates accepted startup discovery fields" do
+      assert_raise ArgumentError, ~r/:cluster_name must be a non-empty string/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          hosts: ["10.0.0.1:3000"],
+          namespaces: ["test"],
+          cluster_name: ""
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:application_id must be a non-empty string/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          hosts: ["10.0.0.1:3000"],
+          namespaces: ["test"],
+          application_id: ""
+        )
+      end
+
+      assert_raise ArgumentError, ~r/:seed_only_cluster must be a boolean/, fn ->
+        ClusterSupervisor.start_link(
+          name: :x,
+          transport: Fake,
+          hosts: ["10.0.0.1:3000"],
+          namespaces: ["test"],
+          seed_only_cluster: :yes
+        )
+      end
     end
 
     test "rejects invalid retry opts" do

@@ -101,8 +101,10 @@ defmodule Aerospike do
   yielding that node's records downstream, so it does not promise
   frame-by-frame cross-node backpressure or cancellation coordination.
 
-  Additional expression-builder families and the wider policy surface remain
-  out of scope until supported command paths prove them.
+  Expression builders now cover scalar, metadata, arithmetic, conditional,
+  variable, CDT, bit, and HyperLogLog helper families. Public policy remains
+  keyword-based at facade calls, with centralized normalization for
+  single-record, batch, scan, query, startup, auth, and discovery options.
 
   Caller-facing policy validation and default materialization is shared across
   command families. Public command functions still accept keyword opts, but
@@ -180,6 +182,224 @@ defmodule Aerospike do
   @typedoc "Security privilege metadata used by role administration APIs."
   @type privilege :: Privilege.t()
 
+  @typedoc "Non-negative timeout value in milliseconds."
+  @type timeout_ms :: non_neg_integer()
+
+  @typedoc "Record TTL accepted by write commands."
+  @type ttl :: non_neg_integer() | :default | :never_expire | :dont_update
+
+  @typedoc "AP namespace read consistency."
+  @type read_mode_ap :: :one | :all
+
+  @typedoc "Strong-consistency namespace read consistency."
+  @type read_mode_sc :: :session | :linearize | :allow_replica | :allow_unavailable
+
+  @typedoc "Record existence behavior for write commands."
+  @type record_exists_action ::
+          :update | :update_only | :create_or_replace | :replace_only | :create_only
+
+  @typedoc "Generation check behavior for write commands."
+  @type generation_policy :: :none | :expect_equal | :expect_gt
+
+  @typedoc "Commit acknowledgement level for write commands."
+  @type commit_level :: :all | :master
+
+  @typedoc "Retry option accepted by single-record, scan, and query command families."
+  @type retry_opt ::
+          {:max_retries, non_neg_integer()}
+          | {:sleep_between_retries_ms, non_neg_integer()}
+          | {:replica_policy, RetryPolicy.replica_policy()}
+
+  @typedoc "Read option accepted by `get/4`, `get_header/3`, and `exists/3`."
+  @type read_opt ::
+          {:timeout, timeout_ms()}
+          | {:socket_timeout, timeout_ms()}
+          | retry_opt()
+          | {:read_mode_ap, read_mode_ap()}
+          | {:read_mode_sc, read_mode_sc()}
+          | {:read_touch_ttl_percent, -1 | 0..100}
+          | {:send_key, boolean()}
+          | {:use_compression, boolean() | nil}
+          | {:filter, Exp.t() | nil}
+
+  @typedoc "Keyword options accepted by read helpers."
+  @type read_opts :: [read_opt()]
+
+  @typedoc "Write option accepted by single-record write, delete, UDF, and operate helpers."
+  @type write_opt ::
+          {:timeout, timeout_ms()}
+          | {:socket_timeout, timeout_ms()}
+          | retry_opt()
+          | {:ttl, ttl()}
+          | {:generation, non_neg_integer()}
+          | {:generation_policy, generation_policy()}
+          | {:exists, record_exists_action()}
+          | {:commit_level, commit_level()}
+          | {:durable_delete, boolean()}
+          | {:respond_per_op, boolean()}
+          | {:send_key, boolean()}
+          | {:read_mode_ap, read_mode_ap()}
+          | {:read_mode_sc, read_mode_sc()}
+          | {:read_touch_ttl_percent, -1 | 0..100}
+          | {:use_compression, boolean() | nil}
+          | {:filter, Exp.t() | nil}
+          | {:txn, Txn.t()}
+
+  @typedoc "Keyword options accepted by single-record write, delete, UDF, and operate helpers."
+  @type write_opts :: [write_opt()]
+
+  @typedoc "Parent batch dispatch option."
+  @type batch_parent_opt ::
+          {:timeout, timeout_ms()}
+          | {:socket_timeout, timeout_ms()}
+          | {:max_concurrent_nodes, non_neg_integer()}
+          | {:allow_partial_results, boolean()}
+          | {:respond_all_keys, boolean()}
+          | {:allow_inline, boolean()}
+          | {:allow_inline_ssd, boolean()}
+
+  @typedoc "Parent batch options accepted by `batch_operate/3`."
+  @type batch_parent_opts :: [batch_parent_opt()]
+
+  @typedoc "Batch read option accepted by per-entry batch reads."
+  @type batch_record_read_opt ::
+          {:filter, Exp.t() | nil}
+          | {:read_mode_ap, read_mode_ap()}
+          | {:read_mode_sc, read_mode_sc()}
+          | {:read_touch_ttl_percent, -1 | 0..100}
+
+  @typedoc "Keyword options accepted by per-entry batch reads."
+  @type batch_record_read_opts :: [batch_record_read_opt()]
+
+  @typedoc "Batch read option accepted by homogeneous batch-read helpers."
+  @type batch_read_opt :: batch_parent_opt() | batch_record_read_opt()
+
+  @typedoc "Keyword options accepted by batch read helpers."
+  @type batch_read_opts :: [batch_read_opt()]
+
+  @typedoc "Batch write option accepted by per-entry batch writes."
+  @type batch_record_write_opt ::
+          {:ttl, ttl()}
+          | {:generation, non_neg_integer()}
+          | {:generation_policy, generation_policy()}
+          | {:exists, record_exists_action()}
+          | {:commit_level, commit_level()}
+          | {:durable_delete, boolean()}
+          | {:respond_per_op, boolean()}
+          | {:send_key, boolean()}
+          | {:filter, Exp.t() | nil}
+          | {:read_mode_ap, read_mode_ap()}
+          | {:read_mode_sc, read_mode_sc()}
+          | {:read_touch_ttl_percent, -1 | 0..100}
+
+  @typedoc "Keyword options accepted by per-entry batch writes."
+  @type batch_record_write_opts :: [batch_record_write_opt()]
+
+  @typedoc "Batch write option accepted by homogeneous batch-write helpers."
+  @type batch_write_opt :: batch_parent_opt() | batch_record_write_opt()
+
+  @typedoc "Keyword options accepted by batch write helpers."
+  @type batch_write_opts :: [batch_write_opt()]
+
+  @typedoc "Node-targeting option accepted by scan/query helpers that support single-node execution."
+  @type node_opt :: {:node, String.t()}
+
+  @typedoc "Runtime option accepted by all scan and query helpers."
+  @type scan_query_runtime_opt ::
+          {:timeout, timeout_ms()}
+          | {:socket_timeout, timeout_ms()}
+          | retry_opt()
+          | {:task_timeout, timeout_ms() | :infinity}
+          | {:pool_checkout_timeout, timeout_ms()}
+          | {:max_concurrent_nodes, non_neg_integer()}
+          | {:records_per_second, non_neg_integer()}
+          | {:include_bin_data, boolean()}
+          | {:expected_duration, :long | :short | :long_relax_ap}
+          | {:task_id, pos_integer()}
+          | {:cursor, Aerospike.Cursor.t()}
+
+  @typedoc "Runtime option accepted by scan/query helpers that may target one node."
+  @type scan_query_opt :: scan_query_runtime_opt() | node_opt()
+
+  @typedoc "Keyword options accepted by scan and query helpers."
+  @type scan_query_opts :: [scan_query_opt()]
+
+  @typedoc "Additional local-source option for finalized aggregate queries."
+  @type aggregate_result_opt :: {:source, String.t()} | {:source_path, Path.t()}
+
+  @typedoc "Keyword options accepted by `query_aggregate_result/6` and `query_aggregate_result!/6`."
+  @type aggregate_result_opts :: [scan_query_runtime_opt() | aggregate_result_opt()]
+
+  @typedoc "Option accepted by one-node info/admin helpers."
+  @type admin_opt :: {:pool_checkout_timeout, timeout_ms()}
+
+  @typedoc "Keyword options accepted by one-node info/admin helpers."
+  @type admin_opts :: [admin_opt()]
+
+  @typedoc "Option accepted by security-admin helpers."
+  @type security_admin_opt :: {:timeout, timeout_ms()} | {:pool_checkout_timeout, timeout_ms()}
+
+  @typedoc "Keyword options accepted by security-admin helpers."
+  @type security_admin_opts :: [security_admin_opt()]
+
+  @typedoc "Secondary-index collection type."
+  @type index_collection :: :list | :mapkeys | :mapvalues
+
+  @typedoc "Secondary-index particle/source type."
+  @type index_type :: :numeric | :string | :geo2dsphere
+
+  @typedoc "Option accepted by `create_index/4`."
+  @type create_index_opt ::
+          {:bin, String.t()}
+          | {:name, String.t()}
+          | {:type, index_type()}
+          | {:collection, index_collection()}
+          | admin_opt()
+
+  @typedoc "Keyword options accepted by `create_index/4`."
+  @type create_index_opts :: [create_index_opt()]
+
+  @typedoc "Option accepted by `create_expression_index/5`."
+  @type create_expression_index_opt ::
+          {:name, String.t()}
+          | {:type, index_type()}
+          | {:collection, index_collection()}
+          | admin_opt()
+
+  @typedoc "Keyword options accepted by `create_expression_index/5`."
+  @type create_expression_index_opts :: [create_expression_index_opt()]
+
+  @typedoc "Option accepted by `truncate/3` and `truncate/4`."
+  @type truncate_opt :: {:before, DateTime.t()} | admin_opt()
+
+  @typedoc "Keyword options accepted by truncate helpers."
+  @type truncate_opts :: [truncate_opt()]
+
+  @typedoc "Option accepted by `enable_metrics/2`."
+  @type metrics_opt :: {:reset, boolean()}
+
+  @typedoc "Keyword options accepted by `enable_metrics/2`."
+  @type metrics_opts :: [metrics_opt()]
+
+  @typedoc "Option accepted by `warm_up/2`."
+  @type warm_up_opt :: {:count, non_neg_integer()} | {:pool_checkout_timeout, timeout_ms()}
+
+  @typedoc "Keyword options accepted by `warm_up/2`."
+  @type warm_up_opts :: [warm_up_opt()]
+
+  @typedoc "Role-creation option accepted by `create_role/4`."
+  @type create_role_opt ::
+          {:whitelist, [String.t()]}
+          | {:read_quota, non_neg_integer()}
+          | {:write_quota, non_neg_integer()}
+          | security_admin_opt()
+
+  @typedoc "Keyword options accepted by `create_role/4`."
+  @type create_role_opts :: [create_role_opt()]
+
+  @typedoc "Transaction options accepted by `transaction/3` when a handle is not supplied."
+  @type transaction_opts :: [{:timeout, timeout_ms()}]
+
   @typedoc "Operation input accepted by `operate/4`."
   @type operate_operation ::
           {:write, String.t() | atom(), term()}
@@ -220,6 +440,8 @@ defmodule Aerospike do
   Pool-level knobs (forwarded internally on each node-pool start):
 
     * `:pool_size` — workers per node. Positive integer.
+    * `:min_connections_per_node` — minimum warm connection target per
+      node. Non-negative integer. `0` allows lazy worker creation.
     * `:idle_timeout_ms` — milliseconds a worker may sit idle before the
       pool verification step evicts it. Positive integer. Defaults stay under
       Aerospike's `proto-fd-idle-ms`.
@@ -244,11 +466,21 @@ defmodule Aerospike do
       opt-in, gated per node by advertised capabilities.
     * `:use_services_alternate` — boolean toggle for
       `peers-clear-alt` discovery.
+    * `:seed_only_cluster` — boolean. When true, discovery is limited to
+      configured seed addresses.
+    * `:cluster_name` — expected server cluster name. Nodes reporting a
+      different name are rejected.
+    * `:application_id` — application identity sent to capable servers for
+      server-side client correlation.
 
   Auth opts:
 
+    * `:auth_mode` — `:internal` (default), `:external`, or `:pki`.
+      External and PKI modes require `Aerospike.Transport.Tls`.
     * `:user` / `:password` — cluster-wide credentials. Must be passed
-      together or omitted together.
+      together or omitted together. PKI auth uses the TLS client certificate
+      and must omit both.
+    * `:login_timeout_ms` — startup/login read deadline in milliseconds.
 
   TCP-level tuning knobs (passed verbatim to the TCP transport via the
   `:connect_opts` keyword):
@@ -321,11 +553,22 @@ defmodule Aerospike do
 
     * `:timeout` — total op-budget milliseconds for the call, shared
       across the initial send and every retry. Default `5_000`.
+    * `:socket_timeout` — per-attempt socket idle deadline in milliseconds,
+      capped by the remaining total budget. `0` uses the remaining total
+      budget.
     * `:max_retries` — overrides the cluster-default retry cap for this
       call. `0` disables retry entirely. See `Aerospike.RetryPolicy`.
     * `:sleep_between_retries_ms` — fixed delay between retry attempts.
     * `:replica_policy` — `:master` (all attempts against the master)
       or `:sequence` (walk the replica list by attempt index).
+    * `:read_mode_ap` — `:one` or `:all`.
+    * `:read_mode_sc` — `:session`, `:linearize`, `:allow_replica`, or
+      `:allow_unavailable`.
+    * `:read_touch_ttl_percent` — `-1`, `0`, or an integer from `1` through
+      `100`.
+    * `:send_key` — include the user key in the request when `true`.
+    * `:use_compression` — per-command compression override; `nil` keeps the
+      cluster/node default.
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter.
 
@@ -336,7 +579,7 @@ defmodule Aerospike do
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec get(cluster(), Key.key_input(), :all | [String.t() | atom()], keyword()) ::
+  @spec get(cluster(), Key.key_input(), :all | [String.t() | atom()], read_opts()) ::
           {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -359,11 +602,22 @@ defmodule Aerospike do
 
     * `:timeout` — total op-budget milliseconds for the call, shared
       across the initial send and every retry. Default `5_000`.
+    * `:socket_timeout` — per-attempt socket idle deadline in milliseconds,
+      capped by the remaining total budget. `0` uses the remaining total
+      budget.
     * `:max_retries` — overrides the cluster-default retry cap for this
       call. `0` disables retry entirely. See `Aerospike.RetryPolicy`.
     * `:sleep_between_retries_ms` — fixed delay between retry attempts.
     * `:replica_policy` — `:master` (all attempts against the master)
       or `:sequence` (walk the replica list by attempt index).
+    * `:read_mode_ap` — `:one` or `:all`.
+    * `:read_mode_sc` — `:session`, `:linearize`, `:allow_replica`, or
+      `:allow_unavailable`.
+    * `:read_touch_ttl_percent` — `-1`, `0`, or an integer from `1` through
+      `100`.
+    * `:send_key` — include the user key in the request when `true`.
+    * `:use_compression` — per-command compression override; `nil` keeps the
+      cluster/node default.
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter.
 
@@ -374,7 +628,7 @@ defmodule Aerospike do
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec get_header(cluster(), Key.key_input(), keyword()) ::
+  @spec get_header(cluster(), Key.key_input(), read_opts()) ::
           {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -395,13 +649,15 @@ defmodule Aerospike do
   `{:error, :unknown_node}`).
 
   Pass `:all` to read every bin, or pass a non-empty list of string or atom bin
-  names to project only those bins. The driver currently supports only
-  `:timeout` in `opts`. Retry-driven regrouping stays disabled until the batch
-  reroute path can honestly split a failed grouped request back across nodes.
+  names to project only those bins. Batch opts include parent dispatch fields
+  such as `:timeout`, `:socket_timeout`, `:max_concurrent_nodes`,
+  `:allow_partial_results`, `:respond_all_keys`, `:allow_inline`, and
+  `:allow_inline_ssd`, plus encodable read fields such as `:filter`,
+  `:read_mode_ap`, `:read_mode_sc`, and `:read_touch_ttl_percent`.
 
   Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_get(cluster(), [Key.key_input()], :all | [String.t() | atom()], keyword()) ::
+  @spec batch_get(cluster(), [Key.key_input()], :all | [String.t() | atom()], batch_read_opts()) ::
           {:ok,
            [
              {:ok, Aerospike.Record.t()}
@@ -426,12 +682,11 @@ defmodule Aerospike do
   error for that key (`{:error, %Aerospike.Error{}}`,
   `{:error, :no_master}`, or `{:error, :unknown_node}`).
 
-  This helper keeps the same narrow batch policy surface as `batch_get/4`:
-  only `:timeout` is currently accepted in `opts`.
+  This helper accepts the same batch read opts as `batch_get/4`.
 
   Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_get_header(cluster(), [Key.key_input()], keyword()) ::
+  @spec batch_get_header(cluster(), [Key.key_input()], batch_read_opts()) ::
           {:ok,
            [
              {:ok, Aerospike.Record.t()}
@@ -456,12 +711,11 @@ defmodule Aerospike do
   indexed error for that key (`{:error, %Aerospike.Error{}}`,
   `{:error, :no_master}`, or `{:error, :unknown_node}`).
 
-  This helper keeps the same narrow batch policy surface as `batch_get/4`:
-  only `:timeout` is currently accepted in `opts`.
+  This helper accepts the same batch read opts as `batch_get/4`.
 
   Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_exists(cluster(), [Key.key_input()], keyword()) ::
+  @spec batch_exists(cluster(), [Key.key_input()], batch_read_opts()) ::
           {:ok,
            [
              {:ok, boolean()}
@@ -487,12 +741,11 @@ defmodule Aerospike do
   `{:error, :unknown_node}`). Missing keys remain explicit per-key
   errors; this helper does not collapse misses to `nil`.
 
-  This helper keeps the same narrow batch policy surface as `batch_get/4`:
-  only `:timeout` is currently accepted in `opts`.
+  This helper accepts the same batch read opts as `batch_get/4`.
 
   Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_get_operate(cluster(), [Key.key_input()], [Aerospike.Op.t()], keyword()) ::
+  @spec batch_get_operate(cluster(), [Key.key_input()], [Aerospike.Op.t()], batch_read_opts()) ::
           {:ok,
            [
              {:ok, Aerospike.Record.t()}
@@ -520,12 +773,13 @@ defmodule Aerospike do
   results with the server result code; this helper does not collapse them to
   booleans.
 
-  This helper keeps the same narrow batch policy surface as `batch_get/4`:
-  only `:timeout` is currently accepted in `opts`.
+  This helper accepts parent batch opts and encodable write fields such as
+  `:generation_policy`, `:generation`, `:commit_level`, `:durable_delete`,
+  `:send_key`, and `:filter`.
 
   Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_delete(cluster(), [Key.key_input()], keyword()) ::
+  @spec batch_delete(cluster(), [Key.key_input()], batch_write_opts()) ::
           {:ok, [Aerospike.BatchResult.t()]}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready}
@@ -546,12 +800,19 @@ defmodule Aerospike do
   routing failure, or node transport error. Successful UDF rows may include a
   returned `%Aerospike.Record{}` when the server sends return bins.
 
-  This helper keeps the same narrow batch policy surface as `batch_get/4`:
-  only `:timeout` is currently accepted in `opts`.
+  This helper accepts the same parent batch and write opts as
+  `batch_delete/3`.
 
   Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_udf(cluster(), [Key.key_input()], String.t(), String.t(), list(), keyword()) ::
+  @spec batch_udf(
+          cluster(),
+          [Key.key_input()],
+          String.t(),
+          String.t(),
+          list(),
+          batch_write_opts()
+        ) ::
           {:ok, [Aerospike.BatchResult.t()]}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready}
@@ -573,10 +834,10 @@ defmodule Aerospike do
   `status: :error` for a per-key failure such as a missing key, routing
   failure, server error, or node transport error.
 
-  The current batch policy surface is intentionally narrow: only `:timeout` is
-  accepted in `opts`. Per-entry write policies are not exposed.
+  Parent batch policy opts are accepted in `opts`. Per-entry read/write policy
+  opts can be attached with the `Aerospike.Batch` builders.
   """
-  @spec batch_operate(cluster(), [Batch.t()], keyword()) ::
+  @spec batch_operate(cluster(), [Batch.t()], batch_parent_opts()) ::
           {:ok, [Aerospike.BatchResult.t()]}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready}
@@ -606,7 +867,7 @@ defmodule Aerospike do
   an explicit cancellation API. Pass `node: node_name` in `opts` to scan one
   active node, using a name returned by `node_names/1` or `nodes/1`.
   """
-  @spec scan_stream(cluster(), Scan.t(), keyword()) ::
+  @spec scan_stream(cluster(), Scan.t(), scan_query_opts()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
   def scan_stream(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     ScanOps.stream(cluster, scan, opts)
@@ -615,7 +876,7 @@ defmodule Aerospike do
   @doc """
   Same as `scan_stream/3` but raises on error.
   """
-  @spec scan_stream!(cluster(), Scan.t(), keyword()) :: Enumerable.t()
+  @spec scan_stream!(cluster(), Scan.t(), scan_query_opts()) :: Enumerable.t()
   def scan_stream!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     case scan_stream(cluster, scan, opts) do
       {:ok, stream} -> stream
@@ -627,7 +888,7 @@ defmodule Aerospike do
   Deprecated alias for `scan_stream!/3`.
   """
   @deprecated "Use scan_stream!/3 instead."
-  @spec stream!(cluster(), Scan.t(), keyword()) :: Enumerable.t()
+  @spec stream!(cluster(), Scan.t(), scan_query_opts()) :: Enumerable.t()
   def stream!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_stream!(cluster, scan, opts)
   end
@@ -640,7 +901,7 @@ defmodule Aerospike do
   them to the caller. Pass `node: node_name` in `opts` to query one active
   node, using a name returned by `node_names/1` or `nodes/1`.
   """
-  @spec query_stream(cluster(), Query.t(), keyword()) ::
+  @spec query_stream(cluster(), Query.t(), scan_query_opts()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
   def query_stream(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     ScanOps.query_stream(cluster, query, opts)
@@ -649,7 +910,7 @@ defmodule Aerospike do
   @doc """
   Same as `query_stream/3` but raises on error.
   """
-  @spec query_stream!(cluster(), Query.t(), keyword()) :: Enumerable.t()
+  @spec query_stream!(cluster(), Query.t(), scan_query_opts()) :: Enumerable.t()
   def query_stream!(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     case query_stream(cluster, query, opts) do
       {:ok, stream} -> stream
@@ -663,7 +924,7 @@ defmodule Aerospike do
   Pass `node: node_name` in `opts` to scan one active node, using a name
   returned by `node_names/1` or `nodes/1`.
   """
-  @spec scan_all(cluster(), Scan.t(), keyword()) ::
+  @spec scan_all(cluster(), Scan.t(), scan_query_opts()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
   def scan_all(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     ScanOps.all(cluster, scan, opts)
@@ -673,7 +934,7 @@ defmodule Aerospike do
   Deprecated alias for `scan_all/3`.
   """
   @deprecated "Use scan_all/3 instead."
-  @spec all(cluster(), Scan.t(), keyword()) ::
+  @spec all(cluster(), Scan.t(), scan_query_opts()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
   def all(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_all(cluster, scan, opts)
@@ -687,7 +948,7 @@ defmodule Aerospike do
   Pass `node: node_name` in `opts` to query one active node, using a name
   returned by `node_names/1` or `nodes/1`.
   """
-  @spec query_all(cluster(), Query.t(), keyword()) ::
+  @spec query_all(cluster(), Query.t(), scan_query_opts()) ::
           {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
   def query_all(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     ScanOps.query_all(cluster, query, opts)
@@ -696,7 +957,7 @@ defmodule Aerospike do
   @doc """
   Same as `query_all/3` but returns the list or raises `Aerospike.Error`.
   """
-  @spec query_all!(cluster(), Query.t(), keyword()) :: [Aerospike.Record.t()]
+  @spec query_all!(cluster(), Query.t(), scan_query_opts()) :: [Aerospike.Record.t()]
   def query_all!(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     case query_all(cluster, query, opts) do
       {:ok, records} -> records
@@ -707,7 +968,7 @@ defmodule Aerospike do
   @doc """
   Same as `scan_all/3` but returns the list or raises `Aerospike.Error`.
   """
-  @spec scan_all!(cluster(), Scan.t(), keyword()) :: [Aerospike.Record.t()]
+  @spec scan_all!(cluster(), Scan.t(), scan_query_opts()) :: [Aerospike.Record.t()]
   def scan_all!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     case scan_all(cluster, scan, opts) do
       {:ok, records} -> records
@@ -727,7 +988,7 @@ defmodule Aerospike do
   `node: node_name` in `opts` to collect a page from one active node, using
   a name returned by `node_names/1` or `nodes/1`.
   """
-  @spec scan_page(cluster(), Scan.t(), keyword()) ::
+  @spec scan_page(cluster(), Scan.t(), scan_query_opts()) ::
           {:ok, Page.t()} | {:error, Aerospike.Error.t()}
   def scan_page(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     ScanOps.scan_page(cluster, scan, opts)
@@ -736,7 +997,7 @@ defmodule Aerospike do
   @doc """
   Same as `scan_page/3` but returns the page or raises `Aerospike.Error`.
   """
-  @spec scan_page!(cluster(), Scan.t(), keyword()) :: Page.t()
+  @spec scan_page!(cluster(), Scan.t(), scan_query_opts()) :: Page.t()
   def scan_page!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     case scan_page(cluster, scan, opts) do
       {:ok, page} -> page
@@ -748,7 +1009,7 @@ defmodule Aerospike do
   Deprecated alias for `scan_all!/3`.
   """
   @deprecated "Use scan_all!/3 instead."
-  @spec all!(cluster(), Scan.t(), keyword()) :: [Aerospike.Record.t()]
+  @spec all!(cluster(), Scan.t(), scan_query_opts()) :: [Aerospike.Record.t()]
   def all!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_all!(cluster, scan, opts)
   end
@@ -759,7 +1020,7 @@ defmodule Aerospike do
   Pass `node: node_name` in `opts` to count records from one active node,
   using a name returned by `node_names/1` or `nodes/1`.
   """
-  @spec scan_count(cluster(), Scan.t(), keyword()) ::
+  @spec scan_count(cluster(), Scan.t(), scan_query_opts()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
   def scan_count(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     ScanOps.count(cluster, scan, opts)
@@ -769,7 +1030,7 @@ defmodule Aerospike do
   Deprecated alias for `scan_count/3`.
   """
   @deprecated "Use scan_count/3 instead."
-  @spec count(cluster(), Scan.t(), keyword()) ::
+  @spec count(cluster(), Scan.t(), scan_query_opts()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
   def count(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_count(cluster, scan, opts)
@@ -783,7 +1044,7 @@ defmodule Aerospike do
   count records from one active node, using a name returned by `node_names/1`
   or `nodes/1`.
   """
-  @spec query_count(cluster(), Query.t(), keyword()) ::
+  @spec query_count(cluster(), Query.t(), scan_query_opts()) ::
           {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
   def query_count(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     ScanOps.query_count(cluster, query, opts)
@@ -792,7 +1053,7 @@ defmodule Aerospike do
   @doc """
   Same as `query_count/3` but returns the count or raises `Aerospike.Error`.
   """
-  @spec query_count!(cluster(), Query.t(), keyword()) :: non_neg_integer()
+  @spec query_count!(cluster(), Query.t(), scan_query_opts()) :: non_neg_integer()
   def query_count!(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     case query_count(cluster, query, opts) do
       {:ok, count} -> count
@@ -803,7 +1064,7 @@ defmodule Aerospike do
   @doc """
   Sends one info command to one active cluster node and returns that node's reply.
   """
-  @spec info(cluster(), String.t(), keyword()) ::
+  @spec info(cluster(), String.t(), admin_opts()) ::
           {:ok, String.t()} | {:error, Aerospike.Error.t()}
   def info(cluster, command, opts \\ [])
       when is_binary(command) and is_list(opts) do
@@ -827,7 +1088,7 @@ defmodule Aerospike do
     * `:pool_checkout_timeout` — non-negative pool checkout timeout in
       milliseconds.
   """
-  @spec info_node(cluster(), String.t(), String.t(), keyword()) ::
+  @spec info_node(cluster(), String.t(), String.t(), admin_opts()) ::
           {:ok, String.t()} | {:error, Aerospike.Error.t()}
   def info_node(cluster, node_name, command, opts \\ [])
       when is_binary(node_name) and is_binary(command) and is_list(opts) do
@@ -870,7 +1131,7 @@ defmodule Aerospike do
     * `:reset` — boolean. When `true`, clears the existing runtime counters
       before enabling collection.
   """
-  @spec enable_metrics(cluster(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  @spec enable_metrics(cluster(), metrics_opts()) :: :ok | {:error, Aerospike.Error.t()}
   def enable_metrics(cluster, opts \\ []) when is_list(opts) do
     with :ok <- validate_enable_metrics_opts(opts) do
       RuntimeMetrics.enable(cluster, opts)
@@ -915,7 +1176,7 @@ defmodule Aerospike do
     * `:pool_checkout_timeout` — non-negative integer timeout in milliseconds
       for each checkout probe.
   """
-  @spec warm_up(cluster(), keyword()) :: {:ok, map()} | {:error, Aerospike.Error.t()}
+  @spec warm_up(cluster(), warm_up_opts()) :: {:ok, map()} | {:error, Aerospike.Error.t()}
   def warm_up(cluster, opts \\ []) when is_list(opts) do
     with :ok <- validate_warm_up_opts(opts) do
       Cluster.warm_up(cluster, opts)
@@ -949,7 +1210,7 @@ defmodule Aerospike do
 
       :ok = Aerospike.IndexTask.wait(task)
   """
-  @spec create_index(cluster(), String.t(), String.t(), keyword()) ::
+  @spec create_index(cluster(), String.t(), String.t(), create_index_opts()) ::
           {:ok, IndexTask.t()} | {:error, Aerospike.Error.t()}
   def create_index(cluster, namespace, set, opts \\ [])
       when is_binary(namespace) and is_binary(set) and is_list(opts) do
@@ -984,7 +1245,13 @@ defmodule Aerospike do
 
       :ok = Aerospike.IndexTask.wait(task)
   """
-  @spec create_expression_index(cluster(), String.t(), String.t(), Exp.t(), keyword()) ::
+  @spec create_expression_index(
+          cluster(),
+          String.t(),
+          String.t(),
+          Exp.t(),
+          create_expression_index_opts()
+        ) ::
           {:ok, IndexTask.t()} | {:error, Aerospike.Error.t()}
   def create_expression_index(cluster, namespace, set, %Exp{} = expression, opts \\ [])
       when is_binary(namespace) and is_binary(set) and is_list(opts) do
@@ -1020,7 +1287,7 @@ defmodule Aerospike do
   @doc """
   Drops a secondary index.
   """
-  @spec drop_index(cluster(), String.t(), String.t(), keyword()) ::
+  @spec drop_index(cluster(), String.t(), String.t(), admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def drop_index(cluster, namespace, index_name, opts \\ [])
       when is_binary(namespace) and is_binary(index_name) and is_list(opts) do
@@ -1033,7 +1300,7 @@ defmodule Aerospike do
   This is package lifecycle state, not record execution. Use `apply_udf/6`
   to invoke one function against one key.
   """
-  @spec list_udfs(cluster(), keyword()) :: {:ok, [UDF.t()]} | {:error, Aerospike.Error.t()}
+  @spec list_udfs(cluster(), admin_opts()) :: {:ok, [UDF.t()]} | {:error, Aerospike.Error.t()}
   def list_udfs(cluster, opts \\ []) when is_list(opts) do
     Admin.list_udfs(cluster, opts)
   end
@@ -1045,7 +1312,7 @@ defmodule Aerospike do
   upload. The package may still be propagating, so call `RegisterTask.wait/2`
   before relying on it from `apply_udf/6` or background UDF jobs.
   """
-  @spec register_udf(cluster(), String.t(), String.t(), keyword()) ::
+  @spec register_udf(cluster(), String.t(), String.t(), admin_opts()) ::
           {:ok, RegisterTask.t()} | {:error, Aerospike.Error.t()}
   def register_udf(cluster, path_or_content, server_name, opts \\ [])
       when is_binary(path_or_content) and is_binary(server_name) and is_list(opts) do
@@ -1057,7 +1324,7 @@ defmodule Aerospike do
 
   This is idempotent: removing an already-absent package still returns `:ok`.
   """
-  @spec remove_udf(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  @spec remove_udf(cluster(), String.t(), admin_opts()) :: :ok | {:error, Aerospike.Error.t()}
   def remove_udf(cluster, server_name, opts \\ [])
       when is_binary(server_name) and is_list(opts) do
     Admin.remove_udf(cluster, server_name, opts)
@@ -1075,7 +1342,7 @@ defmodule Aerospike do
   snapshot token. Pass `node: node_name` in `opts` to collect a page from one
   active node, using a name returned by `node_names/1` or `nodes/1`.
   """
-  @spec query_page(cluster(), Query.t(), keyword()) ::
+  @spec query_page(cluster(), Query.t(), scan_query_opts()) ::
           {:ok, Page.t()} | {:error, Aerospike.Error.t()}
   def query_page(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     ScanOps.query_page(cluster, query, opts)
@@ -1084,7 +1351,7 @@ defmodule Aerospike do
   @doc """
   Same as `query_page/3` but returns the page or raises `Aerospike.Error`.
   """
-  @spec query_page!(cluster(), Query.t(), keyword()) :: Page.t()
+  @spec query_page!(cluster(), Query.t(), scan_query_opts()) :: Page.t()
   def query_page!(cluster, %Query{} = query, opts \\ []) when is_list(opts) do
     case query_page(cluster, query, opts) do
       {:ok, page} -> page
@@ -1105,7 +1372,7 @@ defmodule Aerospike do
     * `:pool_checkout_timeout` — non-negative integer checkout timeout in
       milliseconds for the one-node admin request
   """
-  @spec truncate(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  @spec truncate(cluster(), String.t(), truncate_opts()) :: :ok | {:error, Aerospike.Error.t()}
   def truncate(cluster, namespace, opts \\ [])
 
   def truncate(cluster, namespace, set)
@@ -1133,7 +1400,7 @@ defmodule Aerospike do
     * `:pool_checkout_timeout` — non-negative integer checkout timeout in
       milliseconds for the one-node admin request
   """
-  @spec truncate(cluster(), String.t(), String.t(), keyword()) ::
+  @spec truncate(cluster(), String.t(), String.t(), truncate_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def truncate(cluster, namespace, set, opts)
       when is_binary(namespace) and is_binary(set) and is_list(opts) do
@@ -1153,7 +1420,7 @@ defmodule Aerospike do
     * `:timeout`
     * `:pool_checkout_timeout`
   """
-  @spec create_user(cluster(), String.t(), String.t(), [String.t()], keyword()) ::
+  @spec create_user(cluster(), String.t(), String.t(), [String.t()], security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def create_user(cluster, user_name, password, roles, opts \\ [])
       when is_binary(user_name) and is_binary(password) and is_list(roles) and is_list(opts) do
@@ -1176,7 +1443,7 @@ defmodule Aerospike do
     * `:timeout`
     * `:pool_checkout_timeout`
   """
-  @spec create_pki_user(cluster(), String.t(), [String.t()], keyword()) ::
+  @spec create_pki_user(cluster(), String.t(), [String.t()], security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def create_pki_user(cluster, user_name, roles, opts \\ [])
       when is_binary(user_name) and is_list(roles) and is_list(opts) do
@@ -1191,7 +1458,8 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec drop_user(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  @spec drop_user(cluster(), String.t(), security_admin_opts()) ::
+          :ok | {:error, Aerospike.Error.t()}
   def drop_user(cluster, user_name, opts \\ [])
       when is_binary(user_name) and is_list(opts) do
     with {:ok, _policy} <- Policy.security_admin(opts) do
@@ -1209,7 +1477,7 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec change_password(cluster(), String.t(), String.t(), keyword()) ::
+  @spec change_password(cluster(), String.t(), String.t(), security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def change_password(cluster, user_name, password, opts \\ [])
       when is_binary(user_name) and is_binary(password) and is_list(opts) do
@@ -1223,7 +1491,7 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec grant_roles(cluster(), String.t(), [String.t()], keyword()) ::
+  @spec grant_roles(cluster(), String.t(), [String.t()], security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def grant_roles(cluster, user_name, roles, opts \\ [])
       when is_binary(user_name) and is_list(roles) and is_list(opts) do
@@ -1238,7 +1506,7 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec revoke_roles(cluster(), String.t(), [String.t()], keyword()) ::
+  @spec revoke_roles(cluster(), String.t(), [String.t()], security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def revoke_roles(cluster, user_name, roles, opts \\ [])
       when is_binary(user_name) and is_list(roles) and is_list(opts) do
@@ -1255,7 +1523,7 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec query_user(cluster(), String.t(), keyword()) ::
+  @spec query_user(cluster(), String.t(), security_admin_opts()) ::
           {:ok, user_info() | nil} | {:error, Aerospike.Error.t()}
   def query_user(cluster, user_name, opts \\ [])
       when is_binary(user_name) and is_list(opts) do
@@ -1269,7 +1537,8 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec query_users(cluster(), keyword()) :: {:ok, [user_info()]} | {:error, Aerospike.Error.t()}
+  @spec query_users(cluster(), security_admin_opts()) ::
+          {:ok, [user_info()]} | {:error, Aerospike.Error.t()}
   def query_users(cluster, opts \\ []) when is_list(opts) do
     with {:ok, _policy} <- Policy.security_admin(opts) do
       Admin.query_users(cluster, opts)
@@ -1289,7 +1558,7 @@ defmodule Aerospike do
     * `:timeout`
     * `:pool_checkout_timeout`
   """
-  @spec create_role(cluster(), String.t(), [privilege()], keyword()) ::
+  @spec create_role(cluster(), String.t(), [privilege()], create_role_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def create_role(cluster, role_name, privileges, opts \\ [])
       when is_binary(role_name) and is_list(privileges) and is_list(opts) do
@@ -1314,7 +1583,8 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec drop_role(cluster(), String.t(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
+  @spec drop_role(cluster(), String.t(), security_admin_opts()) ::
+          :ok | {:error, Aerospike.Error.t()}
   def drop_role(cluster, role_name, opts \\ [])
       when is_binary(role_name) and is_list(opts) do
     with {:ok, _policy} <- Policy.security_admin(opts) do
@@ -1328,7 +1598,7 @@ defmodule Aerospike do
   Pass an empty list to clear the role's whitelist. This requires Aerospike
   Enterprise with security enabled.
   """
-  @spec set_whitelist(cluster(), String.t(), [String.t()], keyword()) ::
+  @spec set_whitelist(cluster(), String.t(), [String.t()], security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def set_whitelist(cluster, role_name, whitelist, opts \\ [])
       when is_binary(role_name) and is_list(opts) do
@@ -1344,7 +1614,13 @@ defmodule Aerospike do
   Pass `0` for either quota to clear that limit. Quotas require server security
   configuration with quotas enabled.
   """
-  @spec set_quotas(cluster(), String.t(), non_neg_integer(), non_neg_integer(), keyword()) ::
+  @spec set_quotas(
+          cluster(),
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          security_admin_opts()
+        ) ::
           :ok | {:error, Aerospike.Error.t()}
   def set_quotas(cluster, role_name, read_quota, write_quota, opts \\ [])
       when is_binary(role_name) and is_list(opts) do
@@ -1360,7 +1636,7 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec grant_privileges(cluster(), String.t(), [privilege()], keyword()) ::
+  @spec grant_privileges(cluster(), String.t(), [privilege()], security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def grant_privileges(cluster, role_name, privileges, opts \\ [])
       when is_binary(role_name) and is_list(privileges) and is_list(opts) do
@@ -1375,7 +1651,7 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec revoke_privileges(cluster(), String.t(), [privilege()], keyword()) ::
+  @spec revoke_privileges(cluster(), String.t(), [privilege()], security_admin_opts()) ::
           :ok | {:error, Aerospike.Error.t()}
   def revoke_privileges(cluster, role_name, privileges, opts \\ [])
       when is_binary(role_name) and is_list(privileges) and is_list(opts) do
@@ -1392,7 +1668,7 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec query_role(cluster(), String.t(), keyword()) ::
+  @spec query_role(cluster(), String.t(), security_admin_opts()) ::
           {:ok, role_info() | nil} | {:error, Aerospike.Error.t()}
   def query_role(cluster, role_name, opts \\ [])
       when is_binary(role_name) and is_list(opts) do
@@ -1406,7 +1682,8 @@ defmodule Aerospike do
 
   This requires Aerospike Enterprise with security enabled.
   """
-  @spec query_roles(cluster(), keyword()) :: {:ok, [role_info()]} | {:error, Aerospike.Error.t()}
+  @spec query_roles(cluster(), security_admin_opts()) ::
+          {:ok, [role_info()]} | {:error, Aerospike.Error.t()}
   def query_roles(cluster, opts \\ []) when is_list(opts) do
     with {:ok, _policy} <- Policy.security_admin(opts) do
       Admin.query_roles(cluster, opts)
@@ -1421,7 +1698,7 @@ defmodule Aerospike do
   does not run local Lua finalization. Use `query_aggregate_result/6` when
   the caller wants one locally finalized aggregate result.
   """
-  @spec query_aggregate(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+  @spec query_aggregate(cluster(), Query.t(), String.t(), String.t(), list(), scan_query_opts()) ::
           {:ok, Enumerable.t()} | {:error, Aerospike.Error.t()}
   def query_aggregate(cluster, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
@@ -1478,7 +1755,14 @@ defmodule Aerospike do
   Returns `{:ok, nil}` when local finalization produces no value. Returns an
   error when finalization produces multiple values or local Lua execution fails.
   """
-  @spec query_aggregate_result(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+  @spec query_aggregate_result(
+          cluster(),
+          Query.t(),
+          String.t(),
+          String.t(),
+          list(),
+          aggregate_result_opts()
+        ) ::
           {:ok, term() | nil} | {:error, Aerospike.Error.t()}
   def query_aggregate_result(cluster, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
@@ -1489,7 +1773,14 @@ defmodule Aerospike do
   Same as `query_aggregate_result/6` but returns the value or raises
   `Aerospike.Error`.
   """
-  @spec query_aggregate_result!(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+  @spec query_aggregate_result!(
+          cluster(),
+          Query.t(),
+          String.t(),
+          String.t(),
+          list(),
+          aggregate_result_opts()
+        ) ::
           term() | nil
   def query_aggregate_result!(cluster, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
@@ -1506,7 +1797,7 @@ defmodule Aerospike do
   Pass `node: node_name` in `opts` to start the job on one active node,
   using a name returned by `node_names/1` or `nodes/1`.
   """
-  @spec query_execute(cluster(), Query.t(), list(), keyword()) ::
+  @spec query_execute(cluster(), Query.t(), list(), scan_query_opts()) ::
           {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
   def query_execute(cluster, %Query{} = query, ops, opts \\ [])
       when is_list(ops) and is_list(opts) do
@@ -1520,7 +1811,7 @@ defmodule Aerospike do
   Pass `node: node_name` in `opts` to start the job on one active node,
   using a name returned by `node_names/1` or `nodes/1`.
   """
-  @spec query_udf(cluster(), Query.t(), String.t(), String.t(), list(), keyword()) ::
+  @spec query_udf(cluster(), Query.t(), String.t(), String.t(), list(), scan_query_opts()) ::
           {:ok, ExecuteTask.t()} | {:error, Aerospike.Error.t()}
   def query_udf(cluster, %Query{} = query, package, function, args, opts \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) and is_list(opts) do
@@ -1531,13 +1822,24 @@ defmodule Aerospike do
   Executes one record UDF against `key`.
 
   This is a single-record command, not a background query job. It accepts the
-  same narrow write opts as the unary write family:
+  same write opts as the unary write family:
 
     * `:timeout`
+    * `:socket_timeout`
     * `:max_retries`
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation`
+    * `:generation_policy`
+    * `:exists`
+    * `:commit_level`
+    * `:durable_delete`
+    * `:respond_per_op`
+    * `:send_key`
+    * `:read_mode_ap`
+    * `:read_mode_sc`
+    * `:read_touch_ttl_percent`
+    * `:use_compression`
     * `:filter`
     * `:txn`
 
@@ -1547,7 +1849,7 @@ defmodule Aerospike do
   wire, because record UDFs may already have produced server-side effects.
   Package lifecycle lives on `register_udf/*`, `remove_udf/*`, and `list_udfs/2`.
   """
-  @spec apply_udf(cluster(), Key.key_input(), String.t(), String.t(), list(), keyword()) ::
+  @spec apply_udf(cluster(), Key.key_input(), String.t(), String.t(), list(), write_opts()) ::
           {:ok, term()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1632,7 +1934,7 @@ defmodule Aerospike do
   same handle concurrently or against another cluster is unsupported. This
   helper currently requires the registered cluster atom.
   """
-  @spec transaction(named_cluster(), Txn.t() | keyword(), (Txn.t() -> term())) ::
+  @spec transaction(named_cluster(), Txn.t() | transaction_opts(), (Txn.t() -> term())) ::
           {:ok, term()} | {:error, Aerospike.Error.t()}
   def transaction(cluster, txn_or_opts, fun)
       when is_atom(cluster) and is_function(fun, 1) do
@@ -1642,7 +1944,7 @@ defmodule Aerospike do
   @doc """
   Same as `scan_count/3` but returns the count or raises `Aerospike.Error`.
   """
-  @spec scan_count!(cluster(), Scan.t(), keyword()) :: non_neg_integer()
+  @spec scan_count!(cluster(), Scan.t(), scan_query_opts()) :: non_neg_integer()
   def scan_count!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     case scan_count(cluster, scan, opts) do
       {:ok, count} -> count
@@ -1654,7 +1956,7 @@ defmodule Aerospike do
   Deprecated alias for `scan_count!/3`.
   """
   @deprecated "Use scan_count!/3 instead."
-  @spec count!(cluster(), Scan.t(), keyword()) :: non_neg_integer()
+  @spec count!(cluster(), Scan.t(), scan_query_opts()) :: non_neg_integer()
   def count!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_count!(cluster, scan, opts)
   end
@@ -1664,23 +1966,32 @@ defmodule Aerospike do
 
   The driver accepts only a non-empty bin map and only scalar, list, map,
   bytes, geo, and HyperLogLog values supported by the command encoder.
-  Supported write opts are:
+  Supported write opts include:
 
     * `:timeout`
+    * `:socket_timeout`
     * `:max_retries`
     * `:sleep_between_retries_ms`
     * `:ttl`
-    * `:generation` — expect generation equality when non-zero
+    * `:generation`
+    * `:generation_policy` — `:none`, `:expect_equal`, or `:expect_gt`
     * `:exists` — one of `:update`, `:update_only`,
       `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:commit_level` — `:all` or `:master`
     * `:durable_delete` — when `true`, write/delete commands that remove a
       record ask the server to leave a tombstone
+    * `:respond_per_op`
+    * `:send_key`
+    * `:read_mode_ap`
+    * `:read_mode_sc`
+    * `:read_touch_ttl_percent`
+    * `:use_compression`
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec put(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+  @spec put(cluster(), Key.key_input(), Aerospike.Record.bins_input(), write_opts()) ::
           {:ok, Aerospike.Record.metadata()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1706,16 +2017,24 @@ defmodule Aerospike do
   Supported write opts are validated for routing and I/O budgets:
 
     * `:timeout`
+    * `:socket_timeout`
     * `:max_retries`
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation`
+    * `:generation_policy`
+    * `:exists`
+    * `:commit_level`
+    * `:durable_delete`
+    * `:respond_per_op`
+    * `:send_key`
+    * `:use_compression`
     * `:filter`
     * `:txn`
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec put_payload(cluster(), Key.key_input(), binary(), keyword()) ::
+  @spec put_payload(cluster(), Key.key_input(), binary(), write_opts()) ::
           :ok
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1729,7 +2048,7 @@ defmodule Aerospike do
   @doc """
   Same as `put_payload/4` but returns `:ok` or raises `Aerospike.Error`.
   """
-  @spec put_payload!(cluster(), Key.key_input(), binary(), keyword()) :: :ok
+  @spec put_payload!(cluster(), Key.key_input(), binary(), write_opts()) :: :ok
   def put_payload!(cluster, key, payload, opts \\ [])
       when is_binary(payload) and is_list(opts) do
     case put_payload(cluster, key, payload, opts) do
@@ -1745,23 +2064,32 @@ defmodule Aerospike do
   The return shape stays aligned with the write family and does not expose
   `operate/4` record results.
 
-  Supported write opts are:
+  Supported write opts include:
 
     * `:timeout`
+    * `:socket_timeout`
     * `:max_retries`
     * `:sleep_between_retries_ms`
     * `:ttl`
-    * `:generation` — expect generation equality when non-zero
+    * `:generation`
+    * `:generation_policy` — `:none`, `:expect_equal`, or `:expect_gt`
     * `:exists` — one of `:update`, `:update_only`,
       `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:commit_level` — `:all` or `:master`
     * `:durable_delete` — when `true`, write/delete commands that remove a
       record ask the server to leave a tombstone
+    * `:respond_per_op`
+    * `:send_key`
+    * `:read_mode_ap`
+    * `:read_mode_sc`
+    * `:read_touch_ttl_percent`
+    * `:use_compression`
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec add(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+  @spec add(cluster(), Key.key_input(), Aerospike.Record.bins_input(), write_opts()) ::
           {:ok, Aerospike.Record.metadata()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1777,23 +2105,32 @@ defmodule Aerospike do
   This stays on the unary write path and returns write metadata, not an
   `operate/4` record payload.
 
-  Supported write opts are:
+  Supported write opts include:
 
     * `:timeout`
+    * `:socket_timeout`
     * `:max_retries`
     * `:sleep_between_retries_ms`
     * `:ttl`
-    * `:generation` — expect generation equality when non-zero
+    * `:generation`
+    * `:generation_policy` — `:none`, `:expect_equal`, or `:expect_gt`
     * `:exists` — one of `:update`, `:update_only`,
       `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:commit_level` — `:all` or `:master`
     * `:durable_delete` — when `true`, write/delete commands that remove a
       record ask the server to leave a tombstone
+    * `:respond_per_op`
+    * `:send_key`
+    * `:read_mode_ap`
+    * `:read_mode_sc`
+    * `:read_touch_ttl_percent`
+    * `:use_compression`
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec append(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+  @spec append(cluster(), Key.key_input(), Aerospike.Record.bins_input(), write_opts()) ::
           {:ok, Aerospike.Record.metadata()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1809,23 +2146,32 @@ defmodule Aerospike do
   This stays on the unary write path and returns write metadata, not an
   `operate/4` record payload.
 
-  Supported write opts are:
+  Supported write opts include:
 
     * `:timeout`
+    * `:socket_timeout`
     * `:max_retries`
     * `:sleep_between_retries_ms`
     * `:ttl`
-    * `:generation` — expect generation equality when non-zero
+    * `:generation`
+    * `:generation_policy` — `:none`, `:expect_equal`, or `:expect_gt`
     * `:exists` — one of `:update`, `:update_only`,
       `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:commit_level` — `:all` or `:master`
     * `:durable_delete` — when `true`, write/delete commands that remove a
       record ask the server to leave a tombstone
+    * `:respond_per_op`
+    * `:send_key`
+    * `:read_mode_ap`
+    * `:read_mode_sc`
+    * `:read_touch_ttl_percent`
+    * `:use_compression`
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec prepend(cluster(), Key.key_input(), Aerospike.Record.bins_input(), keyword()) ::
+  @spec prepend(cluster(), Key.key_input(), Aerospike.Record.bins_input(), write_opts()) ::
           {:ok, Aerospike.Record.metadata()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1838,12 +2184,14 @@ defmodule Aerospike do
   @doc """
   Returns whether `key` exists in `cluster` without reading bins.
 
-  Supported read opts are `:timeout`, `:max_retries`,
-  `:sleep_between_retries_ms`, `:replica_policy`, and `:filter`.
+  Supported read opts are `:timeout`, `:socket_timeout`, `:max_retries`,
+  `:sleep_between_retries_ms`, `:replica_policy`, `:read_mode_ap`,
+  `:read_mode_sc`, `:read_touch_ttl_percent`, `:send_key`,
+  `:use_compression`, and `:filter`.
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec exists(cluster(), Key.key_input(), keyword()) ::
+  @spec exists(cluster(), Key.key_input(), read_opts()) ::
           {:ok, boolean()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1856,12 +2204,15 @@ defmodule Aerospike do
   @doc """
   Updates `key`'s header metadata in `cluster`.
 
-  Supported write opts are `:timeout`, `:max_retries`,
-  `:sleep_between_retries_ms`, `:ttl`, `:generation`, and `:filter`.
+  Supported write opts are `:timeout`, `:socket_timeout`, `:max_retries`,
+  `:sleep_between_retries_ms`, `:ttl`, `:generation`, `:generation_policy`,
+  `:exists`, `:commit_level`, `:durable_delete`, `:respond_per_op`,
+  `:send_key`, `:read_mode_ap`, `:read_mode_sc`,
+  `:read_touch_ttl_percent`, `:use_compression`, and `:filter`.
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec touch(cluster(), Key.key_input(), keyword()) ::
+  @spec touch(cluster(), Key.key_input(), write_opts()) ::
           {:ok, Aerospike.Record.metadata()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1876,12 +2227,15 @@ defmodule Aerospike do
 
   Returns `{:ok, true}` when a record was deleted and `{:ok, false}`
   when the key was already absent. Supported write opts are `:timeout`,
-  `:max_retries`, `:sleep_between_retries_ms`, `:generation`,
-  `:durable_delete`, and `:filter`.
+  `:socket_timeout`, `:max_retries`, `:sleep_between_retries_ms`, `:ttl`,
+  `:generation`, `:generation_policy`, `:exists`, `:commit_level`,
+  `:durable_delete`, `:respond_per_op`, `:send_key`, `:read_mode_ap`,
+  `:read_mode_sc`, `:read_touch_ttl_percent`, `:use_compression`, and
+  `:filter`.
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec delete(cluster(), Key.key_input(), keyword()) ::
+  @spec delete(cluster(), Key.key_input(), write_opts()) ::
           {:ok, boolean()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1907,9 +2261,11 @@ defmodule Aerospike do
   The command routes per input batch: read-only lists use read routing;
   any list that includes a write uses write routing.
 
-  Supported opts are `:timeout`, `:max_retries`,
-  `:sleep_between_retries_ms`, `:ttl`, `:generation`, `:exists`,
-  `:durable_delete`, and `:filter`.
+  Supported opts are `:timeout`, `:socket_timeout`, `:max_retries`,
+  `:sleep_between_retries_ms`, `:ttl`, `:generation`, `:generation_policy`,
+  `:exists`, `:commit_level`, `:durable_delete`, `:respond_per_op`,
+  `:send_key`, `:read_mode_ap`, `:read_mode_sc`,
+  `:read_touch_ttl_percent`, `:use_compression`, and `:filter`.
 
   Accepted operations include the simple tuple form plus the public
   `Aerospike.Op` helpers for primitive, CDT, bit, HyperLogLog, and expression
@@ -1934,7 +2290,7 @@ defmodule Aerospike do
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec operate(cluster(), Key.key_input(), [operate_operation()], keyword()) ::
+  @spec operate(cluster(), Key.key_input(), [operate_operation()], write_opts()) ::
           {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -1981,76 +2337,103 @@ defmodule Aerospike do
     end
   end
 
-  defp batch_command_entry(%Batch.Read{key: %Key{} = key}, index, %Policy.Batch{} = policy) do
-    {:ok,
-     %Entry{
-       index: index,
-       key: key,
-       kind: :read,
-       dispatch: {:read, policy.retry.replica_policy, 0},
-       payload: nil
-     }}
+  defp batch_command_entry(
+         %Batch.Read{key: %Key{} = key, opts: opts},
+         index,
+         %Policy.Batch{} = policy
+       ) do
+    with {:ok, read_policy} <- Policy.batch_record_read(opts) do
+      {:ok,
+       %Entry{
+         index: index,
+         key: key,
+         kind: :read,
+         dispatch: {:read, policy.retry.replica_policy, 0},
+         payload: batch_read_payload(read_policy)
+       }}
+    end
   end
 
-  defp batch_command_entry(%Batch.Put{key: %Key{} = key, bins: bins}, index, %Policy.Batch{})
+  defp batch_command_entry(
+         %Batch.Put{key: %Key{} = key, bins: bins, opts: opts},
+         index,
+         %Policy.Batch{}
+       )
        when is_map(bins) do
-    with {:ok, operations} <- batch_put_operations(bins) do
+    with {:ok, write_policy} <- Policy.batch_record_write(opts),
+         {:ok, operations} <- batch_put_operations(bins) do
       {:ok,
        %Entry{
          index: index,
          key: key,
          kind: :put,
          dispatch: :write,
-         payload: %{operations: operations}
+         payload: Map.put(batch_write_payload(write_policy), :operations, operations)
        }}
     end
   end
 
-  defp batch_command_entry(%Batch.Delete{key: %Key{} = key}, index, %Policy.Batch{}) do
-    {:ok,
-     %Entry{
-       index: index,
-       key: key,
-       kind: :delete,
-       dispatch: :write,
-       payload: nil
-     }}
+  defp batch_command_entry(%Batch.Delete{key: %Key{} = key, opts: opts}, index, %Policy.Batch{}) do
+    with {:ok, write_policy} <- Policy.batch_record_write(opts) do
+      {:ok,
+       %Entry{
+         index: index,
+         key: key,
+         kind: :delete,
+         dispatch: :write,
+         payload: batch_write_payload(write_policy)
+       }}
+    end
   end
 
   defp batch_command_entry(
-         %Batch.Operate{key: %Key{} = key, operations: operations},
+         %Batch.Operate{key: %Key{} = key, operations: operations, opts: opts},
          index,
          %Policy.Batch{} = policy
        )
        when is_list(operations) do
     with :ok <- validate_batch_operations(operations) do
       flags = OperateFlags.scan_ops(operations)
+      payload = batch_operate_payload(flags, opts)
 
-      {:ok,
-       %Entry{
-         index: index,
-         key: key,
-         kind: :operate,
-         dispatch: batch_operate_dispatch(flags, policy),
-         payload: %{operations: operations, flags: flags}
-       }}
+      with {:ok, payload} <- payload do
+        {:ok,
+         %Entry{
+           index: index,
+           key: key,
+           kind: :operate,
+           dispatch: batch_operate_dispatch(flags, policy),
+           payload: Map.merge(payload, %{operations: operations, flags: flags})
+         }}
+      end
     end
   end
 
   defp batch_command_entry(
-         %Batch.UDF{key: %Key{} = key, package: package, function: function, args: args},
+         %Batch.UDF{
+           key: %Key{} = key,
+           package: package,
+           function: function,
+           args: args,
+           opts: opts
+         },
          index,
          %Policy.Batch{}
        )
        when is_binary(package) and is_binary(function) and is_list(args) do
-    {:ok,
-     %Entry{
-       index: index,
-       key: key,
-       kind: :udf,
-       dispatch: :write,
-       payload: %{package: package, function: function, args: args}
-     }}
+    with {:ok, write_policy} <- Policy.batch_record_write(opts) do
+      {:ok,
+       %Entry{
+         index: index,
+         key: key,
+         kind: :udf,
+         dispatch: :write,
+         payload:
+           write_policy
+           |> batch_write_payload()
+           |> Map.merge(%{package: package, function: function, args: args})
+       }}
+    end
   end
 
   defp batch_command_entry(_entry, _index, %Policy.Batch{}) do
@@ -2058,6 +2441,44 @@ defmodule Aerospike do
      Error.from_result_code(:invalid_argument,
        message: "Aerospike.batch_operate/3 expects entries built by Aerospike.Batch"
      )}
+  end
+
+  defp batch_read_payload(%Policy.BatchRead{} = policy) do
+    Map.take(policy, [
+      :filter,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent
+    ])
+  end
+
+  defp batch_write_payload(%Policy.BatchWrite{} = policy) do
+    Map.take(policy, [
+      :ttl,
+      :generation,
+      :generation_policy,
+      :filter,
+      :exists,
+      :commit_level,
+      :durable_delete,
+      :respond_per_op,
+      :send_key,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent
+    ])
+  end
+
+  defp batch_operate_payload(%{has_write?: true}, opts) do
+    with {:ok, write_policy} <- Policy.batch_record_write(opts) do
+      {:ok, batch_write_payload(write_policy)}
+    end
+  end
+
+  defp batch_operate_payload(%{has_write?: false}, opts) do
+    with {:ok, read_policy} <- Policy.batch_record_read(opts) do
+      {:ok, batch_read_payload(read_policy)}
+    end
   end
 
   defp batch_operate_dispatch(%{has_write?: true}, %Policy.Batch{}), do: :write

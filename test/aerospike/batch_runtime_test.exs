@@ -71,6 +71,31 @@ defmodule Aerospike.Command.BatchRuntimeTest do
                       [use_compression: false, attempt: 0]}
     end
 
+    test "uses socket timeout for grouped request transport while checkout keeps total budget" do
+      parent = self()
+      responses = start_responses!(%{"A1" => [{:ok, "body-a1"}]})
+
+      command =
+        command(fn results, _input ->
+          Enum.map(results, fn node_result -> node_result.result end)
+        end)
+
+      result =
+        BatchCommand.run(
+          command,
+          runtime_for(timeout: 1_000, socket_timeout: 40),
+          :batch,
+          [node_request("A1", [0])],
+          ctx(parent, responses)
+        )
+
+      assert result == [{:ok, "body-a1"}]
+
+      assert_receive {:checkout, "A1", checkout_timeout}
+      assert is_integer(checkout_timeout) and checkout_timeout >= 40
+      assert_receive {:transport, "A1", "batch:A1:0", 40, [use_compression: false, attempt: 0]}
+    end
+
     test "transport retry reroutes one grouped node request without aborting the batch" do
       parent = self()
       handler = attach_retry_handler(:batch_transport_retry)
@@ -342,11 +367,21 @@ defmodule Aerospike.Command.BatchRuntimeTest do
     Executor.new!(
       policy: %Policy.BatchRead{
         timeout: Keyword.get(opts, :timeout, 5_000),
+        socket_timeout: Keyword.get(opts, :socket_timeout, 0),
         retry: %{
           max_retries: Keyword.get(opts, :max_retries, 0),
           sleep_between_retries_ms: 0,
           replica_policy: :sequence
-        }
+        },
+        max_concurrent_nodes: 0,
+        allow_partial_results: true,
+        respond_all_keys: true,
+        allow_inline: true,
+        allow_inline_ssd: false,
+        filter: nil,
+        read_mode_ap: :one,
+        read_mode_sc: :session,
+        read_touch_ttl_percent: 0
       },
       on_rebalance: on_rebalance
     )

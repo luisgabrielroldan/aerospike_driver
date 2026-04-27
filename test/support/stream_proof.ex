@@ -124,9 +124,14 @@ defmodule Aerospike.Test.StreamProof do
       %{parts_full: parts_full, parts_partial: [], record_max: 0},
       %Policy.ScanQueryRuntime{
         timeout: @scan_timeout_ms,
+        socket_timeout: 0,
         task_timeout: @scan_timeout_ms,
         pool_checkout_timeout: @scan_timeout_ms,
         max_concurrent_nodes: 0,
+        retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence},
+        records_per_second: nil,
+        include_bin_data: true,
+        expected_duration: :long,
         task_id: task_id,
         cursor: nil
       }

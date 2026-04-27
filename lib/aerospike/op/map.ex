@@ -30,6 +30,8 @@ defmodule Aerospike.Op.Map do
   @remove_by_index_range 85
   @remove_by_value_range 86
   @remove_by_rank_range 87
+  @remove_by_key_rel_index_range 88
+  @remove_by_value_rel_rank_range 89
   @size 96
   @get_by_key 97
   @get_by_index 98
@@ -41,6 +43,43 @@ defmodule Aerospike.Op.Map do
   @get_by_rank_range 106
   @get_by_key_list 107
   @get_by_value_list 108
+  @get_by_key_rel_index_range 109
+  @get_by_value_rel_rank_range 110
+
+  @inverted 0x10000
+  @persist_index 0x10
+
+  @doc "Create unordered maps by default."
+  @spec order_unordered() :: 0
+  def order_unordered, do: 0
+
+  @doc "Create maps ordered by key."
+  @spec order_key_ordered() :: 1
+  def order_key_ordered, do: 1
+
+  @doc "Create maps ordered by key and value."
+  @spec order_key_value_ordered() :: 3
+  def order_key_value_ordered, do: 3
+
+  @doc "Use default map write behavior."
+  @spec write_default() :: 0
+  def write_default, do: 0
+
+  @doc "Only create map items that do not already exist."
+  @spec write_create_only() :: 1
+  def write_create_only, do: 1
+
+  @doc "Only update map items that already exist."
+  @spec write_update_only() :: 2
+  def write_update_only, do: 2
+
+  @doc "Do not fail the command when a map item is rejected by write flags."
+  @spec write_no_fail() :: 4
+  def write_no_fail, do: 4
+
+  @doc "Commit valid map items even when another item is rejected by write flags."
+  @spec write_partial() :: 8
+  def write_partial, do: 8
 
   @doc "Return no result for a selector operation."
   @spec return_none() :: 0
@@ -82,13 +121,44 @@ defmodule Aerospike.Op.Map do
   @spec return_exists() :: 13
   def return_exists, do: 13
 
+  @doc "Return selected entries as an unordered map."
+  @spec return_unordered_map() :: 16
+  def return_unordered_map, do: 16
+
+  @doc "Return selected entries as an ordered map."
+  @spec return_ordered_map() :: 17
+  def return_ordered_map, do: 17
+
+  @doc "Invert the selector so it applies outside the matched range."
+  @spec return_inverted() :: 0x10000
+  def return_inverted, do: @inverted
+
+  @doc """
+  Creates a map at the selected context level.
+
+  When `ctx:` is omitted, this sets the top-level bin map order. Nested map
+  creation ignores `persist_index:` because server indexes are top-level only.
+  """
+  @spec create(String.t(), integer(), keyword()) :: t()
+  def create(bin_name, order, opts \\ [])
+      when is_binary(bin_name) and is_integer(order) do
+    case ctx(opts) do
+      steps when is_list(steps) and steps != [] ->
+        CDT.map_create_op(bin_name, map_order_flag(order), [@set_policy, order], steps)
+
+      _ ->
+        set_policy(bin_name, order_attr(order, opts), opts)
+    end
+  end
+
   @doc """
   Sets the map order attributes.
   """
   @spec set_policy(String.t(), integer(), keyword()) :: t()
   def set_policy(bin_name, attributes, opts \\ [])
       when is_binary(bin_name) and is_integer(attributes) do
-    CDT.map_modify_op(bin_name, @set_policy, [attributes], ctx(opts))
+    steps = ctx(opts)
+    CDT.map_modify_op(bin_name, @set_policy, [policy_attr(attributes, steps)], steps)
   end
 
   @doc """
@@ -175,6 +245,35 @@ defmodule Aerospike.Op.Map do
   end
 
   @doc """
+  Removes entries nearest to `map_key` and greater by relative `index`.
+  """
+  @spec remove_by_key_rel_index_range(String.t(), term(), integer(), keyword()) :: t()
+  def remove_by_key_rel_index_range(bin_name, map_key, index, opts \\ [])
+      when is_binary(bin_name) and is_integer(index) do
+    CDT.map_modify_op(
+      bin_name,
+      @remove_by_key_rel_index_range,
+      [key_rt(opts), map_key, index],
+      ctx(opts)
+    )
+  end
+
+  @doc """
+  Removes `count` entries nearest to `map_key` and greater by relative `index`.
+  """
+  @spec remove_by_key_rel_index_range_count(String.t(), term(), integer(), integer(), keyword()) ::
+          t()
+  def remove_by_key_rel_index_range_count(bin_name, map_key, index, count, opts \\ [])
+      when is_binary(bin_name) and is_integer(index) and is_integer(count) do
+    CDT.map_modify_op(
+      bin_name,
+      @remove_by_key_rel_index_range,
+      [key_rt(opts), map_key, index, count],
+      ctx(opts)
+    )
+  end
+
+  @doc """
   Removes entries equal to `value`, returning data selected by `return_type:`.
   """
   @spec remove_by_value(String.t(), term(), keyword()) :: t()
@@ -203,6 +302,35 @@ defmodule Aerospike.Op.Map do
       bin_name,
       @remove_by_value_range,
       [value_rt(opts), begin_value, end_value],
+      ctx(opts)
+    )
+  end
+
+  @doc """
+  Removes entries nearest to `value` and greater by relative `rank`.
+  """
+  @spec remove_by_value_rel_rank_range(String.t(), term(), integer(), keyword()) :: t()
+  def remove_by_value_rel_rank_range(bin_name, value, rank, opts \\ [])
+      when is_binary(bin_name) and is_integer(rank) do
+    CDT.map_modify_op(
+      bin_name,
+      @remove_by_value_rel_rank_range,
+      [value_rt(opts), value, rank],
+      ctx(opts)
+    )
+  end
+
+  @doc """
+  Removes `count` entries nearest to `value` and greater by relative `rank`.
+  """
+  @spec remove_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), keyword()) ::
+          t()
+  def remove_by_value_rel_rank_range_count(bin_name, value, rank, count, opts \\ [])
+      when is_binary(bin_name) and is_integer(rank) and is_integer(count) do
+    CDT.map_modify_op(
+      bin_name,
+      @remove_by_value_rel_rank_range,
+      [value_rt(opts), value, rank, count],
       ctx(opts)
     )
   end
@@ -300,6 +428,35 @@ defmodule Aerospike.Op.Map do
   end
 
   @doc """
+  Returns entries nearest to `map_key` and greater by relative `index`.
+  """
+  @spec get_by_key_rel_index_range(String.t(), term(), integer(), keyword()) :: t()
+  def get_by_key_rel_index_range(bin_name, map_key, index, opts \\ [])
+      when is_binary(bin_name) and is_integer(index) do
+    CDT.map_read_op(
+      bin_name,
+      @get_by_key_rel_index_range,
+      [key_value_rt(opts), map_key, index],
+      ctx(opts)
+    )
+  end
+
+  @doc """
+  Returns `count` entries nearest to `map_key` and greater by relative `index`.
+  """
+  @spec get_by_key_rel_index_range_count(String.t(), term(), integer(), integer(), keyword()) ::
+          t()
+  def get_by_key_rel_index_range_count(bin_name, map_key, index, count, opts \\ [])
+      when is_binary(bin_name) and is_integer(index) and is_integer(count) do
+    CDT.map_read_op(
+      bin_name,
+      @get_by_key_rel_index_range,
+      [key_value_rt(opts), map_key, index, count],
+      ctx(opts)
+    )
+  end
+
+  @doc """
   Returns entries equal to `value`, selected by `return_type:`.
   """
   @spec get_by_value(String.t(), term(), keyword()) :: t()
@@ -328,6 +485,35 @@ defmodule Aerospike.Op.Map do
       bin_name,
       @get_by_value_range,
       [key_value_rt(opts), begin_value, end_value],
+      ctx(opts)
+    )
+  end
+
+  @doc """
+  Returns entries nearest to `value` and greater by relative `rank`.
+  """
+  @spec get_by_value_rel_rank_range(String.t(), term(), integer(), keyword()) :: t()
+  def get_by_value_rel_rank_range(bin_name, value, rank, opts \\ [])
+      when is_binary(bin_name) and is_integer(rank) do
+    CDT.map_read_op(
+      bin_name,
+      @get_by_value_rel_rank_range,
+      [key_value_rt(opts), value, rank],
+      ctx(opts)
+    )
+  end
+
+  @doc """
+  Returns `count` entries nearest to `value` and greater by relative `rank`.
+  """
+  @spec get_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), keyword()) ::
+          t()
+  def get_by_value_rel_rank_range_count(bin_name, value, rank, count, opts \\ [])
+      when is_binary(bin_name) and is_integer(rank) and is_integer(count) do
+    CDT.map_read_op(
+      bin_name,
+      @get_by_value_rel_rank_range,
+      [key_value_rt(opts), value, rank, count],
       ctx(opts)
     )
   end
@@ -390,6 +576,23 @@ defmodule Aerospike.Op.Map do
   defp key_rt(opts), do: Keyword.get(opts, :return_type, return_key())
   defp key_value_rt(opts), do: Keyword.get(opts, :return_type, return_key_value())
   defp value_rt(opts), do: Keyword.get(opts, :return_type, return_value())
+
+  defp order_attr(order, opts) do
+    case Keyword.get(opts, :persist_index, false) do
+      true -> Bitwise.bor(order, @persist_index)
+      false -> order
+    end
+  end
+
+  defp policy_attr(attributes, steps) when is_list(steps) and steps != [] do
+    Bitwise.band(attributes, Bitwise.bnot(@persist_index))
+  end
+
+  defp policy_attr(attributes, _steps), do: attributes
+
+  defp map_order_flag(0), do: 0x40
+  defp map_order_flag(1), do: 0x80
+  defp map_order_flag(3), do: 0xC0
 
   defp map_policy(opts) do
     Map.merge(%{attr: 0, flags: 0}, Keyword.get(opts, :policy, %{}))

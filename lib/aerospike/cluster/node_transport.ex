@@ -184,6 +184,7 @@ defmodule Aerospike.Cluster.NodeTransport do
     * `:user` — username (required when `:session_token` is absent).
     * `:password` — cleartext password (required when `:session_token`
       is absent; the transport hashes it as the server requires).
+    * `:auth_mode` — `:internal`, `:external`, or `:pki`.
     * `:session_token` — when present, runs AUTHENTICATE instead of a
       fresh LOGIN. `:user` is still required.
     * `:login_timeout_ms` — read deadline applied to the login reply.

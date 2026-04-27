@@ -57,8 +57,8 @@ defmodule Aerospike.Runtime.ExecutorTest do
 
       callbacks = %{
         route_unit: fn %{node_name: node_name}, _attempt -> {:ok, node_name} end,
-        run_transport: fn unit, _node_name, _transport, conn, _remaining, command_opts ->
-          send(parent, {:transport, unit.node_name, command_opts})
+        run_transport: fn unit, _node_name, _transport, conn, timeout, command_opts ->
+          send(parent, {:transport, unit.node_name, timeout, command_opts})
           result = next_response(conn)
           {result, conn}
         end,
@@ -99,9 +99,12 @@ defmodule Aerospike.Runtime.ExecutorTest do
                ] = outcomes
 
         assert_receive :rebalance_triggered, 500
-        assert_receive {:transport, "A1", [use_compression: false, attempt: 0]}
-        assert_receive {:transport, "B1", [use_compression: false, attempt: 1]}
-        assert_receive {:transport, "C1", [use_compression: false, attempt: 1]}
+        assert_receive {:transport, "A1", timeout_a, [use_compression: false, attempt: 0]}
+        assert is_integer(timeout_a) and timeout_a >= 0
+        assert_receive {:transport, "B1", timeout_b, [use_compression: false, attempt: 1]}
+        assert is_integer(timeout_b) and timeout_b >= 0
+        assert_receive {:transport, "C1", timeout_c, [use_compression: false, attempt: 1]}
+        assert is_integer(timeout_c) and timeout_c >= 0
 
         assert_receive {:event, [:aerospike, :retry, :attempt], _measurements,
                         %{classification: :rebalance, attempt: 1, node_name: "A1"}},
@@ -137,6 +140,64 @@ defmodule Aerospike.Runtime.ExecutorTest do
                  callbacks
                )
     end
+
+    test "defaults transport timeout to the remaining total budget" do
+      parent = self()
+      executor = executor_for(timeout: 1_000)
+
+      callbacks = callbacks_for_timeout_probe(parent)
+
+      assert [%Executor.Outcome{result: {:ok, :done}}] =
+               Executor.run_unit(
+                 executor,
+                 :unit,
+                 %{tender: :fake_tender, transport: __MODULE__.TransportStub},
+                 callbacks
+               )
+
+      assert_receive {:checkout_timeout, checkout_timeout}
+      assert_receive {:transport_timeout, transport_timeout}
+      assert transport_timeout == checkout_timeout
+    end
+
+    test "passes socket timeout to transport without extending the remaining total budget" do
+      parent = self()
+      executor = executor_for(timeout: 1_000, socket_timeout: 25)
+
+      callbacks = callbacks_for_timeout_probe(parent)
+
+      assert [%Executor.Outcome{result: {:ok, :done}}] =
+               Executor.run_unit(
+                 executor,
+                 :unit,
+                 %{tender: :fake_tender, transport: __MODULE__.TransportStub},
+                 callbacks
+               )
+
+      assert_receive {:checkout_timeout, checkout_timeout}
+      assert_receive {:transport_timeout, 25}
+      assert is_integer(checkout_timeout) and checkout_timeout >= 25
+    end
+
+    test "caps socket timeout at the remaining total budget" do
+      parent = self()
+      executor = executor_for(timeout: 50, socket_timeout: 1_000)
+
+      callbacks = callbacks_for_timeout_probe(parent)
+
+      assert [%Executor.Outcome{result: {:ok, :done}}] =
+               Executor.run_unit(
+                 executor,
+                 :unit,
+                 %{tender: :fake_tender, transport: __MODULE__.TransportStub},
+                 callbacks
+               )
+
+      assert_receive {:checkout_timeout, checkout_timeout}
+      assert_receive {:transport_timeout, transport_timeout}
+      assert transport_timeout == checkout_timeout
+      assert transport_timeout <= 50
+    end
   end
 
   defp executor_for(opts) do
@@ -147,7 +208,13 @@ defmodule Aerospike.Runtime.ExecutorTest do
     Executor.new!(
       policy: %Policy.UnaryRead{
         timeout: timeout,
+        socket_timeout: Keyword.get(opts, :socket_timeout, 0),
         filter: nil,
+        read_mode_ap: :one,
+        read_mode_sc: :session,
+        read_touch_ttl_percent: 0,
+        send_key: false,
+        use_compression: nil,
         retry: %{max_retries: max_retries, sleep_between_retries_ms: 0, replica_policy: :sequence}
       },
       on_rebalance: on_rebalance
@@ -186,6 +253,27 @@ defmodule Aerospike.Runtime.ExecutorTest do
 
   defp network_error(message) do
     Error.from_result_code(:network_error, message: message)
+  end
+
+  defp callbacks_for_timeout_probe(parent) do
+    %{
+      route_unit: fn :unit, _attempt -> {:ok, "A1"} end,
+      run_transport: fn :unit, _node_name, _transport, conn, timeout, _command_opts ->
+        send(parent, {:transport_timeout, timeout})
+        {{:ok, :done}, conn}
+      end,
+      progress_retry: fn _kind, unit, _next_attempt, _last_result ->
+        {:ok, Executor.progress([unit])}
+      end,
+      resolve_handle: fn :fake_tender, "A1" ->
+        {:ok, %{pool: :pool, counters: :counters, breaker: :breaker, use_compression: false}}
+      end,
+      allow_dispatch: fn _counters, _breaker -> :ok end,
+      checkout: fn _node_name, _pool, fun, timeout ->
+        send(parent, {:checkout_timeout, timeout})
+        elem(fun.(:conn), 0)
+      end
+    }
   end
 
   defmodule TransportStub do

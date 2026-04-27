@@ -6,6 +6,7 @@ defmodule Aerospike.Integration.ExpressionsTest do
   alias Aerospike
   alias Aerospike.Error
   alias Aerospike.Exp
+  alias Aerospike.Exp.List, as: ListExp
   alias Aerospike.Key
   alias Aerospike.Op
   alias Aerospike.Record
@@ -91,6 +92,21 @@ defmodule Aerospike.Integration.ExpressionsTest do
       assert scores == [40, 50, 60]
     after
       Enum.each(keys, &Aerospike.delete(cluster, &1))
+    end
+  end
+
+  test "get with CDT expression filter evaluates list helpers", %{cluster: cluster} do
+    set = IntegrationSupport.unique_name("expr_cdt_filter")
+    key = IntegrationSupport.unique_key(@namespace, set, "record")
+
+    assert {:ok, _} = Aerospike.put(cluster, key, %{"items" => [1, 2, 3]})
+    filter = Exp.eq(ListExp.size(Exp.list_bin("items")), Exp.int(3))
+
+    try do
+      assert {:ok, record} = Aerospike.get(cluster, key, :all, filter: filter)
+      assert record.bins["items"] == [1, 2, 3]
+    after
+      _ = Aerospike.delete(cluster, key)
     end
   end
 

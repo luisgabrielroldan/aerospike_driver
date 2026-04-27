@@ -18,8 +18,6 @@ defmodule Aerospike.Command.Batch do
   alias Aerospike.Runtime.Executor
   alias Aerospike.RuntimeMetrics
 
-  @default_max_concurrency max(System.schedulers_online(), 1)
-
   @type result :: {:ok, [Result.t()]} | {:error, Error.t()} | {:error, :cluster_not_ready}
 
   @doc false
@@ -50,12 +48,16 @@ defmodule Aerospike.Command.Batch do
         BatchCommand.run(
           command(policy),
           executor,
-          %{entries: entries, routing_failures: grouping.routing_failures},
+          %{
+            entries: entries,
+            routing_failures: grouping.routing_failures,
+            allow_partial_results: policy.allow_partial_results
+          },
           grouping.node_requests,
           %{
             tender: runtime.tender,
             transport: runtime.transport,
-            max_concurrency: @default_max_concurrency,
+            max_concurrency: max_concurrency(policy, grouping.node_requests),
             reroute_request: &reroute_request(runtime.tables, &1, &2, &3),
             metrics_cluster: runtime.tender
           }
@@ -70,18 +72,50 @@ defmodule Aerospike.Command.Batch do
     BatchCommand.new!(
       name: __MODULE__,
       transport_mode: :command_stream,
-      build_request: &BatchProtocol.encode_request(&1, timeout: policy.timeout),
+      build_request:
+        &BatchProtocol.encode_request(&1,
+          timeout: policy.timeout,
+          allow_inline: policy.allow_inline,
+          allow_inline_ssd: policy.allow_inline_ssd,
+          respond_all_keys: policy.respond_all_keys
+        ),
       parse_response: &Response.parse_batch_response/2,
       merge_results: &merge_results/2
     )
   end
 
-  defp merge_results(node_results, %{entries: entries, routing_failures: routing_failures}) do
-    routing_failures
-    |> Enum.reduce(%{}, &put_routing_failure/2)
-    |> merge_node_results(node_results)
-    |> ordered_results(entries)
+  defp merge_results(node_results, %{
+         entries: entries,
+         routing_failures: routing_failures,
+         allow_partial_results: allow_partial_results
+       }) do
+    with :ok <- maybe_reject_partial_results(node_results, allow_partial_results) do
+      routing_failures
+      |> Enum.reduce(%{}, &put_routing_failure/2)
+      |> merge_node_results(node_results)
+      |> ordered_results(entries)
+    end
   end
+
+  defp max_concurrency(%Policy.Batch{max_concurrent_nodes: 0}, node_requests) do
+    max(length(node_requests), 1)
+  end
+
+  defp max_concurrency(%Policy.Batch{max_concurrent_nodes: max_concurrent_nodes}, _node_requests),
+    do: max_concurrent_nodes
+
+  defp maybe_reject_partial_results(_node_results, true), do: :ok
+
+  defp maybe_reject_partial_results(node_results, false) do
+    case Enum.find(node_results, &node_result_error?/1) do
+      nil -> :ok
+      %NodeResult{result: {:error, %Error{}} = err} -> err
+      %NodeResult{result: {:error, reason}} when is_atom(reason) -> {:error, reason}
+    end
+  end
+
+  defp node_result_error?(%NodeResult{result: {:error, _reason}}), do: true
+  defp node_result_error?(%NodeResult{}), do: false
 
   defp put_routing_failure(
          %BatchRouter.RoutingFailure{entry: %Entry{} = entry, reason: reason},

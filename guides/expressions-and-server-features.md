@@ -91,8 +91,11 @@ Expression operate helpers live in `Aerospike.Op.Exp`.
 record.bins["projected_score"]
 ```
 
-Expression operation support is limited to the shipped `Aerospike.Exp` and
-`Aerospike.Op.Exp` builders.
+Expression operation support uses the shipped `Aerospike.Exp` and
+`Aerospike.Op.Exp` builders. CDT, bit, and HyperLogLog expression helpers live
+under `Aerospike.Exp.List`, `Aerospike.Exp.Map`, `Aerospike.Exp.Bit`, and
+`Aerospike.Exp.HLL` so they stay separate from ordinary `operate/4` CDT
+operation builders.
 
 ## Expression-Backed Indexes
 

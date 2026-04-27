@@ -70,7 +70,10 @@ key = MyApp.Repo.key("test", "demo", "user:1")
 
 Required startup options are `:transport`, `:hosts`, and `:namespaces`. The
 Repo uses its module name as the default cluster name; pass `:name` to
-`use Aerospike.Repo` when you need a different registered name.
+`use Aerospike.Repo` when you need a different registered name. Startup also
+accepts cluster discovery and auth options such as `:cluster_name`,
+`:seed_only_cluster`, `:application_id`, `:auth_mode`, `:login_timeout_ms`,
+and `:min_connections_per_node`.
 
 Startup validation runs synchronously through the underlying
 `Aerospike.start_link/1`, so malformed cluster, retry, pool, auth, and
@@ -97,7 +100,8 @@ cluster. The current surface includes:
   `scan_page/3`, `query_stream/3`, `query_all/3`, `query_page/3`, and count
   helpers
 - Server-side expressions through `Aerospike.Exp`, including command filters,
-  expression operations, expression-backed indexes, and XDR filters
+  expression operations, expression-backed indexes, XDR filters, core
+  expression builders, and CDT/bit/HLL expression helpers
 - UDF package lifecycle, record UDF execution, query aggregates, and background
   query execution
 - Enterprise security administration helpers for users, roles, privileges,
@@ -161,8 +165,10 @@ yet a promise of complete Aerospike client parity.
 
 Important current boundaries:
 
-- Batch policies are intentionally narrow. Public helpers expose batch-level
-  timeouts but not the full per-entry policy matrix.
+- Public policy options stay keyword-based. Single-record, batch, scan, and
+  query helpers expose the implemented timeout, retry, routing, filter,
+  consistency, generation, commit, and batch dispatch fields through ordinary
+  call opts rather than caller-constructed policy structs.
 - Scan and query streams are lazy at the `Enumerable` boundary, but the current
   runtime buffers each node's records before yielding that node downstream.
 - `query_all/3` and `query_page/3` require `query.max_records`;

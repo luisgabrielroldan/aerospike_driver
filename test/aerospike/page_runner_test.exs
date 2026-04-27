@@ -62,15 +62,25 @@ defmodule Aerospike.Command.ScanOps.PageRunnerTest do
     assert {:ok, tracker, node_requests} =
              PageRunner.prepare_node_requests(runtime, query, nil,
                timeout: 1_234,
+               socket_timeout: 250,
+               max_retries: 3,
+               sleep_between_retries_ms: 15,
+               replica_policy: :master,
                task_id: 77,
                pool_checkout_timeout: 99
              )
 
     assert tracker.record_count == 0
+    assert tracker.socket_timeout == 250
+    assert tracker.total_timeout == 1_234
+    assert tracker.max_retries == 3
+    assert tracker.sleep_between_retries == 15
+    assert tracker.replica == :master
     assert Enum.sort(Enum.map(node_requests, & &1.node_name)) == ["A1", "B1"]
 
     assert Enum.all?(node_requests, fn request ->
              request.policy.timeout == 1_234 and
+               request.policy.socket_timeout == 250 and
                request.policy.task_id == 77 and
                request.pool_checkout_timeout == 99 and
                match?(%Query{}, request.scannable)

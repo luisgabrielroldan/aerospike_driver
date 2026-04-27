@@ -722,7 +722,7 @@ defmodule Aerospike.PublicApiTest do
              Aerospike.query_udf(conn, query, "pkg", "fun", [])
   end
 
-  test "explicit node-targeted helpers cover scan and query bang paths", %{
+  test "node option covers scan and query bang paths", %{
     conn: conn,
     fake: fake
   } do

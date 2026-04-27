@@ -84,16 +84,20 @@ when the target namespace and server support tombstones.
 
 ## Command Options
 
-The public option surface is intentionally smaller than the full server policy
-matrix. Use the documented options on each function rather than passing
-policy names that are not part of this client's public API.
+The public option surface uses keyword opts at facade calls. Use the documented
+options on each function rather than passing policy names that are not part of
+this client's public API.
 
 Common read options:
 
 ```elixir
 {:ok, record} =
-  Aerospike.get(:aerospike, key, :all,
+Aerospike.get(:aerospike, key, :all,
     timeout: 2_000,
+    socket_timeout: 500,
+    read_mode_ap: :one,
+    read_mode_sc: :session,
+    read_touch_ttl_percent: 0,
     filter:
       Aerospike.Exp.eq(
         Aerospike.Exp.str_bin("status"),
@@ -102,8 +106,13 @@ Common read options:
   )
 ```
 
-`:timeout` is the total command budget in milliseconds. `:filter` is a
-non-empty `%Aerospike.Exp{}` used as a server-side expression filter.
+`:timeout` is the total command budget in milliseconds. `:socket_timeout` is
+the per-attempt socket idle deadline, capped by the remaining total budget.
+Read consistency fields are `:read_mode_ap` (`:one` or `:all`) and
+`:read_mode_sc` (`:session`, `:linearize`, `:allow_replica`, or
+`:allow_unavailable`). `:read_touch_ttl_percent` controls server read-touch
+behavior, and `:filter` is a non-empty `%Aerospike.Exp{}` used as a
+server-side expression filter.
 
 Common write options:
 
@@ -113,16 +122,22 @@ Common write options:
     timeout: 2_000,
     ttl: 3_600,
     generation: previous_generation,
+    generation_policy: :expect_equal,
     exists: :update_only,
+    commit_level: :all,
+    respond_per_op: false,
+    send_key: true,
     durable_delete: false
   )
 ```
 
-`:ttl` is a server TTL in seconds; `0` uses the namespace default.
-`:generation` enforces equality when non-zero. `:exists` is one of
-`:update`, `:update_only`, `:create_or_replace`, `:replace_only`, or
-`:create_only`. `:durable_delete` asks compatible namespaces to retain a
-tombstone for delete-shaped writes.
+`:ttl` is a server TTL in seconds. It also accepts `:default`,
+`:never_expire`, and `:dont_update`. `:generation_policy` is `:none`,
+`:expect_equal`, or `:expect_gt`; when omitted, a non-zero `:generation`
+preserves the existing equality check behavior. `:exists` is one of `:update`,
+`:update_only`, `:create_or_replace`, `:replace_only`, or `:create_only`.
+`:commit_level` is `:all` or `:master`. `:durable_delete` asks compatible
+namespaces to retain a tombstone for delete-shaped writes.
 
 Transaction-aware write helpers also accept `txn: txn` when used inside the
 transaction API:
@@ -141,9 +156,10 @@ operations:
   Aerospike.info(:aerospike, "statistics", pool_checkout_timeout: 1_000)
 ```
 
-Batch helpers are deliberately narrower than single-record commands. The
-current batch helper option surface is `timeout:` only; per-entry write policy
-options are not exposed in this release.
+Batch helpers expose parent dispatch options such as `:timeout`,
+`:socket_timeout`, `:max_concurrent_nodes`, and `:allow_partial_results`.
+`Aerospike.Batch` entries can also carry encodable per-entry read/write policy
+options.
 
 ## Operation Lists
 
@@ -181,8 +197,8 @@ adult_filter =
   Aerospike.put(:aerospike, key, %{"verified" => true}, filter: adult_filter)
 ```
 
-Expression builders currently cover the shipped `%Aerospike.Exp{}` surface.
-Broader expression-builder families remain outside this release surface.
+Expression builders include scalar, metadata, comparison, logical, arithmetic,
+regex, geo, conditional, variable, CDT, bit, and HyperLogLog helper families.
 
 ## Raw Payload Writes
 

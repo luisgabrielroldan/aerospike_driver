@@ -28,8 +28,31 @@ defmodule Aerospike.Cluster.Supervisor do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Policy
 
+  @typedoc "Authentication mode used during node login."
+  @type auth_mode :: :internal | :external | :pki
+
+  @typedoc "Cluster tend scheduling mode."
+  @type tend_trigger :: :timer | :manual
+
+  @typedoc "Transport connection option forwarded to TCP/TLS transports."
+  @type connect_option ::
+          {:connect_timeout_ms, pos_integer()}
+          | {:info_timeout, pos_integer()}
+          | {:login_timeout_ms, pos_integer()}
+          | {:tcp_nodelay, boolean()}
+          | {:tcp_keepalive, boolean()}
+          | {:tcp_sndbuf, pos_integer() | nil}
+          | {:tcp_rcvbuf, pos_integer() | nil}
+          | {:tls_name, String.t() | nil}
+          | {:tls_cacertfile, Path.t() | nil}
+          | {:tls_certfile, Path.t() | nil}
+          | {:tls_keyfile, Path.t() | nil}
+          | {:tls_verify, :verify_peer | :verify_none}
+          | {:tls_opts, keyword()}
+
   @typedoc """
-  Start options.
+  Startup option accepted by `Aerospike.start_link/1` and
+  `Aerospike.child_spec/1`.
 
     * `:name` — atom used as the cluster identity (required). Becomes
       the cluster process name, table prefix, and pool-supervisor name.
@@ -41,41 +64,41 @@ defmodule Aerospike.Cluster.Supervisor do
       before `Aerospike.Cluster.ready?/1` returns `true` (required,
       non-empty).
 
-  Every other option is forwarded verbatim to the runtime worker (for example
-  `:connect_opts`, `:failure_threshold`, `:tend_interval_ms`, `:tend_trigger`,
-  `:use_compression`, `:use_services_alternate`, `:pool_size`,
-  `:idle_timeout_ms`, `:max_idle_pings`).
-
-  ## Auth opts
-
-  `:user` and `:password` are cluster-wide session-login credentials.
-  Both must be present together; neither present disables auth (the
-  transport connects plaintext without a login handshake). The
-  credentials are forwarded into `:connect_opts` so the transport can
-  run the admin-protocol login immediately after the TCP handshake;
-  the Tender additionally caches the resulting session token per node
-  and reuses it across pool workers.
-
   Pool-level knobs live at the top level of the keyword list because
-  the pool supervisor — not the transport — applies them:
+  the pool supervisor, not the transport, applies them. TCP and TLS tuning
+  knobs live inside `:connect_opts` because the transport owns socket setup.
 
-    * `:idle_timeout_ms` — milliseconds a pooled worker may sit idle before
-      the pool verification step evicts it. Must be a positive integer when
-      set.
-    * `:max_idle_pings` — positive integer bounding how many idle
-      workers NimblePool may drop per verification cycle.
-
-  TCP-level tuning knobs live inside `:connect_opts` because
-  the TCP transport is where they take effect. See
-  `Aerospike.Transport.Tcp` for the public keys and how they map to
-  `:inet.setopts/2` spellings.
+  `:user` and `:password` are cluster-wide session-login credentials. Both
+  must be present together; neither present disables auth. PKI auth uses the
+  TLS client certificate and must omit both.
   """
   @type option ::
           {:name, atom()}
           | {:transport, module()}
           | {:hosts, [String.t(), ...]}
           | {:namespaces, [String.t(), ...]}
-          | {atom(), term()}
+          | {:connect_opts, [connect_option()]}
+          | {:pool_size, pos_integer()}
+          | {:min_connections_per_node, non_neg_integer()}
+          | {:idle_timeout_ms, pos_integer()}
+          | {:max_idle_pings, pos_integer()}
+          | {:tend_interval_ms, pos_integer()}
+          | {:tend_trigger, tend_trigger()}
+          | {:failure_threshold, non_neg_integer()}
+          | {:circuit_open_threshold, non_neg_integer()}
+          | {:max_concurrent_ops_per_node, pos_integer()}
+          | {:max_retries, non_neg_integer()}
+          | {:sleep_between_retries_ms, non_neg_integer()}
+          | {:replica_policy, Aerospike.RetryPolicy.replica_policy()}
+          | {:use_compression, boolean()}
+          | {:use_services_alternate, boolean()}
+          | {:seed_only_cluster, boolean()}
+          | {:cluster_name, String.t()}
+          | {:application_id, String.t()}
+          | {:auth_mode, auth_mode()}
+          | {:user, String.t()}
+          | {:password, String.t()}
+          | {:login_timeout_ms, pos_integer()}
 
   @doc """
   Returns the OTP child specification for one named Aerospike cluster.
@@ -212,15 +235,22 @@ defmodule Aerospike.Cluster.Supervisor do
     validate_namespaces!(namespaces)
 
     validate_pos_integer!(opts, :pool_size)
+    validate_non_neg_integer!(opts, :min_connections_per_node)
+    validate_min_connections!(opts)
     validate_pos_integer!(opts, :idle_timeout_ms)
     validate_pos_integer!(opts, :max_idle_pings)
     validate_pos_integer!(opts, :tend_interval_ms)
+    validate_pos_integer!(opts, :login_timeout_ms)
     validate_non_neg_integer!(opts, :failure_threshold)
     validate_non_neg_integer!(opts, :circuit_open_threshold)
     validate_pos_integer!(opts, :max_concurrent_ops_per_node)
     validate_auth_opts!(opts)
+    validate_auth_mode!(opts)
+    validate_non_empty_string!(opts, :cluster_name)
+    validate_non_empty_string!(opts, :application_id)
     validate_top_level_bool!(opts, :use_compression)
     validate_top_level_bool!(opts, :use_services_alternate)
+    validate_top_level_bool!(opts, :seed_only_cluster)
     validate_tend_trigger!(opts)
     validate_cluster_policy!(opts)
     validate_connect_opts!(opts)
@@ -245,6 +275,72 @@ defmodule Aerospike.Cluster.Supervisor do
       _ ->
         raise ArgumentError,
               "Aerospike.Cluster.Supervisor: :user and :password must both be strings or both be absent"
+    end
+  end
+
+  defp validate_auth_mode!(opts) do
+    auth_mode = Keyword.get(opts, :auth_mode, :internal)
+
+    auth_mode in [:internal, :external, :pki] or
+      raise ArgumentError,
+            "Aerospike.Cluster.Supervisor: :auth_mode must be :internal, :external, or :pki, " <>
+              "got #{inspect(auth_mode)}"
+
+    validate_auth_mode_transport!(opts, auth_mode)
+    validate_auth_mode_credentials!(opts, auth_mode)
+  end
+
+  defp validate_auth_mode_transport!(opts, auth_mode) when auth_mode in [:external, :pki] do
+    case Keyword.fetch!(opts, :transport) do
+      Aerospike.Transport.Tls ->
+        :ok
+
+      transport ->
+        raise ArgumentError,
+              "Aerospike.Cluster.Supervisor: #{inspect(auth_mode)} auth requires Aerospike.Transport.Tls, " <>
+                "got #{inspect(transport)}"
+    end
+  end
+
+  defp validate_auth_mode_transport!(_opts, _auth_mode), do: :ok
+
+  defp validate_auth_mode_credentials!(opts, :external) do
+    if is_binary(Keyword.get(opts, :user)) and is_binary(Keyword.get(opts, :password)) do
+      :ok
+    else
+      raise ArgumentError,
+            "Aerospike.Cluster.Supervisor: :external auth requires :user and :password strings"
+    end
+  end
+
+  defp validate_auth_mode_credentials!(opts, :pki) do
+    case {Keyword.get(opts, :user), Keyword.get(opts, :password)} do
+      {nil, nil} ->
+        :ok
+
+      _ ->
+        raise ArgumentError,
+              "Aerospike.Cluster.Supervisor: :pki auth uses the TLS client certificate; " <>
+                ":user and :password must be absent"
+    end
+  end
+
+  defp validate_auth_mode_credentials!(_opts, _auth_mode), do: :ok
+
+  defp validate_min_connections!(opts) do
+    min_connections = Keyword.get(opts, :min_connections_per_node)
+    pool_size = Keyword.get(opts, :pool_size)
+
+    cond do
+      is_nil(min_connections) or is_nil(pool_size) ->
+        :ok
+
+      min_connections <= pool_size ->
+        :ok
+
+      true ->
+        raise ArgumentError,
+              "Aerospike.Cluster.Supervisor: :min_connections_per_node must be less than or equal to :pool_size"
     end
   end
 
@@ -339,6 +435,21 @@ defmodule Aerospike.Cluster.Supervisor do
     end
   end
 
+  defp validate_non_empty_string!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_binary(value) and value != "" ->
+        :ok
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "Aerospike.Cluster.Supervisor: #{inspect(key)} must be a non-empty string, " <>
+                "got #{inspect(value)}"
+    end
+  end
+
   defp validate_tend_trigger!(opts) do
     case Keyword.fetch(opts, :tend_trigger) do
       :error ->
@@ -376,6 +487,7 @@ defmodule Aerospike.Cluster.Supervisor do
         validate_optional_pos_integer!(connect_opts, :tcp_rcvbuf)
         validate_pos_integer!(connect_opts, :connect_timeout_ms)
         validate_pos_integer!(connect_opts, :info_timeout)
+        validate_pos_integer!(connect_opts, :login_timeout_ms)
         validate_tls_opts!(connect_opts)
         :ok
 

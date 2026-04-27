@@ -1,6 +1,8 @@
 defmodule Aerospike.Protocol.AsmMsgTest do
   use ExUnit.Case, async: true
 
+  import Bitwise
+
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
@@ -73,7 +75,12 @@ defmodule Aerospike.Protocol.AsmMsgTest do
     test "sets the generation flag and header when generation equality is requested" do
       key = Key.new(@namespace, @set, "k1")
 
-      msg = AsmMsg.key_command(key, [], write: true, generation: 7)
+      msg =
+        AsmMsg.key_command(key, [],
+          write: true,
+          generation: 7,
+          generation_policy: :expect_equal
+        )
 
       assert msg.info2 ==
                Bitwise.bor(AsmMsg.info2_write(), AsmMsg.info2_generation())
@@ -88,6 +95,44 @@ defmodule Aerospike.Protocol.AsmMsgTest do
 
       assert msg.info2 == AsmMsg.info2_write()
       assert msg.generation == 0
+    end
+
+    test "sets expanded read policy flags and read-touch TTL" do
+      key = Key.new(@namespace, @set, "k1")
+
+      msg =
+        AsmMsg.key_command(key, [],
+          read: true,
+          read_mode_ap: :all,
+          read_mode_sc: :allow_unavailable,
+          read_touch_ttl_percent: -1,
+          use_compression: true
+        )
+
+      assert msg.info1 ==
+               (AsmMsg.info1_read() ||| AsmMsg.info1_read_mode_ap_all() |||
+                  AsmMsg.info1_compress_response())
+
+      assert msg.info3 == (AsmMsg.info3_sc_read_type() ||| AsmMsg.info3_sc_read_relax())
+      assert msg.expiration == -1
+    end
+
+    test "sets expanded write policy flags and TTL sentinels" do
+      key = Key.new(@namespace, @set, "k1")
+
+      msg =
+        AsmMsg.key_command(key, [],
+          write: true,
+          ttl: -2,
+          generation: 8,
+          generation_policy: :expect_gt,
+          commit_level: :master
+        )
+
+      assert msg.info2 == (AsmMsg.info2_write() ||| AsmMsg.info2_generation_gt())
+      assert msg.info3 == AsmMsg.info3_commit_master()
+      assert msg.generation == 8
+      assert msg.expiration == -2
     end
   end
 end

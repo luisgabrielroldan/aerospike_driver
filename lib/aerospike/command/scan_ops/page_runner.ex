@@ -18,6 +18,7 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
   alias Aerospike.Record
+  alias Aerospike.RetryPolicy
   alias Aerospike.Runtime.StreamingExecutor
   alias Aerospike.Scan
 
@@ -95,7 +96,7 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
           keyword() | Policy.ScanQueryRuntime.t()
         ) :: {:ok, PartitionTracker.t(), [map()]} | {:error, Error.t()}
   def prepare_node_requests(runtime, scannable, node_filter, opts) when is_list(opts) do
-    with {:ok, policy} <- Policy.scan_query_runtime(opts) do
+    with {:ok, policy} <- Policy.scan_query_runtime(retry_policy(runtime), opts) do
       prepare_node_requests(runtime, scannable, node_filter, policy)
     end
   end
@@ -106,7 +107,7 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
 
   defp do_prepare_node_requests(runtime, scannable, node_filter, policy) do
     with {:ok, node_names} <- active_nodes(runtime.tender, node_filter, scannable),
-         {:ok, tracker} <- new_tracker(scannable, node_names, node_filter),
+         {:ok, tracker} <- new_tracker(scannable, node_names, node_filter, policy),
          {:ok, partition_map} <- partition_map(runtime, scannable),
          {:ok, tracker, node_partitions} <-
            PartitionTracker.assign_partitions_to_nodes(tracker, partition_map) do
@@ -153,7 +154,7 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
 
   defp page_internal(tender, scannable, opts, node_filter) do
     with {:ok, runtime} <- runtime(tender, scannable),
-         {:ok, policy} <- Policy.scan_query_runtime(opts),
+         {:ok, policy} <- Policy.scan_query_runtime(retry_policy(runtime), opts),
          {:ok, tracker, node_requests} <-
            prepare_node_requests(runtime, scannable, node_filter, policy) do
       run_tracker_page(tender, scannable, node_filter, runtime, policy, tracker, node_requests)
@@ -182,28 +183,26 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
       else: {:error, unknown_node(node_name)}
   end
 
-  defp new_tracker(%Scan{} = scan, node_names, node_filter) do
+  defp new_tracker(%Scan{} = scan, node_names, node_filter, %Policy.ScanQueryRuntime{} = policy) do
     filter = scan.partition_filter || PartitionFilter.all()
 
     {:ok,
-     PartitionTracker.new(filter,
-       nodes: node_names,
-       max_records: scan.max_records || 0,
-       node_filter: node_filter
+     PartitionTracker.new(
+       filter,
+       tracker_opts(node_names, scan.max_records || 0, node_filter, policy)
      )}
   rescue
     err in [ArgumentError] ->
       {:error, Error.from_result_code(:invalid_argument, message: err.message)}
   end
 
-  defp new_tracker(%Query{} = query, node_names, node_filter) do
+  defp new_tracker(%Query{} = query, node_names, node_filter, %Policy.ScanQueryRuntime{} = policy) do
     filter = query.partition_filter || PartitionFilter.all()
 
     {:ok,
-     PartitionTracker.new(filter,
-       nodes: node_names,
-       max_records: query.max_records || 0,
-       node_filter: node_filter
+     PartitionTracker.new(
+       filter,
+       tracker_opts(node_names, query.max_records || 0, node_filter, policy)
      )}
   rescue
     err in [ArgumentError] ->
@@ -247,6 +246,38 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
       }
     end)
   end
+
+  defp retry_policy(%{tables: %{meta: meta}}) when is_atom(meta), do: RetryPolicy.load(meta)
+  defp retry_policy(_runtime), do: RetryPolicy.defaults()
+
+  defp tracker_opts(node_names, max_records, node_filter, %Policy.ScanQueryRuntime{} = policy) do
+    [
+      nodes: node_names,
+      max_records: max_records,
+      node_filter: node_filter
+    ] ++ tracker_policy_opts(policy)
+  end
+
+  defp tracker_policy_opts(%Policy.ScanQueryRuntime{retry: retry} = policy) do
+    [
+      replica: retry.replica_policy,
+      max_retries: retry.max_retries,
+      sleep_between_retries: retry.sleep_between_retries_ms,
+      socket_timeout: effective_socket_timeout(policy),
+      total_timeout: policy.timeout
+    ]
+  end
+
+  defp effective_socket_timeout(%Policy.ScanQueryRuntime{timeout: total, socket_timeout: socket})
+       when total > 0 and socket > total do
+    total
+  end
+
+  defp effective_socket_timeout(%Policy.ScanQueryRuntime{socket_timeout: timeout})
+       when timeout > 0,
+       do: timeout
+
+  defp effective_socket_timeout(%Policy.ScanQueryRuntime{timeout: timeout}), do: timeout
 
   defp run_tracker_page(
          tender,

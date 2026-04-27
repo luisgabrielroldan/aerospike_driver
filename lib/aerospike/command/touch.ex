@@ -15,11 +15,17 @@ defmodule Aerospike.Command.Touch do
 
   @type option ::
           {:timeout, non_neg_integer()}
+          | {:socket_timeout, non_neg_integer()}
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
-          | {:ttl, non_neg_integer()}
+          | {:ttl, non_neg_integer() | :default | :never_expire | :dont_update}
           | {:generation, non_neg_integer()}
+          | {:generation_policy, :none | :expect_equal | :expect_gt}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:commit_level, :all | :master}
+          | {:send_key, boolean()}
+          | {:use_compression, boolean()}
+          | {:exists, :update | :update_only | :create_or_replace | :replace_only | :create_only}
 
   @type result ::
           {:ok, Record.metadata()}
@@ -66,8 +72,7 @@ defmodule Aerospike.Command.Touch do
       conn: conn,
       txn: txn,
       opts: opts,
-      ttl: policy.ttl,
-      generation: policy.generation,
+      policy: policy,
       filter: policy.filter
     }
   end
@@ -76,16 +81,14 @@ defmodule Aerospike.Command.Touch do
          key: %Key{} = key,
          conn: conn,
          opts: opts,
-         ttl: ttl,
-         generation: generation,
+         policy: policy,
+         use_compression: use_compression,
          filter: filter
        }) do
     key
-    |> AsmMsg.key_command([Operation.touch()],
-      write: true,
-      send_key: true,
-      ttl: ttl,
-      generation: generation
+    |> AsmMsg.key_command(
+      [Operation.touch()],
+      [write: true] ++ UnarySupport.write_header_opts(policy, use_compression)
     )
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)

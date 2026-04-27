@@ -52,6 +52,38 @@ defmodule Aerospike.Protocol.LoginTest do
     end
   end
 
+  describe "encode_login_external/3" do
+    test "builds USER + CREDENTIAL + CLEAR_PASSWORD fields" do
+      hash = Login.hash_password("admin")
+      frame = Login.encode_login_external("admin", hash, "admin") |> IO.iodata_to_binary()
+
+      <<2, 2, length::48-big, admin_header::binary-size(16), rest::binary>> = frame
+
+      <<0, 0, 20, 3, _padding::binary-size(12)>> = admin_header
+      assert length == 16 + byte_size(rest)
+
+      <<size_user::32-big, 0::8, "admin", tail::binary>> = rest
+      assert size_user == 6
+
+      <<size_cred::32-big, 3::8, cred_bytes::binary-size(size_cred - 1), tail::binary>> =
+        tail
+
+      assert cred_bytes == hash
+
+      <<size_clear::32-big, 4::8, "admin">> = tail
+      assert size_clear == 6
+    end
+  end
+
+  describe "encode_login_pki/0" do
+    test "builds a LOGIN frame with no fields" do
+      frame = Login.encode_login_pki() |> IO.iodata_to_binary()
+
+      <<2, 2, 16::48-big, admin_header::binary-size(16)>> = frame
+      <<0, 0, 20, 0, _padding::binary-size(12)>> = admin_header
+    end
+  end
+
   describe "encode_authenticate/2" do
     test "builds a 24-byte header followed by USER + SESSION_TOKEN fields" do
       token = <<1, 2, 3, 4, 5>>
@@ -67,6 +99,21 @@ defmodule Aerospike.Protocol.LoginTest do
       assert user_bytes == "admin"
 
       <<size_token::32-big, 5::8, token_bytes::binary-size(size_token - 1)>> = tail
+      assert token_bytes == token
+    end
+  end
+
+  describe "encode_authenticate_pki/1" do
+    test "builds an AUTHENTICATE frame with only SESSION_TOKEN" do
+      token = <<1, 2, 3>>
+      frame = Login.encode_authenticate_pki(token) |> IO.iodata_to_binary()
+
+      <<2, 2, length::48-big, admin_header::binary-size(16), rest::binary>> = frame
+
+      <<0, 0, 0, 1, _padding::binary-size(12)>> = admin_header
+      assert length == 16 + byte_size(rest)
+
+      <<size_token::32-big, 5::8, token_bytes::binary-size(size_token - 1)>> = rest
       assert token_bytes == token
     end
   end

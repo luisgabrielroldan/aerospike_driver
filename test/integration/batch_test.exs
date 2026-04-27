@@ -174,6 +174,36 @@ defmodule Aerospike.Integration.BatchTest do
              Aerospike.batch_exists(cluster, [key_a, key_b], timeout: 10_000)
   end
 
+  test "batch_delete honors generation policy", %{cluster: cluster} do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = IntegrationSupport.unique_name("spike_batch_delete_policy")
+    key = Key.new(@namespace, set, "delete-policy")
+
+    assert {:ok, %{generation: generation}} = Aerospike.put(cluster, key, %{"delete" => "policy"})
+
+    assert {:ok, [stale]} =
+             Aerospike.batch_delete(cluster, [key],
+               timeout: 10_000,
+               generation: generation + 1,
+               generation_policy: :expect_equal
+             )
+
+    assert %{key: ^key, status: :error, record: nil, in_doubt: false} = stale
+    assert %Error{code: :generation_error} = stale.error
+    assert {:ok, true} = Aerospike.exists(cluster, key)
+
+    assert {:ok, [deleted]} =
+             Aerospike.batch_delete(cluster, [key],
+               timeout: 10_000,
+               generation: generation,
+               generation_policy: :expect_equal
+             )
+
+    assert %{key: ^key, status: :ok, record: nil, error: nil, in_doubt: false} = deleted
+    assert {:ok, false} = Aerospike.exists(cluster, key)
+  end
+
   test "batch_udf preserves per-entry server errors", %{cluster: cluster} do
     assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
 

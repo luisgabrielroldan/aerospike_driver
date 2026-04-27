@@ -1,6 +1,8 @@
 defmodule Aerospike.Protocol.ScanQueryTest do
   use ExUnit.Case, async: true
 
+  import Bitwise
+
   alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.Policy
@@ -96,6 +98,32 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert byte_size(field_data(msg, Field.type_filter_exp())) > 1
   end
 
+  test "build_scan/3 applies runtime records-per-second and include-bin-data policy" do
+    scan =
+      Scan.new("testns", "users")
+      |> Scan.select(["a"])
+      |> Scan.records_per_second(50)
+
+    {:ok, policy} =
+      Policy.scan_query_runtime(
+        timeout: 5_000,
+        socket_timeout: 250,
+        task_id: 7,
+        records_per_second: 9,
+        include_bin_data: false
+      )
+
+    msg =
+      scan
+      |> ScanQuery.build_scan(%{parts_full: [], parts_partial: [], record_max: 0}, policy)
+      |> decode_as_msg()
+
+    assert msg.info1 == (AsmMsg.info1_read() ||| AsmMsg.info1_nobindata())
+    assert msg.operations == []
+    assert field_data(msg, Field.type_records_per_second()) == <<9::32-signed-big>>
+    assert field_data(msg, Field.type_socket_timeout()) == <<250::32-signed-big>>
+  end
+
   test "build_query/3 encodes a filter struct and keeps query bins" do
     query =
       Query.new("testns", "users")
@@ -129,6 +157,37 @@ defmodule Aerospike.Protocol.ScanQueryTest do
     assert field_data(msg, Field.type_max_records()) == <<4::64-signed-big>>
     assert field_data(msg, Field.type_records_per_second()) == <<7::32-signed-big>>
     refute Field.type_filter_exp() in field_types(msg)
+  end
+
+  test "build_query/3 encodes expected duration and include-bin-data flags" do
+    query =
+      Query.new("testns", "users")
+      |> Query.where(Filter.range("age", 10, 20))
+      |> Query.select(["score"])
+
+    {:ok, short_policy} =
+      Policy.scan_query_runtime(task_id: 42, include_bin_data: false, expected_duration: :short)
+
+    short_msg =
+      query
+      |> ScanQuery.build_query(%{parts_full: [3], parts_partial: [], record_max: 0}, short_policy)
+      |> decode_as_msg()
+
+    assert (short_msg.info1 &&& AsmMsg.info1_nobindata()) != 0
+    assert (short_msg.info1 &&& AsmMsg.info1_short_query()) != 0
+    assert short_msg.info2 == 0
+    assert short_msg.operations == []
+
+    {:ok, relax_policy} =
+      Policy.scan_query_runtime(task_id: 43, expected_duration: :long_relax_ap)
+
+    relax_msg =
+      query
+      |> ScanQuery.build_query(%{parts_full: [3], parts_partial: [], record_max: 0}, relax_policy)
+      |> decode_as_msg()
+
+    assert relax_msg.info1 == AsmMsg.info1_read()
+    assert relax_msg.info2 == AsmMsg.info2_relax_ap_long_query()
   end
 
   test "build_query/3 encodes geo filters without collection index type fields" do

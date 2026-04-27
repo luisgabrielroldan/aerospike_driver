@@ -71,6 +71,12 @@ defmodule Aerospike.Integration.ScanTest do
       match?({:ok, 3}, Aerospike.scan_count(cluster, scan))
     end)
 
+    IntegrationSupport.assert_eventually("scan include_bin_data false returns headers only", fn ->
+      records = Aerospike.scan_stream!(cluster, scan, include_bin_data: false) |> Enum.to_list()
+
+      length(records) == 3 and Enum.all?(records, &(&1.bins == %{}))
+    end)
+
     IntegrationSupport.assert_eventually("scan_all returns the seeded total", fn ->
       match?({:ok, [%Record{}, %Record{}, %Record{}]}, Aerospike.scan_all(cluster, scan))
     end)

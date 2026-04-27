@@ -11,7 +11,42 @@ defmodule Aerospike.Policy do
   @expression_index_types [:numeric, :string, :geo2dsphere]
   @index_collection_types [:list, :mapkeys, :mapvalues]
   @expression_index_opts [:collection, :name, :pool_checkout_timeout, :type]
+  @read_mode_ap_values [:one, :all]
+  @read_mode_sc_values [:session, :linearize, :allow_replica, :allow_unavailable]
   @record_exists_actions [:update, :update_only, :create_or_replace, :replace_only, :create_only]
+  @generation_policies [:none, :expect_equal, :expect_gt]
+  @commit_levels [:all, :master]
+  @query_durations [:long, :short, :long_relax_ap]
+  @batch_parent_opts [
+    :timeout,
+    :socket_timeout,
+    :max_concurrent_nodes,
+    :allow_partial_results,
+    :respond_all_keys,
+    :allow_inline,
+    :allow_inline_ssd
+  ]
+  @batch_read_opts [
+                     :filter,
+                     :read_mode_ap,
+                     :read_mode_sc,
+                     :read_touch_ttl_percent
+                   ] ++ @batch_parent_opts
+  @batch_record_read_opts [:filter, :read_mode_ap, :read_mode_sc, :read_touch_ttl_percent]
+  @batch_record_write_opts [
+    :ttl,
+    :generation,
+    :generation_policy,
+    :filter,
+    :exists,
+    :commit_level,
+    :durable_delete,
+    :respond_per_op,
+    :send_key,
+    :read_mode_ap,
+    :read_mode_sc,
+    :read_touch_ttl_percent
+  ]
 
   defmodule ClusterDefaults do
     @moduledoc false
@@ -25,13 +60,42 @@ defmodule Aerospike.Policy do
   defmodule UnaryRead do
     @moduledoc false
 
-    @enforce_keys [:timeout, :retry, :filter]
-    defstruct [:timeout, :retry, :filter]
+    @type read_mode_ap :: :one | :all
+    @type read_mode_sc :: :session | :linearize | :allow_replica | :allow_unavailable
+
+    @enforce_keys [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :filter,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent,
+      :send_key,
+      :use_compression
+    ]
+    defstruct [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :filter,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent,
+      :send_key,
+      :use_compression
+    ]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
+            socket_timeout: non_neg_integer(),
             retry: RetryPolicy.t(),
-            filter: Exp.t() | nil
+            filter: Exp.t() | nil,
+            read_mode_ap: read_mode_ap(),
+            read_mode_sc: read_mode_sc(),
+            read_touch_ttl_percent: -1 | 0..100,
+            send_key: boolean(),
+            use_compression: boolean() | nil
           }
   end
 
@@ -40,42 +104,195 @@ defmodule Aerospike.Policy do
 
     @type record_exists_action ::
             :update | :update_only | :create_or_replace | :replace_only | :create_only
+    @type generation_policy :: :none | :expect_equal | :expect_gt
+    @type commit_level :: :all | :master
 
-    @enforce_keys [:timeout, :retry, :ttl, :generation, :filter, :exists, :durable_delete]
-    defstruct [:timeout, :retry, :ttl, :generation, :filter, :exists, :durable_delete]
+    @enforce_keys [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :ttl,
+      :generation,
+      :generation_policy,
+      :filter,
+      :exists,
+      :commit_level,
+      :durable_delete,
+      :respond_per_op,
+      :send_key,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent,
+      :use_compression
+    ]
+    defstruct [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :ttl,
+      :generation,
+      :generation_policy,
+      :filter,
+      :exists,
+      :commit_level,
+      :durable_delete,
+      :respond_per_op,
+      :send_key,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent,
+      :use_compression
+    ]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
+            socket_timeout: non_neg_integer(),
             retry: RetryPolicy.t(),
-            ttl: non_neg_integer(),
+            ttl: integer(),
             generation: non_neg_integer(),
+            generation_policy: generation_policy(),
             filter: Exp.t() | nil,
             exists: record_exists_action(),
-            durable_delete: boolean()
+            commit_level: commit_level(),
+            durable_delete: boolean(),
+            respond_per_op: boolean(),
+            send_key: boolean(),
+            read_mode_ap: UnaryRead.read_mode_ap(),
+            read_mode_sc: UnaryRead.read_mode_sc(),
+            read_touch_ttl_percent: -1 | 0..100,
+            use_compression: boolean() | nil
           }
   end
 
   defmodule BatchRead do
     @moduledoc false
 
-    @enforce_keys [:timeout, :retry]
-    defstruct [:timeout, :retry]
+    @enforce_keys [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :max_concurrent_nodes,
+      :allow_partial_results,
+      :respond_all_keys,
+      :allow_inline,
+      :allow_inline_ssd,
+      :filter,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent
+    ]
+    defstruct [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :max_concurrent_nodes,
+      :allow_partial_results,
+      :respond_all_keys,
+      :allow_inline,
+      :allow_inline_ssd,
+      :filter,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent
+    ]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
-            retry: RetryPolicy.t()
+            socket_timeout: non_neg_integer(),
+            retry: RetryPolicy.t(),
+            max_concurrent_nodes: non_neg_integer(),
+            allow_partial_results: boolean(),
+            respond_all_keys: boolean(),
+            allow_inline: boolean(),
+            allow_inline_ssd: boolean(),
+            filter: Exp.t() | nil,
+            read_mode_ap: UnaryRead.read_mode_ap(),
+            read_mode_sc: UnaryRead.read_mode_sc(),
+            read_touch_ttl_percent: -1 | 0..100
           }
   end
 
   defmodule Batch do
     @moduledoc false
 
-    @enforce_keys [:timeout, :retry]
-    defstruct [:timeout, :retry]
+    @enforce_keys [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :max_concurrent_nodes,
+      :allow_partial_results,
+      :respond_all_keys,
+      :allow_inline,
+      :allow_inline_ssd
+    ]
+    defstruct [
+      :timeout,
+      :socket_timeout,
+      :retry,
+      :max_concurrent_nodes,
+      :allow_partial_results,
+      :respond_all_keys,
+      :allow_inline,
+      :allow_inline_ssd
+    ]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
-            retry: RetryPolicy.t()
+            socket_timeout: non_neg_integer(),
+            retry: RetryPolicy.t(),
+            max_concurrent_nodes: non_neg_integer(),
+            allow_partial_results: boolean(),
+            respond_all_keys: boolean(),
+            allow_inline: boolean(),
+            allow_inline_ssd: boolean()
+          }
+  end
+
+  defmodule BatchWrite do
+    @moduledoc false
+
+    @enforce_keys [
+      :ttl,
+      :generation,
+      :generation_policy,
+      :filter,
+      :exists,
+      :commit_level,
+      :durable_delete,
+      :respond_per_op,
+      :send_key,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent
+    ]
+    defstruct [
+      :ttl,
+      :generation,
+      :generation_policy,
+      :filter,
+      :exists,
+      :commit_level,
+      :durable_delete,
+      :respond_per_op,
+      :send_key,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent
+    ]
+
+    @type t :: %__MODULE__{
+            ttl: integer(),
+            generation: non_neg_integer(),
+            generation_policy: UnaryWrite.generation_policy(),
+            filter: Exp.t() | nil,
+            exists: UnaryWrite.record_exists_action(),
+            commit_level: UnaryWrite.commit_level(),
+            durable_delete: boolean(),
+            respond_per_op: boolean(),
+            send_key: boolean(),
+            read_mode_ap: UnaryRead.read_mode_ap(),
+            read_mode_sc: UnaryRead.read_mode_sc(),
+            read_touch_ttl_percent: -1 | 0..100
           }
   end
 
@@ -119,26 +336,41 @@ defmodule Aerospike.Policy do
 
     @enforce_keys [
       :timeout,
+      :socket_timeout,
       :task_timeout,
       :pool_checkout_timeout,
       :max_concurrent_nodes,
+      :retry,
+      :records_per_second,
+      :include_bin_data,
+      :expected_duration,
       :task_id,
       :cursor
     ]
     defstruct [
       :timeout,
+      :socket_timeout,
       :task_timeout,
       :pool_checkout_timeout,
       :max_concurrent_nodes,
+      :retry,
+      :records_per_second,
+      :include_bin_data,
+      :expected_duration,
       :task_id,
       :cursor
     ]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
+            socket_timeout: non_neg_integer(),
             task_timeout: non_neg_integer() | :infinity,
             pool_checkout_timeout: non_neg_integer(),
             max_concurrent_nodes: non_neg_integer(),
+            retry: RetryPolicy.t(),
+            records_per_second: non_neg_integer() | nil,
+            include_bin_data: boolean(),
+            expected_duration: :long | :short | :long_relax_ap,
             task_id: pos_integer(),
             cursor: term()
           }
@@ -169,32 +401,81 @@ defmodule Aerospike.Policy do
     batch(RetryPolicy.defaults(), opts)
   end
 
+  @spec batch_parent_opts(keyword()) :: keyword()
+  def batch_parent_opts(opts) when is_list(opts) do
+    Keyword.take(opts, @batch_parent_opts)
+  end
+
+  @spec batch_record_opts(keyword()) :: keyword()
+  def batch_record_opts(opts) when is_list(opts) do
+    Keyword.drop(opts, @batch_parent_opts)
+  end
+
   @spec unary_read(RetryPolicy.t(), keyword()) :: {:ok, UnaryRead.t()} | {:error, Error.t()}
   def unary_read(%{} = base_retry, opts) when is_list(opts) do
     with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
-         {:ok, filter} <- fetch_filter(opts) do
+         {:ok, socket_timeout} <- fetch_non_neg_integer(opts, :socket_timeout, 0),
+         {:ok, filter} <- fetch_filter(opts),
+         {:ok, read_mode_ap} <-
+           fetch_optional_member(opts, :read_mode_ap, @read_mode_ap_values, "AP read mode"),
+         {:ok, read_mode_sc} <-
+           fetch_optional_member(opts, :read_mode_sc, @read_mode_sc_values, "SC read mode"),
+         {:ok, read_touch_ttl_percent} <- fetch_read_touch_ttl_percent(opts),
+         {:ok, send_key} <- fetch_boolean(opts, :send_key, false),
+         {:ok, use_compression} <- fetch_optional_boolean(opts, :use_compression) do
       {:ok,
-       %UnaryRead{timeout: timeout, retry: RetryPolicy.merge(base_retry, opts), filter: filter}}
+       %UnaryRead{
+         timeout: timeout,
+         socket_timeout: socket_timeout,
+         retry: RetryPolicy.merge(base_retry, opts),
+         filter: filter,
+         read_mode_ap: read_mode_ap || :one,
+         read_mode_sc: read_mode_sc || :session,
+         read_touch_ttl_percent: read_touch_ttl_percent,
+         send_key: send_key,
+         use_compression: use_compression
+       }}
     end
   end
 
   @spec unary_write(RetryPolicy.t(), keyword()) :: {:ok, UnaryWrite.t()} | {:error, Error.t()}
   def unary_write(%{} = base_retry, opts) when is_list(opts) do
     with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
-         {:ok, ttl} <- fetch_non_neg_integer(opts, :ttl, 0),
+         {:ok, socket_timeout} <- fetch_non_neg_integer(opts, :socket_timeout, 0),
+         {:ok, ttl} <- fetch_ttl(opts),
          {:ok, generation} <- fetch_non_neg_integer(opts, :generation, 0),
+         {:ok, generation_policy} <- fetch_generation_policy(opts, generation),
          {:ok, filter} <- fetch_filter(opts),
          {:ok, exists} <- fetch_record_exists_action(opts),
-         {:ok, durable_delete} <- fetch_boolean(opts, :durable_delete, false) do
+         {:ok, commit_level} <-
+           fetch_optional_member(opts, :commit_level, @commit_levels, "commit level"),
+         {:ok, durable_delete} <- fetch_boolean(opts, :durable_delete, false),
+         {:ok, respond_per_op} <- fetch_boolean(opts, :respond_per_op, false),
+         {:ok, send_key} <- fetch_boolean(opts, :send_key, true),
+         {:ok, read_mode_ap} <-
+           fetch_optional_member(opts, :read_mode_ap, @read_mode_ap_values, "AP read mode"),
+         {:ok, read_mode_sc} <-
+           fetch_optional_member(opts, :read_mode_sc, @read_mode_sc_values, "SC read mode"),
+         {:ok, read_touch_ttl_percent} <- fetch_read_touch_ttl_percent(opts),
+         {:ok, use_compression} <- fetch_optional_boolean(opts, :use_compression) do
       {:ok,
        %UnaryWrite{
          timeout: timeout,
+         socket_timeout: socket_timeout,
          retry: RetryPolicy.merge(base_retry, opts),
          ttl: ttl,
          generation: generation,
+         generation_policy: generation_policy,
          filter: filter,
          exists: exists,
-         durable_delete: durable_delete
+         commit_level: commit_level || :all,
+         durable_delete: durable_delete,
+         respond_per_op: respond_per_op,
+         send_key: send_key,
+         read_mode_ap: read_mode_ap || :one,
+         read_mode_sc: read_mode_sc || :session,
+         read_touch_ttl_percent: read_touch_ttl_percent,
+         use_compression: use_compression
        }}
     end
   end
@@ -206,28 +487,118 @@ defmodule Aerospike.Policy do
 
   @spec batch_read(RetryPolicy.t(), keyword()) :: {:ok, BatchRead.t()} | {:error, Error.t()}
   def batch_read(%{} = base_retry, opts) when is_list(opts) do
-    with {:ok, %Batch{} = policy} <- batch(base_retry, opts) do
-      {:ok, %BatchRead{timeout: policy.timeout, retry: policy.retry}}
+    with :ok <- reject_unknown_opts(opts, @batch_read_opts, "Aerospike batch read helpers"),
+         {:ok, %Batch{} = policy} <- batch(base_retry, batch_parent_opts(opts)),
+         {:ok, filter} <- fetch_filter(opts),
+         {:ok, read_mode_ap} <-
+           fetch_optional_member(opts, :read_mode_ap, @read_mode_ap_values, "AP read mode"),
+         {:ok, read_mode_sc} <-
+           fetch_optional_member(opts, :read_mode_sc, @read_mode_sc_values, "SC read mode"),
+         {:ok, read_touch_ttl_percent} <- fetch_read_touch_ttl_percent(opts) do
+      {:ok,
+       %BatchRead{
+         timeout: policy.timeout,
+         socket_timeout: policy.socket_timeout,
+         retry: policy.retry,
+         max_concurrent_nodes: policy.max_concurrent_nodes,
+         allow_partial_results: policy.allow_partial_results,
+         respond_all_keys: policy.respond_all_keys,
+         allow_inline: policy.allow_inline,
+         allow_inline_ssd: policy.allow_inline_ssd,
+         filter: filter,
+         read_mode_ap: read_mode_ap || :one,
+         read_mode_sc: read_mode_sc || :session,
+         read_touch_ttl_percent: read_touch_ttl_percent
+       }}
     end
   end
 
   @spec batch(RetryPolicy.t(), keyword()) :: {:ok, Batch.t()} | {:error, Error.t()}
   def batch(%{} = base_retry, opts) when is_list(opts) do
-    case Enum.find(opts, &invalid_batch_read_opt?/1) do
-      nil ->
-        {:ok,
-         %Batch{
-           timeout: Keyword.get(opts, :timeout, @default_timeout),
-           retry: disable_retries(base_retry)
-         }}
+    with :ok <- reject_unknown_opts(opts, @batch_parent_opts, "Aerospike batch helpers"),
+         {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
+         {:ok, socket_timeout} <- fetch_non_neg_integer(opts, :socket_timeout, 0),
+         {:ok, max_concurrent_nodes} <- fetch_non_neg_integer(opts, :max_concurrent_nodes, 0),
+         {:ok, allow_partial_results} <- fetch_boolean(opts, :allow_partial_results, true),
+         {:ok, respond_all_keys} <- fetch_boolean(opts, :respond_all_keys, true),
+         {:ok, allow_inline} <- fetch_boolean(opts, :allow_inline, true),
+         {:ok, allow_inline_ssd} <- fetch_boolean(opts, :allow_inline_ssd, false) do
+      {:ok,
+       %Batch{
+         timeout: timeout,
+         socket_timeout: socket_timeout,
+         retry: disable_retries(base_retry),
+         max_concurrent_nodes: max_concurrent_nodes,
+         allow_partial_results: allow_partial_results,
+         respond_all_keys: respond_all_keys,
+         allow_inline: allow_inline,
+         allow_inline_ssd: allow_inline_ssd
+       }}
+    end
+  end
 
-      {:timeout, _value} ->
-        invalid_argument("Aerospike batch helpers expect :timeout to be a non-negative integer")
+  @spec batch_record_read(keyword()) :: {:ok, BatchRead.t()} | {:error, Error.t()}
+  def batch_record_read(opts) when is_list(opts) do
+    with :ok <-
+           reject_unknown_opts(opts, @batch_record_read_opts, "Aerospike batch read records"),
+         {:ok, filter} <- fetch_filter(opts),
+         {:ok, read_mode_ap} <-
+           fetch_optional_member(opts, :read_mode_ap, @read_mode_ap_values, "AP read mode"),
+         {:ok, read_mode_sc} <-
+           fetch_optional_member(opts, :read_mode_sc, @read_mode_sc_values, "SC read mode"),
+         {:ok, read_touch_ttl_percent} <- fetch_read_touch_ttl_percent(opts) do
+      {:ok,
+       %BatchRead{
+         timeout: @default_timeout,
+         socket_timeout: 0,
+         retry: disable_retries(RetryPolicy.defaults()),
+         max_concurrent_nodes: 0,
+         allow_partial_results: true,
+         respond_all_keys: true,
+         allow_inline: true,
+         allow_inline_ssd: false,
+         filter: filter,
+         read_mode_ap: read_mode_ap || :one,
+         read_mode_sc: read_mode_sc || :session,
+         read_touch_ttl_percent: read_touch_ttl_percent
+       }}
+    end
+  end
 
-      {key, _value} ->
-        invalid_argument(
-          "Aerospike batch helpers currently support only the :timeout option, got #{inspect(key)}"
-        )
+  @spec batch_record_write(keyword()) :: {:ok, BatchWrite.t()} | {:error, Error.t()}
+  def batch_record_write(opts) when is_list(opts) do
+    with :ok <-
+           reject_unknown_opts(opts, @batch_record_write_opts, "Aerospike batch write records"),
+         {:ok, ttl} <- fetch_ttl(opts),
+         {:ok, generation} <- fetch_non_neg_integer(opts, :generation, 0),
+         {:ok, generation_policy} <- fetch_generation_policy(opts, generation),
+         {:ok, filter} <- fetch_filter(opts),
+         {:ok, exists} <- fetch_record_exists_action(opts),
+         {:ok, commit_level} <-
+           fetch_optional_member(opts, :commit_level, @commit_levels, "commit level"),
+         {:ok, durable_delete} <- fetch_boolean(opts, :durable_delete, false),
+         {:ok, respond_per_op} <- fetch_boolean(opts, :respond_per_op, false),
+         {:ok, send_key} <- fetch_boolean(opts, :send_key, false),
+         {:ok, read_mode_ap} <-
+           fetch_optional_member(opts, :read_mode_ap, @read_mode_ap_values, "AP read mode"),
+         {:ok, read_mode_sc} <-
+           fetch_optional_member(opts, :read_mode_sc, @read_mode_sc_values, "SC read mode"),
+         {:ok, read_touch_ttl_percent} <- fetch_read_touch_ttl_percent(opts) do
+      {:ok,
+       %BatchWrite{
+         ttl: ttl,
+         generation: generation,
+         generation_policy: generation_policy,
+         filter: filter,
+         exists: exists,
+         commit_level: commit_level || :all,
+         durable_delete: durable_delete,
+         respond_per_op: respond_per_op,
+         send_key: send_key,
+         read_mode_ap: read_mode_ap || :one,
+         read_mode_sc: read_mode_sc || :session,
+         read_touch_ttl_percent: read_touch_ttl_percent
+       }}
     end
   end
 
@@ -317,28 +688,39 @@ defmodule Aerospike.Policy do
 
   @spec scan_query_runtime(keyword()) :: {:ok, ScanQueryRuntime.t()} | {:error, Error.t()}
   def scan_query_runtime(opts) when is_list(opts) do
+    scan_query_runtime(RetryPolicy.defaults(), opts)
+  end
+
+  @spec scan_query_runtime(RetryPolicy.t(), keyword()) ::
+          {:ok, ScanQueryRuntime.t()} | {:error, Error.t()}
+  def scan_query_runtime(%{} = base_retry, opts) when is_list(opts) do
     with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
+         {:ok, socket_timeout} <- fetch_non_neg_integer(opts, :socket_timeout, 0),
          {:ok, task_timeout} <- fetch_task_timeout(opts),
          {:ok, checkout_timeout} <-
            fetch_non_neg_integer(opts, :pool_checkout_timeout, @default_pool_checkout_timeout),
          {:ok, max_concurrency} <- fetch_non_neg_integer(opts, :max_concurrent_nodes, 0),
+         {:ok, records_per_second} <- fetch_optional_non_neg_integer(opts, :records_per_second),
+         {:ok, include_bin_data} <- fetch_boolean(opts, :include_bin_data, true),
+         {:ok, expected_duration} <-
+           fetch_optional_member(opts, :expected_duration, @query_durations, "query duration"),
          {:ok, task_id} <- fetch_task_id(opts) do
       {:ok,
        %ScanQueryRuntime{
          timeout: timeout,
+         socket_timeout: socket_timeout,
          task_timeout: task_timeout,
          pool_checkout_timeout: checkout_timeout,
          max_concurrent_nodes: max_concurrency,
+         retry: RetryPolicy.merge(base_retry, opts),
+         records_per_second: records_per_second,
+         include_bin_data: include_bin_data,
+         expected_duration: expected_duration || :long,
          task_id: task_id,
          cursor: Keyword.get(opts, :cursor)
        }}
     end
   end
-
-  defp invalid_batch_read_opt?({:timeout, timeout}),
-    do: not (is_integer(timeout) and timeout >= 0)
-
-  defp invalid_batch_read_opt?({_key, _value}), do: true
 
   defp invalid_security_admin_opt?({:timeout, timeout}),
     do: not (is_integer(timeout) and timeout >= 0)
@@ -362,6 +744,19 @@ defmodule Aerospike.Policy do
     end
   end
 
+  defp fetch_optional_non_neg_integer(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        {:ok, nil}
+
+      {:ok, value} when is_integer(value) and value >= 0 ->
+        {:ok, value}
+
+      {:ok, value} ->
+        invalid_argument("#{key} must be a non-negative integer, got: #{inspect(value)}")
+    end
+  end
+
   defp fetch_boolean(opts, key, default) do
     case Keyword.get(opts, key, default) do
       value when is_boolean(value) ->
@@ -369,6 +764,72 @@ defmodule Aerospike.Policy do
 
       value ->
         invalid_argument("#{key} must be a boolean, got: #{inspect(value)}")
+    end
+  end
+
+  defp fetch_optional_boolean(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error -> {:ok, nil}
+      {:ok, value} when is_boolean(value) -> {:ok, value}
+      {:ok, value} -> invalid_argument("#{key} must be a boolean, got: #{inspect(value)}")
+    end
+  end
+
+  defp reject_unknown_opts(opts, allowed, context) do
+    allowed = MapSet.new(allowed)
+
+    case Enum.find(opts, fn {key, _value} -> not MapSet.member?(allowed, key) end) do
+      nil -> :ok
+      {key, _value} -> invalid_argument("#{context} do not support option #{inspect(key)}")
+    end
+  end
+
+  defp fetch_ttl(opts) do
+    case Keyword.get(opts, :ttl, 0) do
+      :default ->
+        {:ok, 0}
+
+      :never_expire ->
+        {:ok, -1}
+
+      :dont_update ->
+        {:ok, -2}
+
+      value when is_integer(value) and value >= 0 ->
+        {:ok, value}
+
+      value ->
+        invalid_argument(
+          ":ttl must be a non-negative integer, :default, :never_expire, or :dont_update, got: #{inspect(value)}"
+        )
+    end
+  end
+
+  defp fetch_generation_policy(opts, generation) do
+    case fetch_optional_member(
+           opts,
+           :generation_policy,
+           @generation_policies,
+           "generation write policy"
+         ) do
+      {:ok, nil} when generation > 0 -> {:ok, :expect_equal}
+      {:ok, nil} -> {:ok, :none}
+      other -> other
+    end
+  end
+
+  defp fetch_read_touch_ttl_percent(opts) do
+    case Keyword.get(opts, :read_touch_ttl_percent, 0) do
+      -1 ->
+        {:ok, -1}
+
+      value when is_integer(value) and value in 0..100 ->
+        {:ok, value}
+
+      value ->
+        invalid_argument(
+          ":read_touch_ttl_percent must be -1, 0, or an integer from 1 through 100, got: #{inspect(value)}"
+        )
     end
   end
 

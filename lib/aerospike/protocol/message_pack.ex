@@ -43,6 +43,10 @@ defmodule Aerospike.Protocol.MessagePack do
     [string_prefix(byte_size(inner)), inner]
   end
 
+  defp pack_iolist({:byte_array, bin}) when is_binary(bin) do
+    [bin_prefix(byte_size(bin)), bin]
+  end
+
   defp pack_iolist(bin) when is_binary(bin), do: [string_prefix(byte_size(bin)), bin]
 
   defp pack_iolist(list) when is_list(list) do
@@ -88,6 +92,10 @@ defmodule Aerospike.Protocol.MessagePack do
   defp string_prefix(len) when len <= 0xFF, do: <<0xD9, len::8>>
   defp string_prefix(len) when len <= 0xFFFF, do: <<0xDA, len::16-big>>
   defp string_prefix(len), do: <<0xDB, len::32-big>>
+
+  defp bin_prefix(len) when len <= 0xFF, do: <<0xC4, len::8>>
+  defp bin_prefix(len) when len <= 0xFFFF, do: <<0xC5, len::16-big>>
+  defp bin_prefix(len), do: <<0xC6, len::32-big>>
 
   @spec unpack!(binary()) :: term()
   def unpack!(bin) when is_binary(bin) do

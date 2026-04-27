@@ -32,11 +32,12 @@ defmodule Aerospike.Protocol.ScanQuery do
   @spec build_scan(Scan.t(), node_partitions(), Policy.ScanQueryRuntime.t()) :: iodata()
   def build_scan(%Scan{} = scan, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
     timeout = policy.timeout
+    socket_timeout = effective_socket_timeout(policy)
     query_id = policy.task_id
     filter_wire = merge_exp_filters(scan.filters)
 
     %AsmMsg{
-      info1: scan_info1(scan),
+      info1: scan_info1(scan, policy),
       info3: @info3_partition_done,
       timeout: timeout,
       fields:
@@ -48,9 +49,9 @@ defmodule Aerospike.Protocol.ScanQuery do
         |> Kernel.++(digest_array_fields(node_partitions.parts_partial))
         |> Kernel.++(filter_exp_fields(filter_wire))
         |> Kernel.++(max_records_fields(node_partitions.record_max))
-        |> Kernel.++(records_per_second_fields(scan.records_per_second))
-        |> Kernel.++([socket_timeout_field(timeout), query_id_field(query_id)]),
-      operations: scan_operations(scan)
+        |> Kernel.++(records_per_second_fields(effective_records_per_second(scan, policy)))
+        |> Kernel.++([socket_timeout_field(socket_timeout), query_id_field(query_id)]),
+      operations: scan_operations(scan, policy)
     }
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
@@ -59,6 +60,7 @@ defmodule Aerospike.Protocol.ScanQuery do
   @spec build_query(Query.t(), node_partitions(), Policy.ScanQueryRuntime.t()) :: iodata()
   def build_query(%Query{} = query, node_partitions, %Policy.ScanQueryRuntime{} = policy) do
     timeout = policy.timeout
+    socket_timeout = effective_socket_timeout(policy)
     query_id = policy.task_id
 
     filter =
@@ -68,7 +70,8 @@ defmodule Aerospike.Protocol.ScanQuery do
     filter_wire = merge_exp_filters(query.filters)
 
     %AsmMsg{
-      info1: query_info1(query),
+      info1: query_info1(query, policy),
+      info2: query_info2(policy),
       info3: @info3_partition_done,
       timeout: timeout,
       fields:
@@ -86,9 +89,9 @@ defmodule Aerospike.Protocol.ScanQuery do
         |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
         |> Kernel.++(max_records_fields(node_partitions.record_max))
         |> Kernel.++(filter_exp_fields(filter_wire))
-        |> Kernel.++(records_per_second_fields(query.records_per_second))
-        |> Kernel.++([socket_timeout_field(timeout)]),
-      operations: query_operations(query)
+        |> Kernel.++(records_per_second_fields(effective_records_per_second(query, policy)))
+        |> Kernel.++([socket_timeout_field(socket_timeout)]),
+      operations: query_operations(query, policy)
     }
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
@@ -160,37 +163,66 @@ defmodule Aerospike.Protocol.ScanQuery do
     end
   end
 
-  defp scan_info1(%Scan{no_bins: true}) do
+  defp scan_info1(%Scan{}, %Policy.ScanQueryRuntime{include_bin_data: false}) do
     AsmMsg.info1_read() ||| AsmMsg.info1_nobindata()
   end
 
-  defp scan_info1(%Scan{bin_names: []}) do
+  defp scan_info1(%Scan{no_bins: true}, %Policy.ScanQueryRuntime{}) do
+    AsmMsg.info1_read() ||| AsmMsg.info1_nobindata()
+  end
+
+  defp scan_info1(%Scan{bin_names: []}, %Policy.ScanQueryRuntime{}) do
     AsmMsg.info1_read() ||| AsmMsg.info1_get_all()
   end
 
-  defp scan_info1(%Scan{}), do: AsmMsg.info1_read()
+  defp scan_info1(%Scan{}, %Policy.ScanQueryRuntime{}), do: AsmMsg.info1_read()
 
-  defp query_info1(%Query{no_bins: true}) do
-    AsmMsg.info1_read() ||| AsmMsg.info1_nobindata()
+  defp query_info1(%Query{}, %Policy.ScanQueryRuntime{include_bin_data: false} = policy) do
+    (AsmMsg.info1_read() ||| AsmMsg.info1_nobindata())
+    |> add_expected_duration(policy)
   end
 
-  defp query_info1(%Query{bin_names: bins}) when bins != [] do
+  defp query_info1(%Query{no_bins: true}, %Policy.ScanQueryRuntime{} = policy) do
+    (AsmMsg.info1_read() ||| AsmMsg.info1_nobindata())
+    |> add_expected_duration(policy)
+  end
+
+  defp query_info1(%Query{bin_names: bins}, %Policy.ScanQueryRuntime{} = policy)
+       when bins != [] do
     AsmMsg.info1_read()
+    |> add_expected_duration(policy)
   end
 
-  defp query_info1(%Query{}), do: AsmMsg.info1_read() ||| AsmMsg.info1_get_all()
+  defp query_info1(%Query{}, %Policy.ScanQueryRuntime{} = policy) do
+    (AsmMsg.info1_read() ||| AsmMsg.info1_get_all())
+    |> add_expected_duration(policy)
+  end
 
-  defp scan_operations(%Scan{no_bins: true}), do: []
-  defp scan_operations(%Scan{bin_names: []}), do: []
+  defp query_info2(%Policy.ScanQueryRuntime{expected_duration: :long_relax_ap}) do
+    AsmMsg.info2_relax_ap_long_query()
+  end
 
-  defp scan_operations(%Scan{bin_names: bins}) do
+  defp query_info2(%Policy.ScanQueryRuntime{}), do: 0
+
+  defp add_expected_duration(info1, %Policy.ScanQueryRuntime{expected_duration: :short}) do
+    info1 ||| AsmMsg.info1_short_query()
+  end
+
+  defp add_expected_duration(info1, %Policy.ScanQueryRuntime{}), do: info1
+
+  defp scan_operations(%Scan{}, %Policy.ScanQueryRuntime{include_bin_data: false}), do: []
+  defp scan_operations(%Scan{no_bins: true}, %Policy.ScanQueryRuntime{}), do: []
+  defp scan_operations(%Scan{bin_names: []}, %Policy.ScanQueryRuntime{}), do: []
+
+  defp scan_operations(%Scan{bin_names: bins}, %Policy.ScanQueryRuntime{}) do
     Enum.map(bins, &Operation.read/1)
   end
 
-  defp query_operations(%Query{no_bins: true}), do: []
-  defp query_operations(%Query{bin_names: []}), do: []
+  defp query_operations(%Query{}, %Policy.ScanQueryRuntime{include_bin_data: false}), do: []
+  defp query_operations(%Query{no_bins: true}, %Policy.ScanQueryRuntime{}), do: []
+  defp query_operations(%Query{bin_names: []}, %Policy.ScanQueryRuntime{}), do: []
 
-  defp query_operations(%Query{bin_names: bins}) do
+  defp query_operations(%Query{bin_names: bins}, %Policy.ScanQueryRuntime{}) do
     Enum.map(bins, &Operation.read/1)
   end
 
@@ -223,6 +255,7 @@ defmodule Aerospike.Protocol.ScanQuery do
          background
        ) do
     timeout = policy.timeout
+    socket_timeout = effective_socket_timeout(policy)
     query_id = policy.task_id
     filter_wire = merge_exp_filters(query.filters)
 
@@ -241,13 +274,13 @@ defmodule Aerospike.Protocol.ScanQuery do
       |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
       |> Kernel.++(max_records_fields(node_partitions.record_max))
       |> Kernel.++(filter_exp_fields(filter_wire))
-      |> Kernel.++(records_per_second_fields(query.records_per_second))
-      |> Kernel.++([socket_timeout_field(timeout)])
+      |> Kernel.++(records_per_second_fields(effective_records_per_second(query, policy)))
+      |> Kernel.++([socket_timeout_field(socket_timeout)])
       |> Kernel.++(background_query_fields(background))
 
     %AsmMsg{
-      info1: query_info1(query),
-      info2: 0,
+      info1: query_info1(query, policy),
+      info2: query_info2(policy),
       info3: @info3_partition_done,
       timeout: timeout,
       fields: fields,
@@ -265,6 +298,7 @@ defmodule Aerospike.Protocol.ScanQuery do
          background
        ) do
     timeout = policy.timeout
+    socket_timeout = effective_socket_timeout(policy)
     query_id = policy.task_id
     filter_wire = merge_exp_filters(query.filters)
 
@@ -283,8 +317,8 @@ defmodule Aerospike.Protocol.ScanQuery do
       |> Kernel.++(bval_array_fields(node_partitions.parts_partial))
       |> Kernel.++(max_records_fields(node_partitions.record_max))
       |> Kernel.++(filter_exp_fields(filter_wire))
-      |> Kernel.++(records_per_second_fields(query.records_per_second))
-      |> Kernel.++([socket_timeout_field(timeout)])
+      |> Kernel.++(records_per_second_fields(effective_records_per_second(query, policy)))
+      |> Kernel.++([socket_timeout_field(socket_timeout)])
       |> Kernel.++(background_query_fields(background))
 
     %AsmMsg{
@@ -410,6 +444,27 @@ defmodule Aerospike.Protocol.ScanQuery do
   end
 
   defp records_per_second_fields(_), do: []
+
+  defp effective_records_per_second(_scannable, %Policy.ScanQueryRuntime{
+         records_per_second: n
+       })
+       when is_integer(n) do
+    n
+  end
+
+  defp effective_records_per_second(%Scan{records_per_second: n}, %Policy.ScanQueryRuntime{}),
+    do: n
+
+  defp effective_records_per_second(%Query{records_per_second: n}, %Policy.ScanQueryRuntime{}),
+    do: n
+
+  defp effective_socket_timeout(%Policy.ScanQueryRuntime{timeout: total, socket_timeout: socket})
+       when total > 0 and socket > total do
+    total
+  end
+
+  defp effective_socket_timeout(%Policy.ScanQueryRuntime{socket_timeout: n}) when n > 0, do: n
+  defp effective_socket_timeout(%Policy.ScanQueryRuntime{timeout: n}), do: n
 
   defp filter_exp_fields(nil), do: []
 

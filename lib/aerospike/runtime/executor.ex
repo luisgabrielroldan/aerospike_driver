@@ -246,14 +246,22 @@ defmodule Aerospike.Runtime.Executor do
   defp checkout(executor, unit, ctx, callbacks, node_name, handle, attempt) do
     checkout = Map.get(callbacks, :checkout, Map.get(ctx, :checkout, &NodePool.checkout!/4))
     remaining = max(remaining_budget(executor), 0)
-    command_opts = [use_compression: handle.use_compression, attempt: attempt]
+    transport_timeout = transport_timeout(executor.policy, remaining)
+    command_opts = [use_compression: use_compression?(executor.policy, handle), attempt: attempt]
 
     result =
       checkout.(
         node_name,
         handle.pool,
         fn conn ->
-          callbacks.run_transport.(unit, node_name, ctx.transport, conn, remaining, command_opts)
+          callbacks.run_transport.(
+            unit,
+            node_name,
+            ctx.transport,
+            conn,
+            transport_timeout,
+            command_opts
+          )
         end,
         remaining
       )
@@ -400,6 +408,25 @@ defmodule Aerospike.Runtime.Executor do
   end
 
   defp maybe_record_retry_attempt(_ctx, _classification), do: :ok
+
+  defp transport_timeout(%{socket_timeout: 0}, remaining), do: remaining
+
+  defp transport_timeout(%{socket_timeout: socket_timeout}, remaining)
+       when is_integer(socket_timeout) and socket_timeout > 0 do
+    min(socket_timeout, remaining)
+  end
+
+  defp transport_timeout(_policy, remaining), do: remaining
+
+  defp use_compression?(%{use_compression: nil}, handle), do: handle.use_compression
+
+  defp use_compression?(%{use_compression: true}, handle) do
+    Map.get(handle, :supports_compression, handle.use_compression)
+  end
+
+  defp use_compression?(%{use_compression: false}, _handle), do: false
+
+  defp use_compression?(_policy, handle), do: handle.use_compression
 
   defp maybe_sleep(%{sleep_between_retries_ms: 0}), do: :ok
 

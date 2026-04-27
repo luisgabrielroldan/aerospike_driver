@@ -15,11 +15,18 @@ defmodule Aerospike.Command.ApplyUdf do
 
   @type option ::
           {:timeout, non_neg_integer()}
+          | {:socket_timeout, non_neg_integer()}
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
-          | {:ttl, non_neg_integer()}
+          | {:ttl, non_neg_integer() | :default | :never_expire | :dont_update}
           | {:generation, non_neg_integer()}
+          | {:generation_policy, :none | :expect_equal | :expect_gt}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:commit_level, :all | :master}
+          | {:durable_delete, boolean()}
+          | {:send_key, boolean()}
+          | {:use_compression, boolean()}
+          | {:exists, :update | :update_only | :create_or_replace | :replace_only | :create_only}
 
   @type result ::
           {:ok, term()}
@@ -69,9 +76,7 @@ defmodule Aerospike.Command.ApplyUdf do
       args: args,
       opts: opts,
       txn: txn,
-      ttl: policy.ttl,
-      generation: policy.generation,
-      timeout: policy.timeout,
+      policy: policy,
       filter: policy.filter
     }
   end
@@ -90,25 +95,28 @@ defmodule Aerospike.Command.ApplyUdf do
          function: function,
          args: args,
          opts: opts,
-         ttl: ttl,
-         generation: generation,
-         timeout: timeout,
+         policy: policy,
+         use_compression: use_compression,
          filter: filter
        }) do
-    %AsmMsg{
-      info2: AsmMsg.info2_write(),
-      generation: generation,
-      expiration: ttl,
-      timeout: timeout,
-      fields:
-        AsmMsg.key_fields(key) ++
-          [
-            Field.udf_package_name(package),
-            Field.udf_function(function),
-            Field.udf_arglist(UdfArgs.pack!(args)),
-            Field.udf_op(1)
-          ]
-    }
+    key
+    |> AsmMsg.key_command(
+      [],
+      [write: true] ++ UnarySupport.write_header_opts(policy, use_compression)
+    )
+    |> then(fn msg ->
+      %AsmMsg{
+        msg
+        | fields:
+            msg.fields ++
+              [
+                Field.udf_package_name(package),
+                Field.udf_function(function),
+                Field.udf_arglist(UdfArgs.pack!(args)),
+                Field.udf_op(1)
+              ]
+      }
+    end)
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)
     |> AsmMsg.encode()

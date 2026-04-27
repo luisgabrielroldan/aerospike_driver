@@ -2,6 +2,7 @@ defmodule Aerospike.Protocol.FilterTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Ctx
+  alias Aerospike.Exp
   alias Aerospike.Filter
   alias Aerospike.Protocol.Filter, as: FilterCodec
   alias Aerospike.Protocol.MessagePack
@@ -139,5 +140,12 @@ defmodule Aerospike.Protocol.FilterTest do
              16,
              7
            ]
+  end
+
+  test "encode_ctx/1 preserves expression contexts as raw byte arrays" do
+    filter = Exp.eq(Exp.str_loop_var(:value), Exp.str("active"))
+    encoded = FilterCodec.encode_ctx([Ctx.all_children_with_filter(filter)])
+
+    assert MessagePack.unpack!(encoded) == [0x04, filter.wire]
   end
 end

@@ -8,26 +8,30 @@ defmodule Aerospike.Command.BatchDelete do
   alias Aerospike.Key
   alias Aerospike.Policy
 
-  @type option :: {:timeout, non_neg_integer()}
+  @type option :: {:timeout, non_neg_integer()} | {:socket_timeout, non_neg_integer()}
   @type result :: {:ok, [BatchResult.t()]} | {:error, Error.t()} | {:error, :cluster_not_ready}
 
   @spec execute(GenServer.server(), [Key.t()], [option()]) :: result()
   def execute(tender, keys, opts \\ [])
 
   def execute(_tender, [], opts) when is_list(opts) do
-    with {:ok, _policy} <- Policy.batch(opts) do
+    with {:ok, _parent_policy} <- Policy.batch(Policy.batch_parent_opts(opts)),
+         {:ok, _write_policy} <- Policy.batch_record_write(Policy.batch_record_opts(opts)) do
       {:ok, []}
     end
   end
 
   def execute(tender, keys, opts) when is_list(keys) and is_list(opts) do
     with :ok <- validate_keys(keys),
-         {:ok, results} <- MixedBatch.execute(tender, entries(keys), opts) do
+         {:ok, _parent_policy} <- Policy.batch(Policy.batch_parent_opts(opts)),
+         {:ok, write_policy} <- Policy.batch_record_write(Policy.batch_record_opts(opts)),
+         {:ok, results} <-
+           MixedBatch.execute(tender, entries(keys, write_policy), Policy.batch_parent_opts(opts)) do
       {:ok, MixedBatch.to_public_results(results)}
     end
   end
 
-  defp entries(keys) do
+  defp entries(keys, %Policy.BatchWrite{} = policy) do
     keys
     |> Enum.with_index()
     |> Enum.map(fn {key, index} ->
@@ -36,9 +40,26 @@ defmodule Aerospike.Command.BatchDelete do
         key: key,
         kind: :delete,
         dispatch: :write,
-        payload: nil
+        payload: payload(policy)
       }
     end)
+  end
+
+  defp payload(%Policy.BatchWrite{} = policy) do
+    Map.take(policy, [
+      :ttl,
+      :generation,
+      :generation_policy,
+      :filter,
+      :exists,
+      :commit_level,
+      :durable_delete,
+      :respond_per_op,
+      :send_key,
+      :read_mode_ap,
+      :read_mode_sc,
+      :read_touch_ttl_percent
+    ])
   end
 
   defp validate_keys(keys) do

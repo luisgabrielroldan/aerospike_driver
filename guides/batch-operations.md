@@ -1,8 +1,9 @@
 # Batch Operations
 
 Batch helpers execute multi-key work while preserving input order in the
-returned results. The current public batch option surface is intentionally
-narrow: helpers accept only the batch-level `:timeout` option.
+returned results. Parent batch policy options live on the facade call, while
+entry-level read/write options can be attached to `Aerospike.Batch` builders
+when the batch index protocol can encode the field.
 
 ## Batch Reads
 
@@ -16,7 +17,13 @@ keys = [
   Aerospike.key("test", "users", "missing")
 ]
 
-{:ok, results} = Aerospike.batch_get(:aerospike, keys, :all, timeout: 5_000)
+{:ok, results} =
+  Aerospike.batch_get(:aerospike, keys, :all,
+    timeout: 5_000,
+    socket_timeout: 1_000,
+    max_concurrent_nodes: 2,
+    read_mode_ap: :one
+  )
 
 Enum.each(results, fn
   {:ok, record} ->
@@ -99,8 +106,22 @@ entries = [
   )
 ]
 
-{:ok, results} = Aerospike.batch_operate(:aerospike, entries, timeout: 5_000)
+{:ok, results} =
+  Aerospike.batch_operate(:aerospike, entries,
+    timeout: 5_000,
+    allow_partial_results: true
+  )
 ```
 
-`batch_operate/3` does not expose per-entry write policies or public batch
-retry options in the current release surface.
+Parent batch options include `:timeout`, `:socket_timeout`,
+`:max_concurrent_nodes`, `:allow_partial_results`, `:respond_all_keys`,
+`:allow_inline`, and `:allow_inline_ssd`. Batch read helpers also accept
+encodable read fields such as `:filter`, `:read_mode_ap`, `:read_mode_sc`, and
+`:read_touch_ttl_percent`.
+
+Per-entry read options on `Aerospike.Batch.read/2` are limited to `:filter`,
+`:read_mode_ap`, `:read_mode_sc`, and `:read_touch_ttl_percent`. Per-entry
+write options on put/delete/UDF entries include `:ttl`, `:generation`,
+`:generation_policy`, `:exists`, `:commit_level`, `:durable_delete`,
+`:respond_per_op`, `:send_key`, `:read_mode_ap`, `:read_mode_sc`,
+`:read_touch_ttl_percent`, and `:filter`.

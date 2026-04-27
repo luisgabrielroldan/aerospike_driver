@@ -13,23 +13,30 @@ defmodule Aerospike.Protocol.AsmMsg do
   # Info1 flags
   @info1_read 0x01
   @info1_get_all 0x02
+  @info1_short_query 0x04
   @info1_batch 0x08
   @info1_nobindata 0x20
+  @info1_read_mode_ap_all 0x40
+  @info1_compress_response 0x80
 
   # Info2 flags
   @info2_write 0x01
   @info2_delete 0x02
   @info2_generation 0x04
+  @info2_generation_gt 0x08
   @info2_durable_delete 0x10
   @info2_create_only 0x20
+  @info2_relax_ap_long_query 0x40
   @info2_respond_all_ops 0x80
 
   # Info3 flags
   @info3_last 0x01
+  @info3_commit_master 0x02
   @info3_update_only 0x08
   @info3_create_or_replace 0x10
   @info3_replace_only 0x20
   @info3_sc_read_type 0x40
+  @info3_sc_read_relax 0x80
 
   # Info4 flags
   @info4_mrt_verify_read 0x01
@@ -72,9 +79,21 @@ defmodule Aerospike.Protocol.AsmMsg do
   @spec info1_batch() :: 0x08
   def info1_batch, do: @info1_batch
 
+  @doc "Returns the INFO1_SHORT_QUERY flag value."
+  @spec info1_short_query() :: 0x04
+  def info1_short_query, do: @info1_short_query
+
   @doc "Returns the INFO1_NOBINDATA flag value."
   @spec info1_nobindata() :: 0x20
   def info1_nobindata, do: @info1_nobindata
+
+  @doc "Returns the INFO1_READ_MODE_AP_ALL flag value."
+  @spec info1_read_mode_ap_all() :: 0x40
+  def info1_read_mode_ap_all, do: @info1_read_mode_ap_all
+
+  @doc "Returns the INFO1_COMPRESS_RESPONSE flag value."
+  @spec info1_compress_response() :: 0x80
+  def info1_compress_response, do: @info1_compress_response
 
   @doc "Returns the INFO2_WRITE flag value."
   @spec info2_write() :: 0x01
@@ -88,6 +107,10 @@ defmodule Aerospike.Protocol.AsmMsg do
   @spec info2_generation() :: 0x04
   def info2_generation, do: @info2_generation
 
+  @doc "Returns the INFO2_GENERATION_GT flag value."
+  @spec info2_generation_gt() :: 0x08
+  def info2_generation_gt, do: @info2_generation_gt
+
   @doc "Returns the INFO2_DURABLE_DELETE flag value."
   @spec info2_durable_delete() :: 0x10
   def info2_durable_delete, do: @info2_durable_delete
@@ -96,6 +119,10 @@ defmodule Aerospike.Protocol.AsmMsg do
   @spec info2_create_only() :: 0x20
   def info2_create_only, do: @info2_create_only
 
+  @doc "Returns the INFO2_RELAX_AP_LONG_QUERY flag value."
+  @spec info2_relax_ap_long_query() :: 0x40
+  def info2_relax_ap_long_query, do: @info2_relax_ap_long_query
+
   @doc "Returns the INFO2_RESPOND_ALL_OPS flag value."
   @spec info2_respond_all_ops() :: 0x80
   def info2_respond_all_ops, do: @info2_respond_all_ops
@@ -103,6 +130,10 @@ defmodule Aerospike.Protocol.AsmMsg do
   @doc "Returns the INFO3_LAST flag value."
   @spec info3_last() :: 0x01
   def info3_last, do: @info3_last
+
+  @doc "Returns the INFO3_COMMIT_MASTER flag value."
+  @spec info3_commit_master() :: 0x02
+  def info3_commit_master, do: @info3_commit_master
 
   @doc "Returns the INFO3_UPDATE_ONLY flag value."
   @spec info3_update_only() :: 0x08
@@ -119,6 +150,10 @@ defmodule Aerospike.Protocol.AsmMsg do
   @doc "Returns the INFO3_SC_READ_TYPE flag value."
   @spec info3_sc_read_type() :: 0x40
   def info3_sc_read_type, do: @info3_sc_read_type
+
+  @doc "Returns the INFO3_SC_READ_RELAX flag value."
+  @spec info3_sc_read_relax() :: 0x80
+  def info3_sc_read_relax, do: @info3_sc_read_relax
 
   @doc "Returns the INFO4_MRT_VERIFY_READ flag value."
   @spec info4_mrt_verify_read() :: 0x01
@@ -157,7 +192,7 @@ defmodule Aerospike.Protocol.AsmMsg do
 
     header =
       <<@msg_remaining_header_size::8, msg.info1::8, msg.info2::8, msg.info3::8, msg.info4::8,
-        msg.result_code::8, msg.generation::32-big, msg.expiration::32-big,
+        msg.result_code::8, msg.generation::32-big, msg.expiration::32-big-signed,
         msg.timeout::32-big-signed, field_count::16-big, op_count::16-big>>
 
     [header | encode_fields(msg.fields, encode_operations(msg.operations))]
@@ -194,7 +229,7 @@ defmodule Aerospike.Protocol.AsmMsg do
         info4::8,
         result_code::8,
         generation::32-big,
-        expiration::32-big,
+        expiration::32-big-signed,
         timeout::32-big-signed,
         field_count::16-big,
         op_count::16-big,
@@ -293,7 +328,7 @@ defmodule Aerospike.Protocol.AsmMsg do
       info2: info2_from_opts(opts),
       info3: info3_from_opts(opts),
       generation: generation_from_opts(opts),
-      expiration: Keyword.get(opts, :ttl, 0),
+      expiration: expiration_from_opts(opts),
       timeout: Keyword.get(opts, :timeout, 0),
       fields: key_fields(key, opts),
       operations: operations
@@ -334,13 +369,16 @@ defmodule Aerospike.Protocol.AsmMsg do
     |> maybe_flag(Keyword.get(opts, :read, false), @info1_read)
     |> maybe_flag(Keyword.get(opts, :read_all, false), @info1_get_all)
     |> maybe_flag(Keyword.get(opts, :read_header, false), @info1_nobindata)
+    |> maybe_flag(Keyword.get(opts, :read_mode_ap) == :all, @info1_read_mode_ap_all)
+    |> maybe_flag(Keyword.get(opts, :use_compression, false), @info1_compress_response)
   end
 
   defp info2_from_opts(opts) do
     0
     |> maybe_flag(Keyword.get(opts, :write, false), @info2_write)
     |> maybe_flag(Keyword.get(opts, :delete, false), @info2_delete)
-    |> maybe_flag(generation_flag?(Keyword.get(opts, :generation)), @info2_generation)
+    |> maybe_flag(Keyword.get(opts, :generation_policy) == :expect_equal, @info2_generation)
+    |> maybe_flag(Keyword.get(opts, :generation_policy) == :expect_gt, @info2_generation_gt)
     |> maybe_flag(Keyword.get(opts, :durable_delete, false), @info2_durable_delete)
     |> maybe_flag(Keyword.get(opts, :exists) == :create_only, @info2_create_only)
     |> maybe_flag(Keyword.get(opts, :respond_all_ops, false), @info2_respond_all_ops)
@@ -348,19 +386,33 @@ defmodule Aerospike.Protocol.AsmMsg do
 
   defp info3_from_opts(opts) do
     0
+    |> maybe_flag(Keyword.get(opts, :commit_level) == :master, @info3_commit_master)
     |> maybe_flag(Keyword.get(opts, :exists) == :update_only, @info3_update_only)
     |> maybe_flag(Keyword.get(opts, :exists) == :create_or_replace, @info3_create_or_replace)
     |> maybe_flag(Keyword.get(opts, :exists) == :replace_only, @info3_replace_only)
+    |> maybe_flag(Keyword.get(opts, :read_mode_sc) == :linearize, @info3_sc_read_type)
+    |> maybe_flag(Keyword.get(opts, :read_mode_sc) == :allow_replica, @info3_sc_read_relax)
+    |> maybe_flag(
+      Keyword.get(opts, :read_mode_sc) == :allow_unavailable,
+      @info3_sc_read_type ||| @info3_sc_read_relax
+    )
   end
 
-  defp generation_flag?(generation) when is_integer(generation) and generation > 0, do: true
-  defp generation_flag?(_generation), do: false
-
   defp generation_from_opts(opts) do
-    case Keyword.get(opts, :generation) do
-      generation when is_integer(generation) and generation >= 0 -> generation
-      _ -> 0
+    case Keyword.get(opts, :generation_policy, :none) do
+      :none ->
+        0
+
+      _ ->
+        case Keyword.get(opts, :generation) do
+          generation when is_integer(generation) and generation >= 0 -> generation
+          _ -> 0
+        end
     end
+  end
+
+  defp expiration_from_opts(opts) do
+    Keyword.get(opts, :ttl, Keyword.get(opts, :read_touch_ttl_percent, 0))
   end
 
   defp maybe_flag(flags, false, _flag), do: flags

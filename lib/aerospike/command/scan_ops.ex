@@ -19,7 +19,11 @@ defmodule Aerospike.Command.ScanOps do
           {:ok, Enumerable.t()} | {:error, Error.t()}
   def stream(tender, scannable, opts \\ []) when is_list(opts) do
     with {:ok, node_name, opts2} <- normalize_node_opt(opts) do
-      stream_with_node(tender, scannable, node_name, opts2)
+      {cursor, opts3} = Keyword.pop(opts2, :cursor)
+
+      with {:ok, scannable2} <- apply_optional_cursor(scannable, cursor) do
+        stream_with_node(tender, scannable2, node_name, opts3)
+      end
     end
   end
 

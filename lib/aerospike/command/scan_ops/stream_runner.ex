@@ -13,6 +13,7 @@ defmodule Aerospike.Command.ScanOps.StreamRunner do
   alias Aerospike.Protocol.ScanQuery
   alias Aerospike.Protocol.ScanResponse
   alias Aerospike.Query
+  alias Aerospike.RetryPolicy
   alias Aerospike.Runtime.StreamingExecutor
   alias Aerospike.Scan
 
@@ -119,7 +120,7 @@ defmodule Aerospike.Command.ScanOps.StreamRunner do
 
   defp stream_internal(tender, scannable, opts, node_filter, wire_builder, parser) do
     with {:ok, runtime} <- PageRunner.runtime(tender, scannable),
-         {:ok, policy} <- Policy.scan_query_runtime(opts),
+         {:ok, policy} <- Policy.scan_query_runtime(retry_policy(runtime), opts),
          {:ok, _tracker, node_requests} <-
            PageRunner.prepare_node_requests(runtime, scannable, node_filter, policy) do
       command = stream_command(wire_builder, parser)
@@ -134,7 +135,7 @@ defmodule Aerospike.Command.ScanOps.StreamRunner do
 
   defp run_background_query(tender, query, opts, node_filter, wire_builder, kind) do
     with {:ok, runtime} <- PageRunner.runtime(tender, query),
-         {:ok, policy} <- Policy.scan_query_runtime(opts),
+         {:ok, policy} <- Policy.scan_query_runtime(retry_policy(runtime), opts),
          {:ok, _tracker, node_requests} <-
            PageRunner.prepare_node_requests(runtime, query, node_filter, policy) do
       task_timeout = policy.task_timeout
@@ -170,6 +171,8 @@ defmodule Aerospike.Command.ScanOps.StreamRunner do
       end
     end
   end
+
+  defp retry_policy(%{tables: %{meta: meta}}) when is_atom(meta), do: RetryPolicy.load(meta)
 
   defp request_partitions(%{parts_full: full, parts_partial: partials, record_max: record_max}) do
     %{
@@ -294,7 +297,7 @@ defmodule Aerospike.Command.ScanOps.StreamRunner do
 
   defp connect_and_run_background(runtime, query, node_request, handle, wire_builder) do
     transport = runtime.transport
-    timeout = node_request.policy.timeout
+    timeout = transport_timeout(node_request.policy)
     node_opts = [use_compression: handle.use_compression, attempt: 0]
 
     request =
@@ -351,6 +354,17 @@ defmodule Aerospike.Command.ScanOps.StreamRunner do
        when is_integer(n) and n > 0 do
     min(n, fallback)
   end
+
+  defp transport_timeout(%Policy.ScanQueryRuntime{timeout: total, socket_timeout: socket})
+       when total > 0 and socket > total do
+    total
+  end
+
+  defp transport_timeout(%Policy.ScanQueryRuntime{socket_timeout: timeout})
+       when timeout > 0,
+       do: timeout
+
+  defp transport_timeout(%Policy.ScanQueryRuntime{timeout: timeout}), do: timeout
 
   defp unknown_node(node_name) do
     Error.from_result_code(:invalid_node, message: "scan target node unavailable: #{node_name}")

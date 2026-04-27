@@ -3,6 +3,7 @@ defmodule Aerospike.Integration.OperateCdtTest do
 
   @moduletag :integration
 
+  alias Aerospike.Ctx
   alias Aerospike.Op.Bit, as: BitOp
   alias Aerospike.Op.HLL, as: HLLOp
   alias Aerospike.Op.List, as: ListOp
@@ -133,6 +134,52 @@ defmodule Aerospike.Integration.OperateCdtTest do
       assert [index_bit_count, min_hash_bit_count] = description
       assert is_integer(index_bit_count)
       assert is_integer(min_hash_bit_count)
+    after
+      _ = Aerospike.delete(cluster, key)
+    end
+  end
+
+  test "create-on-navigation context creates nested maps", %{cluster: cluster} do
+    key = IntegrationSupport.unique_key(@namespace, @set, "operate-cdt-create-ctx")
+
+    assert {:ok, _} = Aerospike.put(cluster, key, %{"profile" => %{}})
+
+    try do
+      assert {:ok, %Record{}} =
+               Aerospike.operate(cluster, key, [
+                 MapOp.put("profile", "theme", "dark",
+                   ctx: [Ctx.map_key_create("settings", :key_ordered)]
+                 )
+               ])
+
+      assert {:ok, %Record{bins: %{"profile" => %{"settings" => %{"theme" => "dark"}}}}} =
+               Aerospike.get(cluster, key)
+    after
+      _ = Aerospike.delete(cluster, key)
+    end
+  end
+
+  test "additional list and map CDT variants execute against the server", %{cluster: cluster} do
+    key = IntegrationSupport.unique_key(@namespace, @set, "operate-cdt-variants")
+
+    assert {:ok, _} =
+             Aerospike.put(cluster, key, %{
+               "nums" => [1, 2, 3, 4],
+               "scores" => %{"a" => 10, "b" => 20, "c" => 30}
+             })
+
+    try do
+      assert {:ok, %Record{bins: %{"nums" => [3, 4]}}} =
+               Aerospike.operate(cluster, key, [
+                 ListOp.pop_range_from("nums", 2)
+               ])
+
+      assert {:ok, %Record{bins: %{"scores" => ["b", "c"]}}} =
+               Aerospike.operate(cluster, key, [
+                 MapOp.get_by_key_rel_index_range_count("scores", "b", 0, 2,
+                   return_type: MapOp.return_key()
+                 )
+               ])
     after
       _ = Aerospike.delete(cluster, key)
     end

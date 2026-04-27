@@ -117,6 +117,15 @@ defmodule Aerospike.Protocol.Login do
   end
 
   @doc """
+  Encodes a PKI login request. The client certificate presented by the TLS
+  transport is the credential, so the admin command carries no fields.
+  """
+  @spec encode_login_pki() :: iodata()
+  def encode_login_pki do
+    encode_command(@cmd_login, [])
+  end
+
+  @doc """
   Encodes a session-token-based authenticate request. Used by pool workers
   after the first full login has produced a token: every subsequent socket
   authenticates with the token instead of paying the bcrypt round trip.
@@ -128,6 +137,17 @@ defmodule Aerospike.Protocol.Login do
       encode_field(@field_user, user),
       encode_field(@field_session_token, session_token)
     ]
+
+    encode_command(@cmd_authenticate, fields)
+  end
+
+  @doc """
+  Encodes a PKI session-token authenticate request. PKI sessions do not carry a
+  username on the authenticate frame.
+  """
+  @spec encode_authenticate_pki(binary()) :: iodata()
+  def encode_authenticate_pki(session_token) when is_binary(session_token) do
+    fields = [encode_field(@field_session_token, session_token)]
 
     encode_command(@cmd_authenticate, fields)
   end

@@ -37,7 +37,7 @@ defmodule Aerospike.Runtime.StreamingExecutor do
           Scan.t() | Query.t(),
           [map()],
           %{
-            required(:task_timeout) => non_neg_integer(),
+            required(:task_timeout) => timeout(),
             required(:max_concurrent_nodes) => integer()
           },
           keyword()
@@ -96,7 +96,7 @@ defmodule Aerospike.Runtime.StreamingExecutor do
   end
 
   defp connect_and_stream(command, transport, ctx, handle) do
-    timeout = ctx.node_request.policy.timeout
+    timeout = transport_timeout(ctx.node_request.policy)
     node_opts = [use_compression: handle.use_compression, attempt: 0]
     request = StreamingCommand.build_request(command, ctx)
 
@@ -193,4 +193,14 @@ defmodule Aerospike.Runtime.StreamingExecutor do
   defp max_concurrency(%{max_concurrent_nodes: n}, fallback) when is_integer(n) and n > 0 do
     min(n, fallback)
   end
+
+  defp transport_timeout(%{timeout: total, socket_timeout: socket})
+       when is_integer(total) and total > 0 and is_integer(socket) and socket > total do
+    total
+  end
+
+  defp transport_timeout(%{socket_timeout: timeout}) when is_integer(timeout) and timeout > 0,
+    do: timeout
+
+  defp transport_timeout(%{timeout: timeout}), do: timeout
 end

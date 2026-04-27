@@ -51,6 +51,7 @@ defmodule Aerospike.MixProject do
       aliases: aliases(),
       test_coverage: [summary: [threshold: 78]],
       dialyzer: [
+        ignore_warnings: ".dialyzer_ignore.exs",
         plt_add_apps: [:ex_unit, :ssl, :public_key],
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
       ]
@@ -100,12 +101,6 @@ defmodule Aerospike.MixProject do
         {"guides/transactions.md", [title: "Transactions"]},
         {"guides/telemetry-and-runtime-metrics.md", [title: "Telemetry And Runtime Metrics"]}
       ],
-      nest_modules_by_prefix: [
-        Aerospike.Batch,
-        Aerospike.Geo,
-        Aerospike.Op,
-        Aerospike.Transport
-      ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/
       ],
@@ -127,7 +122,11 @@ defmodule Aerospike.MixProject do
           Aerospike.Op.List,
           Aerospike.Op.Map,
           Aerospike.Ctx,
-          Aerospike.Exp
+          Aerospike.Exp,
+          Aerospike.Exp.Bit,
+          Aerospike.Exp.HLL,
+          Aerospike.Exp.List,
+          Aerospike.Exp.Map
         ],
         Batch: [
           Aerospike.Batch,
@@ -178,6 +177,7 @@ defmodule Aerospike.MixProject do
   defp preferred_cli_env do
     [
       bench: :dev,
+      dialyzer: :test,
       docs: :dev,
       "test.unit": :test,
       "test.coverage": :test,
@@ -226,6 +226,7 @@ defmodule Aerospike.MixProject do
         "format --check-formatted",
         "compile --warnings-as-errors",
         "credo --strict",
+        "dialyzer",
         "test.unit",
         "test.coverage"
       ]

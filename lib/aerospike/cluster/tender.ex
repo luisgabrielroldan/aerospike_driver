@@ -112,6 +112,15 @@ defmodule Aerospike.Cluster.Tender do
       seed list in `:seeds` is dialled verbatim — and is static for the
       lifetime of the cluster, matching Go
       `ClientPolicy.UseServicesAlternate`.
+    * `:auth_mode` — `:internal` (default), `:external`, or `:pki`.
+    * `:cluster_name` — expected server `cluster-name` value. When set,
+      seed and peer nodes whose info response does not match are rejected.
+    * `:login_timeout_ms` — login/authenticate read deadline in
+      milliseconds.
+    * `:seed_only_cluster` — when `true`, the Tender connects only to
+      configured seed addresses and skips peer discovery.
+    * `:application_id` — client application identity sent through the
+      server user-agent info command when the connected server supports it.
     * `:user` / `:password` — cluster-wide session-login credentials.
       When both are present, the Tender performs a full password login
       on every fresh info socket it opens (seed bootstrap and peer
@@ -142,6 +151,12 @@ defmodule Aerospike.Cluster.Tender do
           | {:replica_policy, :master | :sequence}
           | {:use_compression, boolean()}
           | {:use_services_alternate, boolean()}
+          | {:auth_mode, :internal | :external | :pki}
+          | {:cluster_name, String.t()}
+          | {:login_timeout_ms, pos_integer()}
+          | {:min_connections_per_node, non_neg_integer()}
+          | {:seed_only_cluster, boolean()}
+          | {:application_id, String.t()}
           | {:user, String.t()}
           | {:password, String.t()}
 
@@ -252,6 +267,8 @@ defmodule Aerospike.Cluster.Tender do
       `cluster_use_compression and node_supports_compression?` at
       handle time, so a single cluster flag composes with the node's
       live `features` set without per-call policy state.
+    * `:supports_compression` — whether the node advertised the compression
+      feature, independent of the cluster default.
     * `:host`, `:port`, and `:connect_opts` — direct-connect details the
       stream path uses to open a dedicated socket for long-lived reads.
   """
@@ -263,6 +280,7 @@ defmodule Aerospike.Cluster.Tender do
             max_concurrent_ops_per_node: pos_integer()
           },
           use_compression: boolean(),
+          supports_compression: boolean(),
           host: String.t(),
           port: :inet.port_number(),
           connect_opts: keyword()
@@ -399,7 +417,7 @@ defmodule Aerospike.Cluster.Tender do
     state = %{
       name: name,
       transport: transport,
-      connect_opts: Keyword.get(opts, :connect_opts, []),
+      connect_opts: normalized_connect_opts(opts),
       seeds: seeds,
       namespaces: namespaces,
       failure_threshold: Keyword.get(opts, :failure_threshold, @default_failure_threshold),
@@ -407,12 +425,17 @@ defmodule Aerospike.Cluster.Tender do
       tend_trigger: Keyword.get(opts, :tend_trigger, :timer),
       node_supervisor: Keyword.get(opts, :node_supervisor),
       pool_size: pool_size,
+      min_connections_per_node: Keyword.get(opts, :min_connections_per_node, pool_size),
       idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms),
       max_idle_pings: Keyword.get(opts, :max_idle_pings),
       breaker_opts: breaker_opts,
       retry_opts: retry_opts,
       use_compression: Keyword.get(opts, :use_compression, false),
       use_services_alternate: Keyword.get(opts, :use_services_alternate, false),
+      auth_mode: Keyword.get(opts, :auth_mode, :internal),
+      cluster_name: Keyword.get(opts, :cluster_name),
+      seed_only_cluster: Keyword.get(opts, :seed_only_cluster, false),
+      application_id: Keyword.get(opts, :application_id),
       user: user,
       password: password,
       tables: tables,
@@ -500,6 +523,7 @@ defmodule Aerospike.Cluster.Tender do
           counters: counters,
           breaker: state.breaker_opts,
           use_compression: state.use_compression and MapSet.member?(features, :compression),
+          supports_compression: MapSet.member?(features, :compression),
           host: host,
           port: port,
           connect_opts: Keyword.put(pool_connect_opts(state, session), :node_name, node_name)
@@ -714,7 +738,26 @@ defmodule Aerospike.Cluster.Tender do
     end)
   end
 
-  defp auth_opts(state), do: [user: state.user, password: state.password]
+  defp normalized_connect_opts(opts) do
+    opts
+    |> Keyword.get(:connect_opts, [])
+    |> put_connect_opt(:login_timeout_ms, Keyword.get(opts, :login_timeout_ms))
+    |> put_connect_opt(:auth_mode, Keyword.get(opts, :auth_mode))
+  end
+
+  defp put_connect_opt(connect_opts, _key, nil), do: connect_opts
+  defp put_connect_opt(connect_opts, key, value), do: Keyword.put(connect_opts, key, value)
+
+  defp auth_opts(state) do
+    [
+      user: state.user,
+      password: state.password,
+      auth_mode: state.auth_mode,
+      login_timeout_ms: Keyword.get(state.connect_opts, :login_timeout_ms),
+      cluster_name: state.cluster_name,
+      application_id: state.application_id
+    ]
+  end
 
   defp register_new_node(state, %ClusterNode{} = node, reason)
        when reason in [:bootstrap, :peer_discovery] do
@@ -1024,6 +1067,8 @@ defmodule Aerospike.Cluster.Tender do
   # lead node masks real topology. Nodes flipped to `:inactive` earlier in
   # the same cycle are skipped; their grace-cycle recovery probe happens
   # in `refresh_nodes/1` of the *next* cycle.
+  defp discover_peers(%{seed_only_cluster: true} = state), do: state
+
   defp discover_peers(state) do
     ordered = state.nodes |> sorted_entries() |> Enum.filter(&(&1.status == :active))
 
@@ -1091,22 +1136,31 @@ defmodule Aerospike.Cluster.Tender do
   defp login_and_register_peer(state, name, host, port, conn) do
     case ClusterNode.login(state.transport, conn, auth_opts(state)) do
       {:ok, session} ->
-        features = ClusterNode.fetch_features(state.transport, conn, name)
+        with {:ok, features} <-
+               ClusterNode.fetch_peer_features(state.transport, conn, name, auth_opts(state)) do
+          peer_node = %ClusterNode{
+            name: name,
+            host: host,
+            port: port,
+            conn: conn,
+            session: session,
+            features: features,
+            generation_seen: nil,
+            applied_gen: nil,
+            cluster_stable: nil,
+            peers_generation_seen: nil
+          }
 
-        peer_node = %ClusterNode{
-          name: name,
-          host: host,
-          port: port,
-          conn: conn,
-          session: session,
-          features: features,
-          generation_seen: nil,
-          applied_gen: nil,
-          cluster_stable: nil,
-          peers_generation_seen: nil
-        }
+          register_new_node(state, peer_node, :peer_discovery)
+        else
+          {:error, %Error{} = err} ->
+            Logger.warning(
+              "Aerospike.Cluster.Tender: peer #{name} at #{host}:#{port} validation failed: #{err.message}"
+            )
 
-        register_new_node(state, peer_node, :peer_discovery)
+            ClusterNode.close(state.transport, conn)
+            state
+        end
 
       {:error, %Error{} = err} ->
         Logger.warning(
@@ -1239,12 +1293,12 @@ defmodule Aerospike.Cluster.Tender do
   # Starts a NodePool for `node_name` under the configured NodeSupervisor.
   # Returns `{:ok, pool_pid}` on success. Returns `:error` on pool-start
   # failure: a warning is logged, the node is skipped for this cycle, and
-  # the caller is expected to *not* register the node (per the Phase
-  # decision: pool-start failure never bumps the per-node failure counter
-  # because the node is never added to `state.nodes`). When the Tender
-  # runs without a `:node_supervisor` (cluster-state-only mode), this
-  # returns a sentinel `{:ok, nil}` so bootstrap/peer discovery still
-  # register the node — that path is used by the invariant tests.
+  # the caller is expected to *not* register the node. Pool-start failure
+  # never bumps the per-node failure counter because the node is never added
+  # to `state.nodes`. When the Tender runs without a `:node_supervisor`
+  # (cluster-state-only mode), this returns a sentinel `{:ok, nil}` so
+  # bootstrap/peer discovery still register the node — that path is used by
+  # the invariant tests.
   defp allocate_counters(%{node_supervisor: nil}), do: nil
   defp allocate_counters(_state), do: NodeCounters.new()
 
@@ -1259,6 +1313,7 @@ defmodule Aerospike.Cluster.Tender do
         port: node.port,
         connect_opts: pool_connect_opts(state, node.session),
         pool_size: state.pool_size,
+        min_connections_per_node: state.min_connections_per_node,
         counters: counters,
         cluster_name: state.name,
         features: node.features
@@ -1291,10 +1346,22 @@ defmodule Aerospike.Cluster.Tender do
   #     so workers run the cheap AUTHENTICATE path; the password stays in
   #     case the server rejects the token with `:expired_session` and the
   #     worker needs to fall back to a full login.
+  defp pool_connect_opts(%{auth_mode: :pki} = state, nil) do
+    Keyword.put(state.connect_opts, :auth_mode, :pki)
+  end
+
+  defp pool_connect_opts(%{auth_mode: :pki} = state, {token, _expires_at})
+       when is_binary(token) do
+    state.connect_opts
+    |> Keyword.put(:auth_mode, :pki)
+    |> Keyword.put(:session_token, token)
+  end
+
   defp pool_connect_opts(%{user: nil, password: nil} = state, _session), do: state.connect_opts
 
   defp pool_connect_opts(%{user: user, password: password} = state, nil) do
     state.connect_opts
+    |> Keyword.put(:auth_mode, state.auth_mode)
     |> Keyword.put(:user, user)
     |> Keyword.put(:password, password)
   end
@@ -1302,6 +1369,7 @@ defmodule Aerospike.Cluster.Tender do
   defp pool_connect_opts(%{user: user, password: password} = state, {token, _expires_at})
        when is_binary(token) do
     state.connect_opts
+    |> Keyword.put(:auth_mode, state.auth_mode)
     |> Keyword.put(:user, user)
     |> Keyword.put(:password, password)
     |> Keyword.put(:session_token, token)

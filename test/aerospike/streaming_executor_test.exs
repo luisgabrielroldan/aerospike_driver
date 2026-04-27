@@ -76,6 +76,22 @@ defmodule Aerospike.Runtime.StreamingExecutorTest do
     assert TransportStub.close_count() == 1
   end
 
+  test "shared executor uses socket timeout when it is distinct from total timeout" do
+    TransportStub.put_script(%{stream_reads: [:done]})
+
+    assert {:ok, []} =
+             StreamingExecutor.run_command(test_command(), runtime(), %{
+               ctx()
+               | node_request: %{
+                   node_request()
+                   | policy: %{node_request().policy | timeout: 1_000, socket_timeout: 125}
+                 }
+             })
+
+    assert {:conn, "wire:A1", 125, [use_compression: true, attempt: 0]} =
+             TransportStub.stream_open_call()
+  end
+
   test "breaker refusal stops before transport connect" do
     TransportStub.put_script(%{})
 
@@ -114,9 +130,14 @@ defmodule Aerospike.Runtime.StreamingExecutorTest do
         ],
         %Policy.ScanQueryRuntime{
           timeout: 50,
+          socket_timeout: 0,
           task_timeout: 100,
           pool_checkout_timeout: 25,
           max_concurrent_nodes: 1,
+          retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence},
+          records_per_second: nil,
+          include_bin_data: true,
+          expected_duration: :long,
           task_id: 7,
           cursor: nil
         },
@@ -173,9 +194,14 @@ defmodule Aerospike.Runtime.StreamingExecutorTest do
       node_partitions: :unused,
       policy: %Policy.ScanQueryRuntime{
         timeout: 50,
+        socket_timeout: 0,
         task_timeout: 100,
         pool_checkout_timeout: 25,
         max_concurrent_nodes: 0,
+        retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence},
+        records_per_second: nil,
+        include_bin_data: true,
+        expected_duration: :long,
         task_id: 7,
         cursor: nil
       }

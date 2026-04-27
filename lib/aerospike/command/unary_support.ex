@@ -80,6 +80,62 @@ defmodule Aerospike.Command.UnarySupport do
     end
   end
 
+  @spec read_header_opts(Policy.UnaryRead.t(), boolean()) :: keyword()
+  def read_header_opts(%Policy.UnaryRead{} = policy, use_compression) do
+    [
+      timeout: policy.timeout,
+      read_mode_ap: policy.read_mode_ap,
+      read_mode_sc: policy.read_mode_sc,
+      read_touch_ttl_percent: policy.read_touch_ttl_percent,
+      send_key: policy.send_key,
+      use_compression: use_compression
+    ]
+  end
+
+  @spec write_header_opts(Policy.UnaryWrite.t(), boolean()) :: keyword()
+  def write_header_opts(%Policy.UnaryWrite{} = policy, use_compression) do
+    [
+      timeout: policy.timeout,
+      ttl: policy.ttl,
+      generation: policy.generation,
+      generation_policy: policy.generation_policy,
+      exists: policy.exists,
+      commit_level: policy.commit_level,
+      durable_delete: policy.durable_delete,
+      send_key: policy.send_key,
+      use_compression: use_compression
+    ]
+  end
+
+  @spec operate_header_opts(Policy.UnaryWrite.t(), boolean(), boolean(), boolean()) :: keyword()
+  def operate_header_opts(
+        %Policy.UnaryWrite{} = policy,
+        has_write?,
+        respond_all?,
+        use_compression
+      ) do
+    base =
+      [
+        timeout: policy.timeout,
+        generation: policy.generation,
+        generation_policy: policy.generation_policy,
+        exists: policy.exists,
+        commit_level: policy.commit_level,
+        durable_delete: has_write? and policy.durable_delete,
+        respond_all_ops: respond_all? or policy.respond_per_op,
+        send_key: policy.send_key,
+        read_mode_ap: policy.read_mode_ap,
+        read_mode_sc: policy.read_mode_sc,
+        use_compression: use_compression
+      ]
+
+    if has_write? do
+      Keyword.put(base, :ttl, policy.ttl)
+    else
+      Keyword.put(base, :read_touch_ttl_percent, policy.read_touch_ttl_percent)
+    end
+  end
+
   defp runtime_ctx(tender) do
     %{
       tender: tender,

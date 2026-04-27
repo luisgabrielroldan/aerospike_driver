@@ -65,7 +65,11 @@ defmodule Aerospike.Transport.Tcp do
       handle. `nil` (default) when the caller does not know the node
       name yet — e.g. seed bootstrap and peer-discovery probes open
       sockets before the `node` info key has been read.
-    * `:user` / `:password` — internal-auth session login credentials.
+    * `:auth_mode` — `:internal` (default), `:external`, or `:pki`.
+      External auth includes the clear password in the login frame and
+      should only be used over TLS. PKI sends an empty login frame and
+      relies on the TLS client certificate.
+    * `:user` / `:password` — internal/external session login credentials.
       When both are present, `connect/3` runs the admin-protocol login
       handshake immediately after the TCP handshake and returns the
       authenticated socket. On a server with security disabled the
@@ -226,14 +230,31 @@ defmodule Aerospike.Transport.Tcp do
   # Any other non-zero result closes the socket and surfaces as a typed
   # `%Aerospike.Error{}`.
   defp maybe_login(conn, opts, timeout_ms, host, port) do
+    auth_mode = Keyword.get(opts, :auth_mode, :internal)
     user = Keyword.get(opts, :user)
     password = Keyword.get(opts, :password)
     session_token = Keyword.get(opts, :session_token)
 
     cond do
+      auth_mode == :pki and is_binary(session_token) ->
+        authenticate_session_with_fallback(
+          conn,
+          auth_mode,
+          user,
+          password,
+          session_token,
+          timeout_ms,
+          host,
+          port
+        )
+
+      auth_mode == :pki ->
+        login_pki(conn, timeout_ms, host, port)
+
       is_binary(user) and is_binary(session_token) ->
         authenticate_session_with_fallback(
           conn,
+          auth_mode,
           user,
           password,
           session_token,
@@ -243,7 +264,7 @@ defmodule Aerospike.Transport.Tcp do
         )
 
       is_binary(user) and is_binary(password) ->
-        login_internal(conn, user, password, timeout_ms, host, port)
+        login_password(conn, auth_mode, user, password, timeout_ms, host, port)
 
       true ->
         {:ok, conn}
@@ -256,25 +277,51 @@ defmodule Aerospike.Transport.Tcp do
   # pool worker recovers from an expired cached token without bouncing
   # the socket. On any other failure the socket is closed and the error
   # surfaces to the caller.
-  defp authenticate_session_with_fallback(conn, user, password, token, timeout_ms, host, port) do
-    frame = Login.encode_authenticate(user, token)
+  defp authenticate_session_with_fallback(
+         conn,
+         auth_mode,
+         user,
+         password,
+         token,
+         timeout_ms,
+         host,
+         port
+       ) do
+    frame = authenticate_frame(auth_mode, user, token)
 
     case run_login_rpc(conn, frame, timeout_ms) do
       {:ok, _reply} ->
         {:ok, conn}
 
       {:error, %Error{code: :expired_session}} when is_binary(password) ->
-        login_internal(conn, user, password, timeout_ms, host, port)
+        login_password(conn, auth_mode, user, password, timeout_ms, host, port)
 
       {:error, %Error{} = err} ->
         close_and_fail(conn, err, host, port)
     end
   end
 
-  defp login_internal(conn, user, password, timeout_ms, host, port) do
-    hashed = Login.hash_password(password)
-    frame = Login.encode_login_internal(user, hashed)
+  defp authenticate_frame(:pki, _user, token), do: Login.encode_authenticate_pki(token)
+  defp authenticate_frame(_auth_mode, user, token), do: Login.encode_authenticate(user, token)
 
+  defp login_password(conn, auth_mode, user, password, timeout_ms, host, port) do
+    hashed = Login.hash_password(password)
+    frame = password_login_frame(auth_mode, user, hashed, password)
+
+    run_login_frame(conn, frame, timeout_ms, host, port)
+  end
+
+  defp password_login_frame(:external, user, hashed, password),
+    do: Login.encode_login_external(user, hashed, password)
+
+  defp password_login_frame(_auth_mode, user, hashed, _password),
+    do: Login.encode_login_internal(user, hashed)
+
+  defp login_pki(conn, timeout_ms, host, port) do
+    run_login_frame(conn, Login.encode_login_pki(), timeout_ms, host, port)
+  end
+
+  defp run_login_frame(conn, frame, timeout_ms, host, port) do
     case run_login_rpc(conn, frame, timeout_ms) do
       {:ok, :ok_no_token} ->
         {:ok, conn}
@@ -301,20 +348,28 @@ defmodule Aerospike.Transport.Tcp do
           {:ok, NodeTransport.login_reply()} | {:error, Error.t()}
   def login(%__MODULE__{} = conn, opts) when is_list(opts) do
     timeout_ms = Keyword.get(opts, :login_timeout_ms, conn.info_timeout)
+    auth_mode = Keyword.get(opts, :auth_mode, :internal)
 
     frame =
       case Keyword.get(opts, :session_token) do
         nil ->
-          user = Keyword.fetch!(opts, :user)
-          password = Keyword.fetch!(opts, :password)
-          Login.encode_login_internal(user, Login.hash_password(password))
+          login_frame(auth_mode, opts)
 
         token when is_binary(token) ->
-          user = Keyword.fetch!(opts, :user)
-          Login.encode_authenticate(user, token)
+          authenticate_frame(auth_mode, Keyword.get(opts, :user), token)
       end
 
     run_login_rpc(conn, frame, timeout_ms)
+  end
+
+  defp login_frame(:pki, _opts), do: Login.encode_login_pki()
+
+  defp login_frame(auth_mode, opts) do
+    user = Keyword.fetch!(opts, :user)
+    password = Keyword.fetch!(opts, :password)
+    hashed = Login.hash_password(password)
+
+    password_login_frame(auth_mode, user, hashed, password)
   end
 
   # Sends the login/authenticate frame, reads the 24-byte reply header and

@@ -14,7 +14,7 @@ help:
 	@printf '%s\n' \
 		'test                 Run tests for PROFILE=unit|ce|cluster|enterprise|live|all (default: unit)' \
 		'coverage             Run coverage for PROFILE=unit|live|all (default: unit)' \
-		'validate             Run format, compile, credo, unit, and coverage checks' \
+		'validate             Run format, compile, credo, dialyzer, unit, and coverage checks' \
 		'deps                 Start docker dependencies for PROFILE=ce|cluster|enterprise|all (default: ce)' \
 		'test-unit            Compatibility shim for `make test PROFILE=unit`' \
 		'test-coverage        Compatibility shim for `make coverage PROFILE=unit`' \

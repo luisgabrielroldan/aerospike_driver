@@ -57,7 +57,14 @@ defmodule Aerospike.Cluster.Node do
       either is `nil`, `login/4` returns `{:ok, nil}` and no auth traffic
       is sent. Matches the Tender's `validate_auth_pair!/2` contract.
   """
-  @type auth_opts :: [user: String.t() | nil, password: String.t() | nil]
+  @type auth_opts :: [
+          user: String.t() | nil,
+          password: String.t() | nil,
+          auth_mode: :internal | :external | :pki,
+          login_timeout_ms: pos_integer() | nil,
+          cluster_name: String.t() | nil,
+          application_id: String.t() | nil
+        ]
 
   @typedoc """
   Observations produced by `refresh/2` in addition to the updated struct:
@@ -103,7 +110,9 @@ defmodule Aerospike.Cluster.Node do
   def seed(transport, host, port, connect_opts, auth_opts) do
     with {:ok, conn} <- transport.connect(host, port, connect_opts),
          {:ok, session} <- login(transport, conn, auth_opts),
-         {:ok, %{"node" => node_name} = info} <- transport.info(conn, ["node", "features"]) do
+         {:ok, %{"node" => node_name} = info} <- transport.info(conn, seed_info_keys(auth_opts)),
+         :ok <- validate_cluster_name(node_name, info, Keyword.get(auth_opts, :cluster_name)),
+         :ok <- maybe_send_user_agent(transport, conn, node_name, info, auth_opts) do
       features = parse_features(node_name, info)
 
       node = %__MODULE__{
@@ -121,6 +130,12 @@ defmodule Aerospike.Cluster.Node do
 
       {:ok, node}
     else
+      {:error, :cluster_name_mismatch} ->
+        {:error,
+         Error.from_result_code(:invalid_node,
+           message: "discovered node does not match configured cluster name"
+         )}
+
       {:error, %Error{}} = err ->
         err
 
@@ -145,18 +160,25 @@ defmodule Aerospike.Cluster.Node do
   """
   @spec login(module(), term(), auth_opts()) :: {:ok, session()} | {:error, Error.t()}
   def login(transport, conn, opts) do
+    auth_mode = Keyword.get(opts, :auth_mode, :internal)
     user = Keyword.get(opts, :user)
     password = Keyword.get(opts, :password)
 
-    if is_nil(user) or is_nil(password) do
-      {:ok, nil}
+    if auth_mode == :pki do
+      do_login(transport, conn, auth_mode, user, password)
     else
-      do_login(transport, conn, user, password)
+      if is_nil(user) or is_nil(password) do
+        {:ok, nil}
+      else
+        do_login(transport, conn, auth_mode, user, password)
+      end
     end
   end
 
-  defp do_login(transport, conn, user, password) do
-    case transport.login(conn, user: user, password: password) do
+  defp do_login(transport, conn, auth_mode, user, password) do
+    opts = [auth_mode: auth_mode, user: user, password: password] |> compact_nil_opts()
+
+    case transport.login(conn, opts) do
       {:ok, {:session, token, ttl}} ->
         {:ok, {token, session_expires_at(ttl)}}
 
@@ -168,6 +190,98 @@ defmodule Aerospike.Cluster.Node do
 
       {:error, %Error{}} = err ->
         err
+    end
+  end
+
+  defp compact_nil_opts(opts), do: Enum.reject(opts, fn {_key, value} -> is_nil(value) end)
+
+  defp seed_info_keys(auth_opts) do
+    keys = ["node", "features"]
+
+    keys
+    |> maybe_add_info_key("cluster-name", Keyword.get(auth_opts, :cluster_name))
+    |> maybe_add_info_key("build", Keyword.get(auth_opts, :application_id))
+  end
+
+  defp maybe_add_info_key(keys, _key, nil), do: keys
+  defp maybe_add_info_key(keys, key, _value), do: keys ++ [key]
+
+  defp validate_cluster_name(_node_name, _info, nil), do: :ok
+
+  defp validate_cluster_name(_node_name, %{"cluster-name" => expected}, expected), do: :ok
+
+  defp validate_cluster_name(node_name, info, expected) do
+    Logger.warning(fn ->
+      "Aerospike.Cluster.Node: #{node_name} rejected because cluster-name " <>
+        "#{inspect(Map.get(info, "cluster-name"))} does not match #{inspect(expected)}"
+    end)
+
+    {:error, :cluster_name_mismatch}
+  end
+
+  def fetch_peer_features(transport, conn, node_name, opts) do
+    keys =
+      ["features"]
+      |> maybe_add_info_key("cluster-name", Keyword.get(opts, :cluster_name))
+      |> maybe_add_info_key("build", Keyword.get(opts, :application_id))
+
+    case transport.info(conn, keys) do
+      {:ok, info} ->
+        with :ok <- validate_cluster_name(node_name, info, Keyword.get(opts, :cluster_name)),
+             :ok <- maybe_send_user_agent(transport, conn, node_name, info, opts) do
+          {:ok, parse_features(node_name, info)}
+        else
+          {:error, :cluster_name_mismatch} ->
+            {:error,
+             Error.from_result_code(:invalid_node,
+               message: "discovered node does not match configured cluster name"
+             )}
+        end
+
+      {:error, %Error{} = err} ->
+        Logger.debug(fn ->
+          "Aerospike.Cluster.Node: peer #{node_name} features probe failed: #{err.message}"
+        end)
+
+        {:ok, MapSet.new()}
+    end
+  end
+
+  defp maybe_send_user_agent(transport, conn, _node_name, %{"build" => build}, opts) do
+    app_id = Keyword.get(opts, :application_id)
+
+    if is_binary(app_id) and server_supports_user_agent?(build) do
+      command = "user-agent-set:value=" <> Base.encode64(user_agent(app_id))
+
+      case transport.info(conn, [command]) do
+        {:ok, _} -> :ok
+        {:error, %Error{}} = err -> {:error, err}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp maybe_send_user_agent(_transport, _conn, _node_name, _info, _opts), do: :ok
+
+  defp server_supports_user_agent?(build) when is_binary(build) do
+    case Regex.run(~r/^v?(\d+)\.(\d+)/, build) do
+      [_, major, minor] ->
+        {String.to_integer(major), String.to_integer(minor)} >= {8, 1}
+
+      _ ->
+        false
+    end
+  end
+
+  defp server_supports_user_agent?(_build), do: false
+
+  defp user_agent(app_id), do: "1,elixir-#{driver_version()},#{app_id}"
+
+  defp driver_version do
+    case Application.spec(:aerospike_driver, :vsn) do
+      nil -> "unknown"
+      vsn -> List.to_string(vsn)
     end
   end
 

@@ -15,12 +15,17 @@ defmodule Aerospike.Command.Put do
 
   @type option ::
           {:timeout, non_neg_integer()}
+          | {:socket_timeout, non_neg_integer()}
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
-          | {:ttl, non_neg_integer()}
+          | {:ttl, non_neg_integer() | :default | :never_expire | :dont_update}
           | {:generation, non_neg_integer()}
+          | {:generation_policy, :none | :expect_equal | :expect_gt}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:commit_level, :all | :master}
           | {:durable_delete, boolean()}
+          | {:send_key, boolean()}
+          | {:use_compression, boolean()}
           | {:exists, :update | :update_only | :create_or_replace | :replace_only | :create_only}
 
   @type result ::
@@ -65,11 +70,8 @@ defmodule Aerospike.Command.Put do
        txn: txn,
        opts: opts,
        operations: operations,
-       ttl: policy.ttl,
-       generation: policy.generation,
-       filter: policy.filter,
-       exists: policy.exists,
-       durable_delete: policy.durable_delete
+       policy: policy,
+       filter: policy.filter
      }}
   end
 
@@ -107,20 +109,14 @@ defmodule Aerospike.Command.Put do
          conn: conn,
          opts: opts,
          operations: operations,
-         ttl: ttl,
-         generation: generation,
-         filter: filter,
-         exists: exists,
-         durable_delete: durable_delete
+         policy: policy,
+         use_compression: use_compression,
+         filter: filter
        }) do
     key
-    |> AsmMsg.key_command(operations,
-      write: true,
-      send_key: true,
-      ttl: ttl,
-      generation: generation,
-      exists: exists,
-      durable_delete: durable_delete
+    |> AsmMsg.key_command(
+      operations,
+      [write: true] ++ UnarySupport.write_header_opts(policy, use_compression)
     )
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)

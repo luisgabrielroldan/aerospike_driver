@@ -141,6 +141,35 @@ defmodule Aerospike.Integration.WriteFamilyTest do
     assert {:ok, %Record{bins: %{"value" => 1}}} = Aerospike.get(cluster, create_key)
   end
 
+  test "expanded unary read and write policies are accepted by the server", %{cluster: cluster} do
+    user_key = IntegrationSupport.unique_name("spike_unary_policy")
+    key = Key.new(@namespace, @set, user_key)
+
+    assert {:ok, %{generation: generation}} = Aerospike.put(cluster, key, %{"count" => 1})
+
+    assert {:error, %Error{code: :generation_error}} =
+             Aerospike.put(cluster, key, %{"count" => 2},
+               generation: generation + 1,
+               generation_policy: :expect_equal
+             )
+
+    assert {:ok, _metadata} =
+             Aerospike.put(cluster, key, %{"count" => 2},
+               generation: generation,
+               generation_policy: :expect_equal,
+               commit_level: :master,
+               send_key: false
+             )
+
+    assert {:ok, %Record{bins: %{"count" => 2}}} =
+             Aerospike.get(cluster, key, :all,
+               read_mode_ap: :one,
+               read_mode_sc: :session,
+               read_touch_ttl_percent: -1,
+               send_key: true
+             )
+  end
+
   test "put round-trips direct list and map bin values", %{cluster: cluster} do
     user_key = IntegrationSupport.unique_name("spike_write_collections")
     key = Key.new(@namespace, @set, user_key)

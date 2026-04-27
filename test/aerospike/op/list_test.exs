@@ -15,6 +15,13 @@ defmodule Aerospike.Op.ListTest do
   end
 
   test "return type helpers expose list selector constants" do
+    assert ListOp.order_unordered() == 0
+    assert ListOp.order_ordered() == 1
+    assert ListOp.write_default() == 0
+    assert ListOp.write_add_unique() == 1
+    assert ListOp.write_insert_bounded() == 2
+    assert ListOp.write_no_fail() == 4
+    assert ListOp.write_partial() == 8
     assert ListOp.return_none() == 0
     assert ListOp.return_index() == 1
     assert ListOp.return_reverse_index() == 2
@@ -23,11 +30,16 @@ defmodule Aerospike.Op.ListTest do
     assert ListOp.return_count() == 5
     assert ListOp.return_value() == 7
     assert ListOp.return_exists() == 13
+    assert ListOp.return_inverted() == 0x10000
   end
 
   test "modify builders encode reference op codes and payloads" do
     cases = [
       {ListOp.set_type("items", 1, 0), [0, 1, 0]},
+      {ListOp.create("items", ListOp.order_ordered()), [0, 1]},
+      {ListOp.create("items", ListOp.order_ordered(), persist_index: true), [0, 0x11]},
+      {ListOp.set_order("items", ListOp.order_ordered()), [0, 1]},
+      {ListOp.set_order("items", ListOp.order_ordered(), persist_index: true), [0, 0x11]},
       {ListOp.append("items", "a"), [1, "a"]},
       {ListOp.append("items", "a", policy: %{order: 1, flags: 2}), [1, "a", 1, 2]},
       {ListOp.append_items("items", ["a", "b"]), [2, ["a", "b"]]},
@@ -39,8 +51,10 @@ defmodule Aerospike.Op.ListTest do
        [4, 0, ["a"], 1, 2]},
       {ListOp.pop("items", -1), [5, -1]},
       {ListOp.pop_range("items", 0, 2), [6, 0, 2]},
+      {ListOp.pop_range_from("items", 1), [6, 1]},
       {ListOp.remove("items", 0), [7, 0]},
       {ListOp.remove_range("items", 0, 2), [8, 0, 2]},
+      {ListOp.remove_range_from("items", 1), [8, 1]},
       {ListOp.set("items", 0, "a"), [9, 0, "a"]},
       {ListOp.set("items", 0, "a", policy: %{order: 1, flags: 2}), [9, 0, "a", 1, 2]},
       {ListOp.trim("items", 0, 2), [10, 0, 2]},
@@ -132,5 +146,25 @@ defmodule Aerospike.Op.ListTest do
              [0x22, "outer", 0x10, 0],
              [1, "a"]
            ]
+  end
+
+  test "create builder applies order flags to the final context step" do
+    ctx = [Ctx.map_key("outer"), Ctx.list_index(2)]
+    op = ListOp.create("items", ListOp.order_unordered(), ctx: ctx, pad: true)
+
+    assert payload(op) == [
+             255,
+             [0x22, "outer", 0x90, 2],
+             [0, 0]
+           ]
+  end
+
+  test "ctx option supports create and all-children context steps" do
+    ctx = [Ctx.map_key("outer"), Ctx.list_index_create(0, :ordered), Ctx.all_children()]
+    op = ListOp.size("items", ctx: ctx)
+
+    assert [255, encoded_ctx, [16]] = payload(op)
+    assert [0x22, "outer", 0xD0, 0, 0x04, expression] = encoded_ctx
+    assert is_binary(expression)
   end
 end

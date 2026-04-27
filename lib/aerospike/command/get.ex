@@ -17,10 +17,16 @@ defmodule Aerospike.Command.Get do
 
   @type option ::
           {:timeout, non_neg_integer()}
+          | {:socket_timeout, non_neg_integer()}
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:replica_policy, :master | :sequence}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:read_mode_ap, :one | :all}
+          | {:read_mode_sc, :session | :linearize | :allow_replica | :allow_unavailable}
+          | {:read_touch_ttl_percent, -1 | 0..100}
+          | {:send_key, boolean()}
+          | {:use_compression, boolean()}
 
   @doc """
   Reads `key` from the cluster identified by `tender`.
@@ -83,6 +89,7 @@ defmodule Aerospike.Command.Get do
           opts: opts,
           mode: mode,
           operations: operations,
+          policy: policy,
           filter: policy.filter
         }
       )
@@ -128,13 +135,18 @@ defmodule Aerospike.Command.Get do
          opts: opts,
          mode: mode,
          operations: operations,
+         policy: policy,
+         use_compression: use_compression,
          filter: filter
        }) do
     key
-    |> AsmMsg.key_command(operations,
-      read: true,
-      read_all: mode == :all,
-      read_header: mode == :header
+    |> AsmMsg.key_command(
+      operations,
+      [
+        read: true,
+        read_all: mode == :all,
+        read_header: mode == :header
+      ] ++ UnarySupport.read_header_opts(policy, use_compression)
     )
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, false)

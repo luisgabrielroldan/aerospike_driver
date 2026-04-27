@@ -26,12 +26,21 @@ defmodule Aerospike.Command.Operate do
 
   @type option ::
           {:timeout, non_neg_integer()}
+          | {:socket_timeout, non_neg_integer()}
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
-          | {:ttl, non_neg_integer()}
+          | {:ttl, non_neg_integer() | :default | :never_expire | :dont_update}
           | {:generation, non_neg_integer()}
+          | {:generation_policy, :none | :expect_equal | :expect_gt}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:read_mode_ap, :one | :all}
+          | {:read_mode_sc, :session | :linearize | :allow_replica | :allow_unavailable}
+          | {:read_touch_ttl_percent, -1 | 0..100}
+          | {:commit_level, :all | :master}
           | {:durable_delete, boolean()}
+          | {:respond_per_op, boolean()}
+          | {:send_key, boolean()}
+          | {:use_compression, boolean()}
           | {:exists, :update | :update_only | :create_or_replace | :replace_only | :create_only}
 
   @type result ::
@@ -72,11 +81,8 @@ defmodule Aerospike.Command.Operate do
       kind: if(flags.has_write?, do: :write, else: :read),
       operations: built_operations,
       flags: flags,
-      ttl: policy.ttl,
-      generation: policy.generation,
-      filter: policy.filter,
-      exists: policy.exists,
-      durable_delete: policy.durable_delete
+      policy: policy,
+      filter: policy.filter
     }
   end
 
@@ -200,23 +206,18 @@ defmodule Aerospike.Command.Operate do
            read_header?: read_header?,
            respond_all?: respond_all?
          },
-         ttl: ttl,
-         generation: generation,
-         filter: filter,
-         exists: exists,
-         durable_delete: durable_delete
+         policy: policy,
+         use_compression: use_compression,
+         filter: filter
        }) do
     key
-    |> AsmMsg.key_command(operations,
-      read: read_bin? or read_header?,
-      read_header: read_header?,
-      write: has_write?,
-      send_key: true,
-      respond_all_ops: respond_all?,
-      ttl: ttl,
-      generation: generation,
-      exists: exists,
-      durable_delete: has_write? and durable_delete
+    |> AsmMsg.key_command(
+      operations,
+      [
+        read: read_bin? or read_header?,
+        read_header: read_header?,
+        write: has_write?
+      ] ++ UnarySupport.operate_header_opts(policy, has_write?, respond_all?, use_compression)
     )
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, has_write?)

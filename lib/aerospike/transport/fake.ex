@@ -273,6 +273,9 @@ defmodule Aerospike.Transport.Fake do
   end
 
   @impl Aerospike.Cluster.NodeTransport
+  def login(%__MODULE__{}, _opts), do: {:ok, :ok_no_token}
+
+  @impl Aerospike.Cluster.NodeTransport
   def stream_open(%__MODULE__{fake: fake, ref: ref}, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do

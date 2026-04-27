@@ -22,6 +22,14 @@ defmodule Aerospike.Protocol.ExpTest do
       assert Exp.encode(%{val: {:string, "hi"}}) == <<0xA2, 0x68, 0x69>>
     end
 
+    test "encodes compound and special literals" do
+      assert Exp.encode(%{val: {:geo, "{}"}}) == <<0xD9, 0x03, 0x17, "{}">>
+      assert Exp.encode(%{val: {:list, [1, 2]}}) == <<0x92, 0x7E, 0x92, 0x01, 0x02>>
+      assert Exp.encode(%{val: {:map, %{"a" => 1}}}) == <<0x81, 0xA1, "a", 0x01>>
+      assert Exp.encode(%{val: :infinity}) == <<0xD4, 0xFF, 0x01>>
+      assert Exp.encode(%{val: :wildcard}) == <<0xD4, 0xFF, 0x00>>
+    end
+
     test "encodes blob literals as MessagePack bin payloads" do
       assert Exp.encode(%{val: {:blob, <<1, 2, 3>>}}) == <<0xC4, 0x03, 0x01, 0x02, 0x03>>
 
@@ -43,6 +51,8 @@ defmodule Aerospike.Protocol.ExpTest do
 
   describe "bin reads" do
     test "encodes typed bin reads with raw MessagePack string names" do
+      assert Exp.encode(%{cmd: :key, type: :int}) == <<0x92, 0x50, 0x02>>
+
       assert Exp.encode(%{cmd: :bin, val: "age", type: :int}) == @int_bin_age
 
       assert Exp.encode(%{cmd: :bin, val: "name", type: :string}) ==
@@ -70,6 +80,9 @@ defmodule Aerospike.Protocol.ExpTest do
 
       assert Exp.encode(%{cmd: :bin, val: "missing", type: nil}) ==
                <<0x93, 0x51, 0x00, 0xA7, "missing">>
+
+      assert Exp.encode(%{cmd: :bin_type, val: "age"}) == <<0x92, 0x52, 0xA3, "age">>
+      assert Exp.encode(%{cmd: :loop_var, type: :int, val: 1}) == <<0x93, 0x7A, 0x02, 0x01>>
     end
   end
 
@@ -77,12 +90,15 @@ defmodule Aerospike.Protocol.ExpTest do
     test "encodes no-argument metadata nodes" do
       assert Exp.encode(%{cmd: :device_size}) == <<0x91, 0x41>>
       assert Exp.encode(%{cmd: :last_update}) == <<0x91, 0x42>>
+      assert Exp.encode(%{cmd: :since_update}) == <<0x91, 0x43>>
       assert Exp.encode(%{cmd: :void_time}) == <<0x91, 0x44>>
       assert Exp.encode(%{cmd: :ttl}) == <<0x91, 0x45>>
       assert Exp.encode(%{cmd: :set_name}) == <<0x91, 0x46>>
       assert Exp.encode(%{cmd: :key_exists}) == <<0x91, 0x47>>
       assert Exp.encode(%{cmd: :is_tombstone}) == <<0x91, 0x48>>
       assert Exp.encode(%{cmd: :record_size}) == <<0x91, 0x4A>>
+      assert Exp.encode(%{cmd: :remove_result}) == <<0x91, 0x64>>
+      assert Exp.encode(%{cmd: :unknown}) == <<0x91, 0x00>>
     end
 
     test "encodes digest modulo with its integer argument" do
@@ -124,6 +140,9 @@ defmodule Aerospike.Protocol.ExpTest do
 
       assert Exp.encode(%{cmd: :not_, exps: [%{bytes: @eq_age_21}]}) ==
                <<0x92, 0x12>> <> @eq_age_21
+
+      assert Exp.encode(%{cmd: :exclusive, exps: [%{bytes: @eq_age_21}, %{bytes: @gt_5_3}]}) ==
+               <<0x93, 0x13>> <> @eq_age_21 <> @gt_5_3
     end
 
     test "uses array16 for compound nodes with more than fifteen elements" do
@@ -131,6 +150,115 @@ defmodule Aerospike.Protocol.ExpTest do
 
       assert Exp.encode(%{cmd: :and_, exps: nodes}) ==
                <<0xDC, 0x00, 0x11, 0x10>> <> :binary.copy(<<0x01>>, 16)
+    end
+  end
+
+  describe "core expression operators" do
+    test "encodes regex and geo comparisons" do
+      assert Exp.encode(%{cmd: :regex, val: {"^a", 2}, exps: [%{bytes: @int_bin_age}]}) ==
+               <<0x94, 0x07, 0x02, 0xA2, "^a">> <> @int_bin_age
+
+      assert Exp.encode(%{
+               cmd: :geo_compare,
+               exps: [%{bytes: @int_bin_age}, %{bytes: @int_val_21}]
+             }) ==
+               <<0x93, 0x08>> <> @int_bin_age <> @int_val_21
+    end
+
+    test "encodes numeric operator nodes" do
+      assert Exp.encode(%{cmd: :add, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x14, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :sub, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x15, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :mul, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x16, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :div_, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x17, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :pow, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x18, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :log, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x19, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :mod, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x1A, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :abs, exps: [%{bytes: <<1>>}]}) == <<0x92, 0x1B, 0x01>>
+      assert Exp.encode(%{cmd: :floor, exps: [%{bytes: <<1>>}]}) == <<0x92, 0x1C, 0x01>>
+      assert Exp.encode(%{cmd: :ceil, exps: [%{bytes: <<1>>}]}) == <<0x92, 0x1D, 0x01>>
+      assert Exp.encode(%{cmd: :to_int, exps: [%{bytes: <<1>>}]}) == <<0x92, 0x1E, 0x01>>
+      assert Exp.encode(%{cmd: :to_float, exps: [%{bytes: <<1>>}]}) == <<0x92, 0x1F, 0x01>>
+
+      assert Exp.encode(%{cmd: :min, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x32, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :max, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x33, 0x01, 0x02>>
+    end
+
+    test "encodes integer bitwise operator nodes" do
+      assert Exp.encode(%{cmd: :int_and, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x20, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :int_or, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x21, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :int_xor, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x22, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :int_not, exps: [%{bytes: <<1>>}]}) == <<0x92, 0x23, 0x01>>
+
+      assert Exp.encode(%{cmd: :int_lshift, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x24, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :int_rshift, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x25, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :int_arshift, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x26, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :int_count, exps: [%{bytes: <<1>>}]}) == <<0x92, 0x27, 0x01>>
+
+      assert Exp.encode(%{cmd: :int_lscan, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x28, 0x01, 0x02>>
+
+      assert Exp.encode(%{cmd: :int_rscan, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}]}) ==
+               <<0x93, 0x29, 0x01, 0x02>>
+    end
+
+    test "encodes conditional and variable nodes" do
+      assert Exp.encode(%{cmd: :cond, exps: [%{bytes: <<1>>}, %{bytes: <<2>>}, %{bytes: <<3>>}]}) ==
+               <<0x94, 0x7B, 0x01, 0x02, 0x03>>
+
+      assert Exp.encode(%{cmd: :var, val: "x"}) == <<0x92, 0x7C, 0xA1, "x">>
+
+      def_node = %{cmd: :def, val: "x", exps: [%{bytes: <<1>>}]}
+      var_node = %{cmd: :var, val: "x"}
+
+      assert Exp.encode(%{cmd: :let, exps: [def_node, var_node]}) ==
+               <<0x94, 0x7D, 0xA1, "x", 0x01, 0x92, 0x7C, 0xA1, "x">>
+    end
+  end
+
+  describe "module calls" do
+    test "encodes expression module payloads as CALL nodes" do
+      assert Exp.encode(%{
+               cmd: :call,
+               type: :int,
+               module: 1,
+               payload: <<0x93, 0x33, 0x00, 0x08>>,
+               bin: %{bytes: @int_bin_age}
+             }) ==
+               <<0x95, 0x7F, 0x02, 0x01, 0x93, 0x33, 0x00, 0x08>> <>
+                 @int_bin_age
+    end
+
+    test "encodes module payload arguments with raw expression bytes" do
+      assert Exp.module_payload(19, [7, %{bytes: <<0x00>>}]) == <<0x93, 0x13, 0x07, 0x00>>
     end
   end
 end

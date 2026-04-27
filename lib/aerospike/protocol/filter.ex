@@ -2,7 +2,7 @@ defmodule Aerospike.Protocol.Filter do
   @moduledoc false
 
   alias Aerospike.Filter
-  alias Aerospike.Protocol.MessagePack
+  alias Aerospike.Protocol.CDT
 
   @particle_integer 1
   @particle_string 3
@@ -29,9 +29,7 @@ defmodule Aerospike.Protocol.Filter do
 
   @spec encode_ctx([Aerospike.Ctx.step()]) :: binary()
   def encode_ctx(ctx) when is_list(ctx) do
-    ctx
-    |> Enum.flat_map(fn {id, value} -> [id, encode_ctx_value(value)] end)
-    |> MessagePack.pack!()
+    CDT.encode_ctx(ctx)
   end
 
   defp particle_wire(%Filter{index_type: t}) when t in [:geo_within, :geo_contains] do
@@ -53,8 +51,4 @@ defmodule Aerospike.Protocol.Filter do
   end
 
   defp encode_endpoint(%Filter{particle_type: :string}, value) when is_binary(value), do: value
-
-  defp encode_ctx_value(value) when is_binary(value), do: {:particle_string, value}
-  defp encode_ctx_value({:bytes, _} = value), do: value
-  defp encode_ctx_value(value), do: value
 end

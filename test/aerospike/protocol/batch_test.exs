@@ -7,6 +7,7 @@ defmodule Aerospike.Protocol.BatchTest do
   alias Aerospike.Command.BatchCommand.Entry
   alias Aerospike.Command.BatchCommand.NodeRequest
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
@@ -105,7 +106,7 @@ defmodule Aerospike.Protocol.BatchTest do
 
       assert data ==
                IO.iodata_to_binary([
-                 <<7::32-big, 0::8>>,
+                 <<7::32-big, 5::8>>,
                  mixed_row(0, key_read, [
                    <<0x0A::8, bor(AsmMsg.info1_read(), AsmMsg.info1_get_all())::8, 0::8, 0::8,
                      0::32-big>>,
@@ -188,6 +189,134 @@ defmodule Aerospike.Protocol.BatchTest do
                Batch.encode_request(request, layout: :batch_index_with_set)
     end
 
+    test "encodes batch parent behavior flags" do
+      key = Key.new("test", "users", "k-parent-flags")
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{index: 0, key: key, kind: :read, dispatch: {:read, :master, 0}, payload: nil}
+        ],
+        payload: nil
+      }
+
+      encoded =
+        Batch.encode_request(request,
+          allow_inline: false,
+          allow_inline_ssd: true,
+          respond_all_keys: false
+        )
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert [%Field{type: type, data: <<1::32-big, flags::8, _rest::binary>>}] = msg.fields
+      assert type == Field.type_batch_index()
+      assert flags == 0x02
+    end
+
+    test "encodes per-entry read policy fields" do
+      key = Key.new("test", "users", "k-read-policy")
+      filter = Exp.eq(Exp.int_bin("a"), Exp.val(1))
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{
+            index: 0,
+            key: key,
+            kind: :read,
+            dispatch: {:read, :master, 0},
+            payload: %{
+              filter: filter,
+              read_mode_ap: :all,
+              read_mode_sc: :allow_unavailable,
+              read_touch_ttl_percent: 25
+            }
+          }
+        ],
+        payload: nil
+      }
+
+      encoded = Batch.encode_request(request)
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert [%Field{type: type, data: data}] = msg.fields
+      assert type == Field.type_batch_index()
+
+      assert data ==
+               IO.iodata_to_binary([
+                 <<1::32-big, 5::8>>,
+                 mixed_row(0, key, [
+                   <<0x0A::8,
+                     bor(
+                       AsmMsg.info1_read() ||| AsmMsg.info1_get_all(),
+                       AsmMsg.info1_read_mode_ap_all()
+                     )::8, 0::8,
+                     bor(AsmMsg.info3_sc_read_type(), AsmMsg.info3_sc_read_relax())::8,
+                     25::32-big>>,
+                   <<3::16-big, 0::16-big>>,
+                   Field.encode(Field.namespace("test")),
+                   Field.encode(Field.set("users")),
+                   Field.encode(Field.filter_exp(filter.wire))
+                 ])
+               ])
+    end
+
+    test "encodes per-entry write policy fields" do
+      key = Key.new("test", "users", "k-write-policy")
+      filter = Exp.eq(Exp.int_bin("a"), Exp.val(1))
+      {:ok, put_op} = Operation.write("name", "Ada")
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{
+            index: 0,
+            key: key,
+            kind: :put,
+            dispatch: :write,
+            payload: %{
+              operations: [put_op],
+              generation: 9,
+              generation_policy: :expect_gt,
+              exists: :replace_only,
+              commit_level: :master,
+              send_key: true,
+              filter: filter
+            }
+          }
+        ],
+        payload: nil
+      }
+
+      encoded = Batch.encode_request(request)
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert [%Field{type: type, data: data}] = msg.fields
+      assert type == Field.type_batch_index()
+
+      assert data ==
+               IO.iodata_to_binary([
+                 <<1::32-big, 5::8>>,
+                 mixed_row(0, key, [
+                   <<0x0E::8, 0::8,
+                     bor(
+                       AsmMsg.info2_write() ||| AsmMsg.info2_respond_all_ops(),
+                       AsmMsg.info2_generation_gt()
+                     )::8, bor(AsmMsg.info3_replace_only(), AsmMsg.info3_commit_master())::8,
+                     9::16-big, 0::32-big>>,
+                   <<4::16-big, 1::16-big>>,
+                   Field.encode(Field.namespace("test")),
+                   Field.encode(Field.set("users")),
+                   Field.encode(Field.key_from_user_key(%{user_key: key.user_key})),
+                   Field.encode(Field.filter_exp(filter.wire)),
+                   Operation.encode(put_op)
+                 ])
+               ])
+    end
+
     test "encodes read-only operate entries without write flags" do
       key = Key.new("test", "users", "k-operate-read")
       read_op = Operation.read("name")
@@ -217,7 +346,7 @@ defmodule Aerospike.Protocol.BatchTest do
 
       assert data ==
                IO.iodata_to_binary([
-                 <<1::32-big, 0::8>>,
+                 <<1::32-big, 5::8>>,
                  mixed_row(0, key, [
                    <<0x0A::8, AsmMsg.info1_read()::8, 0::8, 0::8, 0::32-big>>,
                    <<2::16-big, 1::16-big>>,
@@ -258,7 +387,7 @@ defmodule Aerospike.Protocol.BatchTest do
 
       assert data ==
                IO.iodata_to_binary([
-                 <<1::32-big, 0::8>>,
+                 <<1::32-big, 5::8>>,
                  mixed_row(0, key, [
                    <<0x0A::8, AsmMsg.info1_read()::8, 0::8, 0::8, 0::32-big>>,
                    <<2::16-big, 2::16-big>>,
@@ -292,7 +421,7 @@ defmodule Aerospike.Protocol.BatchTest do
 
       assert data ==
                IO.iodata_to_binary([
-                 <<1::32-big, 0::8>>,
+                 <<1::32-big, 5::8>>,
                  mixed_row(0, key, [
                    <<0x0E::8, 0::8,
                      bor(
@@ -334,7 +463,7 @@ defmodule Aerospike.Protocol.BatchTest do
 
       assert data ==
                IO.iodata_to_binary([
-                 <<1::32-big, 0::8>>,
+                 <<1::32-big, 5::8>>,
                  mixed_row(0, key, [
                    <<0x0E::8, 0::8, AsmMsg.info2_write()::8, 0::8, 0::16-big, 0::32-big>>,
                    <<5::16-big, 0::16-big>>,

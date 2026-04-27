@@ -103,10 +103,10 @@ key = Aerospike.key("test", "users", "user:42")
   Aerospike.apply_udf(:aerospike, key, package, "mark_seen", ["web"])
 ```
 
-The helper accepts the narrow write-family option set, including `:timeout`,
-`:ttl`, `:generation`, `:filter`, and `:txn`. Once a record UDF request is on
-the wire, transport failures are not retried automatically because server-side
-effects may already have occurred.
+The helper accepts write-family options such as `:timeout`, `:socket_timeout`,
+`:ttl`, `:generation`, `:generation_policy`, `:commit_level`, `:filter`, and
+`:txn`. Once a record UDF request is on the wire, transport failures are not
+retried automatically because server-side effects may already have occurred.
 
 ## Background Query UDF Jobs
 

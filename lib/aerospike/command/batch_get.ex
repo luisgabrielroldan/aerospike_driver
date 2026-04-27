@@ -11,7 +11,7 @@ defmodule Aerospike.Command.BatchGet do
   alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Record
 
-  @type option :: {:timeout, non_neg_integer()}
+  @type option :: {:timeout, non_neg_integer()} | {:socket_timeout, non_neg_integer()}
   @type bin_name :: String.t() | atom()
   @type mode :: :all | :header | :exists | [bin_name()]
   @type public_result_mode :: :all | :header | :exists | :bins
@@ -47,7 +47,12 @@ defmodule Aerospike.Command.BatchGet do
     with :ok <- validate_keys(keys),
          {:ok, read_spec} <- read_spec(mode),
          {:ok, policy} <- batch_policy(tender, opts),
-         {:ok, results} <- MixedBatch.execute(tender, entries(keys, policy, read_spec), opts) do
+         {:ok, results} <-
+           MixedBatch.execute(
+             tender,
+             entries(keys, policy, read_spec),
+             Policy.batch_parent_opts(opts)
+           ) do
       {:ok, to_public_results(results, public_result_mode(read_spec))}
     end
   end
@@ -76,7 +81,11 @@ defmodule Aerospike.Command.BatchGet do
          {:ok, flags} <- validate_operations(operations),
          {:ok, policy} <- batch_policy(tender, opts),
          {:ok, results} <-
-           MixedBatch.execute(tender, operate_entries(keys, policy, operations, flags), opts) do
+           MixedBatch.execute(
+             tender,
+             operate_entries(keys, policy, operations, flags),
+             Policy.batch_parent_opts(opts)
+           ) do
       {:ok, to_public_results(results, :all)}
     end
   end
@@ -99,7 +108,7 @@ defmodule Aerospike.Command.BatchGet do
         key: key,
         kind: entry_kind(read_spec),
         dispatch: {:read, policy.retry.replica_policy, 0},
-        payload: entry_payload(read_spec)
+        payload: read_payload(policy, entry_payload(read_spec))
       }
     end)
   end
@@ -162,10 +171,24 @@ defmodule Aerospike.Command.BatchGet do
         key: key,
         kind: :operate,
         dispatch: {:read, policy.retry.replica_policy, 0},
-        payload: %{operations: operations, flags: flags}
+        payload: read_payload(policy, %{operations: operations, flags: flags})
       }
     end)
   end
+
+  defp read_payload(%Policy.BatchRead{} = policy, payload) do
+    payload
+    |> payload_map()
+    |> Map.merge(%{
+      filter: policy.filter,
+      read_mode_ap: policy.read_mode_ap,
+      read_mode_sc: policy.read_mode_sc,
+      read_touch_ttl_percent: policy.read_touch_ttl_percent
+    })
+  end
+
+  defp payload_map(nil), do: %{}
+  defp payload_map(payload) when is_map(payload), do: payload
 
   defp do_to_public_results([], _mode, acc), do: Enum.reverse(acc)
 

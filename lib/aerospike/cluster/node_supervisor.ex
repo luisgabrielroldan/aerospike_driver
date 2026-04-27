@@ -65,6 +65,10 @@ defmodule Aerospike.Cluster.NodeSupervisor do
     * `:connect_opts` — keyword list passed as the third argument to
       `transport.connect/3` (required).
     * `:pool_size` — positive integer, defaults to `#{@default_pool_size}`.
+    * `:min_connections_per_node` — non-negative integer floor requested
+      by startup policy. `0` starts workers lazily; positive values keep
+      the existing eager pool behavior, which maintains at least that many
+      reusable workers.
     * `:idle_timeout_ms` — milliseconds a worker may sit idle before
       NimblePool evicts it via `handle_ping/2`. Defaults to
       `#{@default_idle_timeout_ms}` to stay under Aerospike's default
@@ -95,6 +99,7 @@ defmodule Aerospike.Cluster.NodeSupervisor do
     port = Keyword.fetch!(opts, :port)
     connect_opts = Keyword.fetch!(opts, :connect_opts)
     pool_size = Keyword.get(opts, :pool_size, @default_pool_size)
+    min_connections_per_node = Keyword.get(opts, :min_connections_per_node, pool_size)
     idle_timeout_ms = Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms)
     max_idle_pings = Keyword.get(opts, :max_idle_pings, @default_max_idle_pings)
     counters = Keyword.get(opts, :counters)
@@ -113,10 +118,8 @@ defmodule Aerospike.Cluster.NodeSupervisor do
         features: features
       ]
 
-    # `lazy: false` is NimblePool's current default but pinning it makes
-    # warm-up explicit: every worker is opened during `Supervisor.init/1`
-    # before any checkout returns. A future NimblePool default flip would
-    # otherwise silently turn warm-up into on-demand connect.
+    lazy? = min_connections_per_node == 0
+
     child = %{
       id: {:node_pool, node_name},
       start:
@@ -125,7 +128,7 @@ defmodule Aerospike.Cluster.NodeSupervisor do
            [
              worker: {Aerospike.Cluster.NodePool, worker_opts},
              pool_size: pool_size,
-             lazy: false,
+             lazy: lazy?,
              worker_idle_timeout: idle_timeout_ms,
              max_idle_pings: max_idle_pings
            ]

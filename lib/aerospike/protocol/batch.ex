@@ -41,7 +41,8 @@ defmodule Aerospike.Protocol.Batch do
   def encode_request(%NodeRequest{} = node_request, opts \\ []) when is_list(opts) do
     layout = Keyword.get(opts, :layout, :batch_index)
     timeout = Keyword.get(opts, :timeout, 0)
-    {info1, field_type, field_data} = batch_field(node_request, layout)
+    flags = batch_flags(opts)
+    {info1, field_type, field_data} = batch_field(node_request, layout, flags)
 
     %AsmMsg{
       info1: info1,
@@ -61,17 +62,17 @@ defmodule Aerospike.Protocol.Batch do
     end
   end
 
-  defp batch_field(%NodeRequest{entries: entries}, :batch_index) do
+  defp batch_field(%NodeRequest{entries: entries}, :batch_index, flags) do
     field_data =
-      [<<length(entries)::32-big, 0::8>> | Enum.map(entries, &encode_mixed_entry/1)]
+      [<<length(entries)::32-big, flags::8>> | Enum.map(entries, &encode_mixed_entry/1)]
       |> IO.iodata_to_binary()
 
     {AsmMsg.info1_batch(), Field.type_batch_index(), field_data}
   end
 
-  defp batch_field(%NodeRequest{entries: entries}, :batch_index_with_set) do
+  defp batch_field(%NodeRequest{entries: entries}, :batch_index_with_set, flags) do
     field_data =
-      [<<length(entries)::32-big, 0::8>> | encode_read_entries(entries, nil)]
+      [<<length(entries)::32-big, flags::8>> | encode_read_entries(entries, nil)]
       |> IO.iodata_to_binary()
 
     {AsmMsg.info1_read() ||| AsmMsg.info1_batch(), Field.type_batch_index_with_set(), field_data}
@@ -119,10 +120,11 @@ defmodule Aerospike.Protocol.Batch do
     payload = payload_opts(payload)
     operations = read_operations(payload)
     ttl = Map.get(payload, :read_touch_ttl_percent, 0)
+    info1 = read_attr(kind, operations, payload)
+    info3 = read_info3(payload)
 
     [
-      <<@batch_msg_info ||| @batch_msg_ttl::8, read_attr(kind, operations)::8, 0::8, 0::8,
-        ttl::32-big>>,
+      <<@batch_msg_info ||| @batch_msg_ttl::8, info1::8, 0::8, info3::8, ttl::32-big>>,
       batch_key_fields(key, 0, length(operations), payload),
       Enum.map(operations, &Operation.encode/1)
     ]
@@ -180,7 +182,10 @@ defmodule Aerospike.Protocol.Batch do
       info2 =
         flags.info2
         |> bor(AsmMsg.info2_write())
-        |> maybe_flag(flags.respond_all?, AsmMsg.info2_respond_all_ops())
+        |> maybe_flag(
+          flags.respond_all? or Map.get(payload, :respond_per_op, false),
+          AsmMsg.info2_respond_all_ops()
+        )
 
       {info2, info3, generation} = write_flags(payload, info2)
       ttl = Map.get(payload, :ttl, 0)
@@ -193,11 +198,12 @@ defmodule Aerospike.Protocol.Batch do
       ]
     else
       ttl = Map.get(payload, :read_touch_ttl_percent, 0)
+      info1 = maybe_header_flag(flags.info1, flags.header_only?)
+      info1 = read_attr(info1, payload)
+      info3 = read_info3(payload) ||| flags.info3
 
       [
-        <<@batch_msg_info ||| @batch_msg_ttl::8,
-          maybe_header_flag(flags.info1, flags.header_only?)::8, 0::8, flags.info3::8,
-          ttl::32-big>>,
+        <<@batch_msg_info ||| @batch_msg_ttl::8, info1::8, 0::8, info3::8, ttl::32-big>>,
         batch_key_fields(key, 0, length(operations), payload),
         Enum.map(operations, &Operation.encode/1)
       ]
@@ -219,10 +225,10 @@ defmodule Aerospike.Protocol.Batch do
   end
 
   defp read_row_body(%Key{} = key, kind, payload) when kind in [:read, :read_header, :exists] do
-    _payload = payload_opts(payload)
+    payload = payload_opts(payload)
 
     [
-      <<read_attr(kind, [])::8, 2::16-big, 0::16-big>>,
+      <<read_attr(kind, [], payload)::8, 2::16-big, 0::16-big>>,
       Field.encode(Field.namespace(key.namespace)),
       Field.encode(Field.set(key.set))
     ]
@@ -232,10 +238,30 @@ defmodule Aerospike.Protocol.Batch do
     left.namespace == right.namespace and left.set == right.set
   end
 
-  defp read_attr(:read, []), do: AsmMsg.info1_read() ||| AsmMsg.info1_get_all()
-  defp read_attr(:read, _ops), do: AsmMsg.info1_read()
-  defp read_attr(:read_header, _ops), do: AsmMsg.info1_read() ||| AsmMsg.info1_nobindata()
-  defp read_attr(:exists, _ops), do: AsmMsg.info1_read() ||| AsmMsg.info1_nobindata()
+  defp read_attr(:read, [], payload),
+    do: read_attr(AsmMsg.info1_read() ||| AsmMsg.info1_get_all(), payload)
+
+  defp read_attr(:read, _ops, payload), do: read_attr(AsmMsg.info1_read(), payload)
+
+  defp read_attr(:read_header, _ops, payload),
+    do: read_attr(AsmMsg.info1_read() ||| AsmMsg.info1_nobindata(), payload)
+
+  defp read_attr(:exists, _ops, payload),
+    do: read_attr(AsmMsg.info1_read() ||| AsmMsg.info1_nobindata(), payload)
+
+  defp read_attr(info1, payload) do
+    info1
+    |> maybe_flag(Map.get(payload, :read_mode_ap) == :all, AsmMsg.info1_read_mode_ap_all())
+  end
+
+  defp read_info3(payload) do
+    case Map.get(payload, :read_mode_sc, :session) do
+      :session -> 0
+      :linearize -> AsmMsg.info3_sc_read_type()
+      :allow_replica -> AsmMsg.info3_sc_read_relax()
+      :allow_unavailable -> AsmMsg.info3_sc_read_type() ||| AsmMsg.info3_sc_read_relax()
+    end
+  end
 
   defp read_operations(payload) do
     cond do
@@ -269,18 +295,27 @@ defmodule Aerospike.Protocol.Batch do
   defp batch_key_fields(%Key{} = key, extra_field_count, op_count, payload) do
     send_key? = Map.get(payload, :send_key, false)
     key_field = if send_key?, do: Field.key_from_user_key(%{user_key: key.user_key}), else: nil
-    field_count = 2 + extra_field_count + if(key_field, do: 1, else: 0)
+    filter_field = filter_field(Map.get(payload, :filter))
+
+    field_count =
+      2 + extra_field_count + if(key_field, do: 1, else: 0) + if(filter_field, do: 1, else: 0)
 
     [
       <<field_count::16-big, op_count::16-big>>,
       Field.encode(Field.namespace(key.namespace)),
       Field.encode(Field.set(key.set))
-      | maybe_encoded_key_field(key_field)
+      | maybe_encoded_fields([key_field, filter_field])
     ]
   end
 
-  defp maybe_encoded_key_field(nil), do: []
-  defp maybe_encoded_key_field(%Field{} = key_field), do: [Field.encode(key_field)]
+  defp filter_field(nil), do: nil
+  defp filter_field(%Aerospike.Exp{wire: wire}) when is_binary(wire), do: Field.filter_exp(wire)
+
+  defp maybe_encoded_fields(fields) do
+    fields
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&Field.encode/1)
+  end
 
   defp udf_fields(payload) do
     package = Map.fetch!(payload, :package)
@@ -299,8 +334,45 @@ defmodule Aerospike.Protocol.Batch do
 
   defp write_flags(payload, info2) do
     generation = Map.get(payload, :generation, 0)
-    info2 = maybe_flag(info2, generation > 0, AsmMsg.info2_generation())
-    {info2, 0, generation}
+
+    generation_policy =
+      Map.get(payload, :generation_policy, default_generation_policy(generation))
+
+    exists = Map.get(payload, :exists, :update)
+
+    info2 =
+      info2
+      |> maybe_generation_flag(generation_policy)
+      |> maybe_flag(exists == :create_only, AsmMsg.info2_create_only())
+      |> maybe_flag(Map.get(payload, :durable_delete, false), AsmMsg.info2_durable_delete())
+      |> maybe_flag(Map.get(payload, :respond_per_op, false), AsmMsg.info2_respond_all_ops())
+
+    info3 =
+      0
+      |> maybe_flag(exists == :update_only, AsmMsg.info3_update_only())
+      |> maybe_flag(exists == :create_or_replace, AsmMsg.info3_create_or_replace())
+      |> maybe_flag(exists == :replace_only, AsmMsg.info3_replace_only())
+      |> maybe_flag(
+        Map.get(payload, :commit_level, :all) == :master,
+        AsmMsg.info3_commit_master()
+      )
+      |> bor(read_info3(payload))
+
+    {info2, info3, generation}
+  end
+
+  defp maybe_generation_flag(info2, :none), do: info2
+  defp maybe_generation_flag(info2, :expect_equal), do: info2 ||| AsmMsg.info2_generation()
+  defp maybe_generation_flag(info2, :expect_gt), do: info2 ||| AsmMsg.info2_generation_gt()
+
+  defp default_generation_policy(generation) when generation > 0, do: :expect_equal
+  defp default_generation_policy(_generation), do: :none
+
+  defp batch_flags(opts) do
+    0
+    |> maybe_flag(Keyword.get(opts, :allow_inline, true), 0x01)
+    |> maybe_flag(Keyword.get(opts, :allow_inline_ssd, false), 0x02)
+    |> maybe_flag(Keyword.get(opts, :respond_all_keys, true), 0x04)
   end
 
   defp maybe_flag(bits, true, flag), do: bits ||| flag

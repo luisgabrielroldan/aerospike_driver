@@ -89,6 +89,18 @@ defmodule Aerospike.Integration.IndexQueryTest do
         ages == [20, 21, 22, 23, 24]
       end)
 
+      IntegrationSupport.assert_eventually(
+        "query include_bin_data false returns headers only",
+        fn ->
+          assert {:ok, records_stream} =
+                   Aerospike.query_stream(cluster, query, include_bin_data: false)
+
+          records = Enum.to_list(records_stream)
+
+          length(records) == 5 and Enum.all?(records, &(&1.bins == %{}))
+        end
+      )
+
       paged_query =
         Query.new(@namespace, set)
         |> Query.where(Filter.range("age", 20, 24))

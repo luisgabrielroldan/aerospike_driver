@@ -12,10 +12,16 @@ defmodule Aerospike.Command.Exists do
 
   @type option ::
           {:timeout, non_neg_integer()}
+          | {:socket_timeout, non_neg_integer()}
           | {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:replica_policy, :master | :sequence}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:read_mode_ap, :one | :all}
+          | {:read_mode_sc, :session | :linearize | :allow_replica | :allow_unavailable}
+          | {:read_touch_ttl_percent, -1 | 0..100}
+          | {:send_key, boolean()}
+          | {:use_compression, boolean()}
 
   @type result ::
           {:ok, boolean()}
@@ -32,7 +38,7 @@ defmodule Aerospike.Command.Exists do
         key,
         policy,
         command(),
-        %{key: key, conn: tender, txn: txn, opts: opts, filter: policy.filter}
+        %{key: key, conn: tender, txn: txn, opts: opts, policy: policy, filter: policy.filter}
       )
     end
   end
@@ -46,9 +52,19 @@ defmodule Aerospike.Command.Exists do
     )
   end
 
-  defp encode_exists(%{key: %Key{} = key, conn: conn, opts: opts, filter: filter}) do
+  defp encode_exists(%{
+         key: %Key{} = key,
+         conn: conn,
+         opts: opts,
+         policy: policy,
+         use_compression: use_compression,
+         filter: filter
+       }) do
     key
-    |> AsmMsg.key_command([], read: true, read_header: true)
+    |> AsmMsg.key_command(
+      [],
+      [read: true, read_header: true] ++ UnarySupport.read_header_opts(policy, use_compression)
+    )
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, false)
     |> AsmMsg.encode()

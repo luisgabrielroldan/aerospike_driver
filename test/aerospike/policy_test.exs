@@ -27,8 +27,14 @@ defmodule Aerospike.PolicyTest do
       assert {:ok,
               %Policy.UnaryRead{
                 timeout: 5_000,
+                socket_timeout: 0,
                 retry: %{max_retries: 1, sleep_between_retries_ms: 0, replica_policy: :master},
-                filter: ^filter
+                filter: ^filter,
+                read_mode_ap: :one,
+                read_mode_sc: :session,
+                read_touch_ttl_percent: 0,
+                send_key: false,
+                use_compression: nil
               }} =
                Policy.unary_read(base_retry,
                  max_retries: 1,
@@ -37,11 +43,39 @@ defmodule Aerospike.PolicyTest do
                )
     end
 
+    test "normalizes socket timeout separately from total timeout" do
+      assert {:ok, %Policy.UnaryRead{timeout: 1_000, socket_timeout: 250}} =
+               Policy.unary_read(RetryPolicy.defaults(), timeout: 1_000, socket_timeout: 250)
+    end
+
+    test "normalizes expanded read policy fields" do
+      assert {:ok,
+              %Policy.UnaryRead{
+                read_mode_ap: :all,
+                read_mode_sc: :allow_unavailable,
+                read_touch_ttl_percent: -1,
+                send_key: true,
+                use_compression: true
+              }} =
+               Policy.unary_read(RetryPolicy.defaults(),
+                 read_mode_ap: :all,
+                 read_mode_sc: :allow_unavailable,
+                 read_touch_ttl_percent: -1,
+                 send_key: true,
+                 use_compression: true
+               )
+    end
+
     test "rejects invalid timeout values" do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Policy.unary_read(RetryPolicy.defaults(), timeout: -1)
 
       assert message =~ "timeout must be a non-negative integer"
+
+      assert {:error, %Error{code: :invalid_argument, message: socket_message}} =
+               Policy.unary_read(RetryPolicy.defaults(), socket_timeout: -1)
+
+      assert socket_message =~ "socket_timeout must be a non-negative integer"
     end
 
     test "rejects malformed filters" do
@@ -56,6 +90,23 @@ defmodule Aerospike.PolicyTest do
 
       assert bad_message =~ "%Aerospike.Exp{}"
     end
+
+    test "rejects invalid expanded read fields" do
+      assert {:error, %Error{message: ap_message}} =
+               Policy.unary_read(RetryPolicy.defaults(), read_mode_ap: :quorum)
+
+      assert ap_message =~ "AP read mode"
+
+      assert {:error, %Error{message: sc_message}} =
+               Policy.unary_read(RetryPolicy.defaults(), read_mode_sc: :strict)
+
+      assert sc_message =~ "SC read mode"
+
+      assert {:error, %Error{message: touch_message}} =
+               Policy.unary_read(RetryPolicy.defaults(), read_touch_ttl_percent: 101)
+
+      assert touch_message =~ "read_touch_ttl_percent"
+    end
   end
 
   describe "unary_write/2" do
@@ -66,15 +117,22 @@ defmodule Aerospike.PolicyTest do
       assert {:ok,
               %Policy.UnaryWrite{
                 timeout: 1_500,
+                socket_timeout: 250,
                 retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence},
                 ttl: 120,
                 generation: 3,
+                generation_policy: :expect_equal,
                 filter: ^filter,
                 exists: :replace_only,
-                durable_delete: true
+                commit_level: :all,
+                durable_delete: true,
+                respond_per_op: false,
+                send_key: true,
+                use_compression: nil
               }} =
                Policy.unary_write(base_retry,
                  timeout: 1_500,
+                 socket_timeout: 250,
                  max_retries: 0,
                  ttl: 120,
                  generation: 3,
@@ -100,6 +158,37 @@ defmodule Aerospike.PolicyTest do
       assert message =~ ":replace"
     end
 
+    test "normalizes expanded write policy fields" do
+      assert {:ok,
+              %Policy.UnaryWrite{
+                ttl: -2,
+                generation: 5,
+                generation_policy: :expect_gt,
+                commit_level: :master,
+                respond_per_op: true,
+                send_key: false,
+                use_compression: false
+              }} =
+               Policy.unary_write(RetryPolicy.defaults(),
+                 ttl: :dont_update,
+                 generation: 5,
+                 generation_policy: :expect_gt,
+                 commit_level: :master,
+                 respond_per_op: true,
+                 send_key: false,
+                 use_compression: false
+               )
+
+      assert {:ok, %Policy.UnaryWrite{ttl: -1}} =
+               Policy.unary_write(RetryPolicy.defaults(), ttl: :never_expire)
+
+      assert {:ok, %Policy.UnaryWrite{ttl: 0}} =
+               Policy.unary_write(RetryPolicy.defaults(), ttl: :default)
+
+      assert {:ok, %Policy.UnaryWrite{generation_policy: :none, generation: 7}} =
+               Policy.unary_write(RetryPolicy.defaults(), generation: 7, generation_policy: :none)
+    end
+
     test "defaults and validates durable delete values" do
       assert {:ok, %Policy.UnaryWrite{durable_delete: false}} =
                Policy.unary_write(RetryPolicy.defaults(), [])
@@ -113,6 +202,23 @@ defmodule Aerospike.PolicyTest do
       assert message =~ "durable_delete must be a boolean"
     end
 
+    test "rejects invalid expanded write fields" do
+      assert {:error, %Error{message: ttl_message}} =
+               Policy.unary_write(RetryPolicy.defaults(), ttl: :forever)
+
+      assert ttl_message =~ ":ttl"
+
+      assert {:error, %Error{message: generation_message}} =
+               Policy.unary_write(RetryPolicy.defaults(), generation_policy: :greater)
+
+      assert generation_message =~ "generation write policy"
+
+      assert {:error, %Error{message: commit_message}} =
+               Policy.unary_write(RetryPolicy.defaults(), commit_level: :replica)
+
+      assert commit_message =~ "commit level"
+    end
+
     test "rejects invalid ttl and generation values" do
       assert {:error, %Error{code: :invalid_argument, message: ttl_message}} =
                Policy.unary_write(RetryPolicy.defaults(), ttl: -1)
@@ -123,6 +229,11 @@ defmodule Aerospike.PolicyTest do
                Policy.unary_write(RetryPolicy.defaults(), generation: -1)
 
       assert generation_message =~ "generation must be a non-negative integer"
+
+      assert {:error, %Error{code: :invalid_argument, message: socket_message}} =
+               Policy.unary_write(RetryPolicy.defaults(), socket_timeout: -1)
+
+      assert socket_message =~ "socket_timeout must be a non-negative integer"
     end
 
     test "keeps nil filter equivalent to no filter" do
@@ -151,43 +262,123 @@ defmodule Aerospike.PolicyTest do
       assert {:ok,
               %Policy.BatchRead{
                 timeout: 250,
+                socket_timeout: 100,
+                max_concurrent_nodes: 0,
+                allow_partial_results: true,
+                respond_all_keys: true,
+                allow_inline: true,
+                allow_inline_ssd: false,
                 retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :master}
-              }} = Policy.batch_read(base_retry, timeout: 250)
+              }} = Policy.batch_read(base_retry, timeout: 250, socket_timeout: 100)
+    end
+
+    test "materializes encodable batch read fields" do
+      filter = Exp.eq(Exp.int_bin("a"), Exp.val(1))
+
+      assert {:ok,
+              %Policy.BatchRead{
+                filter: ^filter,
+                read_mode_ap: :all,
+                read_mode_sc: :linearize,
+                read_touch_ttl_percent: 40
+              }} =
+               Policy.batch_read(RetryPolicy.defaults(),
+                 filter: filter,
+                 read_mode_ap: :all,
+                 read_mode_sc: :linearize,
+                 read_touch_ttl_percent: 40
+               )
     end
 
     test "rejects unsupported batch opts" do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Policy.batch_read(RetryPolicy.defaults(), max_retries: 1)
 
-      assert message =~ "support only the :timeout option"
-    end
-
-    test "does not accept expression filters before batch wire support exists" do
-      assert {:error, %Error{code: :invalid_argument, message: message}} =
-               Policy.batch_read(RetryPolicy.defaults(),
-                 filter: Exp.eq(Exp.int_bin("a"), Exp.val(1))
-               )
-
-      assert message =~ "support only the :timeout option"
+      assert message =~ "do not support option :max_retries"
     end
   end
 
   describe "batch/2" do
-    test "materializes the shared batch runtime policy without widening option support" do
+    test "materializes the shared batch runtime policy" do
       base_retry = %{max_retries: 5, sleep_between_retries_ms: 99, replica_policy: :sequence}
 
       assert {:ok,
               %Policy.Batch{
                 timeout: 250,
+                socket_timeout: 100,
+                max_concurrent_nodes: 2,
+                allow_partial_results: false,
+                respond_all_keys: false,
+                allow_inline: false,
+                allow_inline_ssd: true,
                 retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence}
-              }} = Policy.batch(base_retry, timeout: 250)
+              }} =
+               Policy.batch(base_retry,
+                 timeout: 250,
+                 socket_timeout: 100,
+                 max_concurrent_nodes: 2,
+                 allow_partial_results: false,
+                 respond_all_keys: false,
+                 allow_inline: false,
+                 allow_inline_ssd: true
+               )
     end
 
     test "rejects unsupported batch opts" do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Policy.batch(RetryPolicy.defaults(), ttl: 10)
 
-      assert message =~ "support only the :timeout option"
+      assert message =~ "do not support option :ttl"
+    end
+
+    test "rejects invalid socket timeout values" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.batch(RetryPolicy.defaults(), socket_timeout: -1)
+
+      assert message =~ "socket_timeout must be a non-negative integer"
+    end
+  end
+
+  describe "batch_record_write/1" do
+    test "materializes encodable per-record write fields" do
+      filter = Exp.eq(Exp.int_bin("a"), Exp.val(1))
+
+      assert {:ok,
+              %Policy.BatchWrite{
+                ttl: 30,
+                generation: 4,
+                generation_policy: :expect_gt,
+                filter: ^filter,
+                exists: :replace_only,
+                commit_level: :master,
+                durable_delete: true,
+                respond_per_op: true,
+                send_key: true,
+                read_mode_ap: :all,
+                read_mode_sc: :allow_unavailable,
+                read_touch_ttl_percent: 20
+              }} =
+               Policy.batch_record_write(
+                 ttl: 30,
+                 generation: 4,
+                 generation_policy: :expect_gt,
+                 filter: filter,
+                 exists: :replace_only,
+                 commit_level: :master,
+                 durable_delete: true,
+                 respond_per_op: true,
+                 send_key: true,
+                 read_mode_ap: :all,
+                 read_mode_sc: :allow_unavailable,
+                 read_touch_ttl_percent: 20
+               )
+    end
+
+    test "rejects parent batch fields on per-record policies" do
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.batch_record_write(timeout: 100)
+
+      assert message =~ "do not support option :timeout"
     end
   end
 
@@ -314,12 +505,54 @@ defmodule Aerospike.PolicyTest do
       assert {:ok, %Policy.ScanQueryRuntime{} = runtime} = Policy.scan_query_runtime([])
 
       assert runtime.timeout == 5_000
+      assert runtime.socket_timeout == 0
       assert runtime.task_timeout == :infinity
       assert runtime.pool_checkout_timeout == 5_000
       assert runtime.max_concurrent_nodes == 0
+      assert runtime.retry == RetryPolicy.defaults()
+      assert runtime.records_per_second == nil
+      assert runtime.include_bin_data == true
+      assert runtime.expected_duration == :long
       assert runtime.cursor == nil
       assert is_integer(runtime.task_id)
       assert runtime.task_id > 0
+    end
+
+    test "normalizes scan and query runtime policy fields" do
+      base_retry = %{max_retries: 5, sleep_between_retries_ms: 10, replica_policy: :master}
+
+      assert {:ok, %Policy.ScanQueryRuntime{} = runtime} =
+               Policy.scan_query_runtime(base_retry,
+                 timeout: 10_000,
+                 socket_timeout: 250,
+                 max_retries: 2,
+                 sleep_between_retries_ms: 25,
+                 replica_policy: :sequence,
+                 max_concurrent_nodes: 3,
+                 records_per_second: 40,
+                 include_bin_data: false,
+                 expected_duration: :short,
+                 task_id: 123,
+                 cursor: :resume,
+                 pool_checkout_timeout: 75
+               )
+
+      assert runtime.timeout == 10_000
+      assert runtime.socket_timeout == 250
+
+      assert runtime.retry == %{
+               max_retries: 2,
+               sleep_between_retries_ms: 25,
+               replica_policy: :sequence
+             }
+
+      assert runtime.max_concurrent_nodes == 3
+      assert runtime.records_per_second == 40
+      assert runtime.include_bin_data == false
+      assert runtime.expected_duration == :short
+      assert runtime.task_id == 123
+      assert runtime.cursor == :resume
+      assert runtime.pool_checkout_timeout == 75
     end
 
     test "rejects invalid task runtime values" do
@@ -332,6 +565,21 @@ defmodule Aerospike.PolicyTest do
                Policy.scan_query_runtime(task_id: 0)
 
       assert task_id_message =~ ":task_id must be a positive integer"
+
+      assert {:error, %Error{code: :invalid_argument, message: rps_message}} =
+               Policy.scan_query_runtime(records_per_second: -1)
+
+      assert rps_message =~ "records_per_second must be a non-negative integer"
+
+      assert {:error, %Error{code: :invalid_argument, message: include_message}} =
+               Policy.scan_query_runtime(include_bin_data: :maybe)
+
+      assert include_message =~ "include_bin_data must be a boolean"
+
+      assert {:error, %Error{code: :invalid_argument, message: duration_message}} =
+               Policy.scan_query_runtime(expected_duration: :short_query)
+
+      assert duration_message =~ "query duration must be one of"
     end
   end
 end

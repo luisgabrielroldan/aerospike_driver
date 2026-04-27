@@ -2,6 +2,7 @@ defmodule Aerospike.Protocol.CDTTest do
   use ExUnit.Case, async: true
 
   alias Aerospike.Ctx
+  alias Aerospike.Exp
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.CDT
   alias Aerospike.Protocol.MessagePack
@@ -45,6 +46,19 @@ defmodule Aerospike.Protocol.CDTTest do
              255,
              [0x22, "roles", 0x10, 0],
              [67, "admin"]
+           ]
+  end
+
+  test "context encoder preserves expression contexts as raw byte arrays" do
+    filter = Exp.gt(Exp.int_loop_var(:value), Exp.int(10))
+    ctx = [Ctx.map_key("items"), Ctx.all_children_with_filter(filter)]
+
+    assert MessagePack.unpack!(CDT.encode_ctx(ctx)) == [0x22, "items", 0x04, filter.wire]
+
+    assert MessagePack.unpack!(CDT.map_read_op("prefs", 96, [], ctx).data) == [
+             255,
+             [0x22, "items", 0x04, filter.wire],
+             [96]
            ]
   end
 

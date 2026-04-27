@@ -151,7 +151,7 @@ defmodule Aerospike.Command.BatchTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Aerospike.batch_operate(:unused_tender, [BatchEntry.read(key)], max_retries: 1)
 
-      assert message =~ "currently support only the :timeout option"
+      assert message =~ "do not support option :max_retries"
     end
 
     test "returns caller-ordered public results for mixed entries", ctx do
@@ -262,7 +262,7 @@ defmodule Aerospike.Command.BatchTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Aerospike.batch_delete(:unused_tender, [key], max_retries: 1)
 
-      assert message =~ "currently support only the :timeout option"
+      assert message =~ "do not support option :max_retries"
     end
 
     test "rejects invalid tuple keys at the public boundary" do
@@ -375,7 +375,7 @@ defmodule Aerospike.Command.BatchTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                Aerospike.batch_udf(:unused_tender, [key], "pkg", "fun", [], max_retries: 1)
 
-      assert message =~ "currently support only the :timeout option"
+      assert message =~ "do not support option :max_retries"
     end
 
     test "rejects invalid tuple keys at the public boundary" do

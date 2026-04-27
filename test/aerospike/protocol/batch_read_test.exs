@@ -40,12 +40,13 @@ defmodule Aerospike.Protocol.BatchReadTest do
       ns_field = Field.encode(Field.namespace("test"))
       users_set_field = Field.encode(Field.set("users"))
       orders_set_field = Field.encode(Field.set("orders"))
+      batch_flags = Bitwise.bor(0x01, 0x04)
       row_attr = Bitwise.bor(AsmMsg.info1_read(), AsmMsg.info1_get_all())
 
       assert data ==
                <<
                  3::32-big,
-                 0::8,
+                 batch_flags::8,
                  0::32-big,
                  key1.digest::binary,
                  0::8,

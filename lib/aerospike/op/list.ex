@@ -48,6 +48,37 @@ defmodule Aerospike.Op.List do
   @remove_by_rank_range 39
   @remove_by_value_rel_rank_range 40
 
+  @inverted 0x10000
+  @persist_index 0x10
+
+  @doc "Create unordered lists by default."
+  @spec order_unordered() :: 0
+  def order_unordered, do: 0
+
+  @doc "Create ordered lists."
+  @spec order_ordered() :: 1
+  def order_ordered, do: 1
+
+  @doc "Use default list write behavior."
+  @spec write_default() :: 0
+  def write_default, do: 0
+
+  @doc "Only add unique list values."
+  @spec write_add_unique() :: 1
+  def write_add_unique, do: 1
+
+  @doc "Require list insert indexes to be inside list boundaries."
+  @spec write_insert_bounded() :: 2
+  def write_insert_bounded, do: 2
+
+  @doc "Do not fail the command when a list item is rejected by write flags."
+  @spec write_no_fail() :: 4
+  def write_no_fail, do: 4
+
+  @doc "Commit valid list items even when another item is rejected by write flags."
+  @spec write_partial() :: 8
+  def write_partial, do: 8
+
   @doc "Return no result for a selector operation."
   @spec return_none() :: 0
   def return_none, do: 0
@@ -80,6 +111,10 @@ defmodule Aerospike.Op.List do
   @spec return_exists() :: 13
   def return_exists, do: 13
 
+  @doc "Invert the selector so it applies outside the matched range."
+  @spec return_inverted() :: 0x10000
+  def return_inverted, do: @inverted
+
   @doc """
   Sets the list order and write flags for a list bin.
   """
@@ -87,6 +122,43 @@ defmodule Aerospike.Op.List do
   def set_type(bin_name, order, flags, opts \\ [])
       when is_binary(bin_name) and is_integer(order) and is_integer(flags) do
     CDT.list_modify_op(bin_name, @set_type, [order, flags], ctx(opts))
+  end
+
+  @doc """
+  Creates a list at the selected context level.
+
+  When `ctx:` is omitted, this sets the top-level bin list order. For nested
+  lists, pass `pad: true` to allow create indexes beyond the current boundary.
+  """
+  @spec create(String.t(), integer(), keyword()) :: t()
+  def create(bin_name, order, opts \\ [])
+      when is_binary(bin_name) and is_integer(order) do
+    case ctx(opts) do
+      steps when is_list(steps) and steps != [] ->
+        CDT.list_create_op(
+          bin_name,
+          list_order_flag(order, Keyword.get(opts, :pad, false)),
+          [
+            @set_type,
+            order
+          ],
+          steps
+        )
+
+      _ ->
+        set_order(bin_name, order, opts)
+    end
+  end
+
+  @doc """
+  Sets the list order.
+
+  Pass `persist_index: true` to persist an index for a top-level ordered list.
+  """
+  @spec set_order(String.t(), integer(), keyword()) :: t()
+  def set_order(bin_name, order, opts \\ [])
+      when is_binary(bin_name) and is_integer(order) do
+    CDT.list_modify_op(bin_name, @set_type, [order_attr(order, opts)], ctx(opts))
   end
 
   @doc """
@@ -147,6 +219,15 @@ defmodule Aerospike.Op.List do
   end
 
   @doc """
+  Removes and returns values from `index` through the end of the list.
+  """
+  @spec pop_range_from(String.t(), integer(), keyword()) :: t()
+  def pop_range_from(bin_name, index, opts \\ [])
+      when is_binary(bin_name) and is_integer(index) do
+    CDT.list_modify_op(bin_name, @pop_range, [index], ctx(opts))
+  end
+
+  @doc """
   Removes the value at `index` and returns the removed count.
   """
   @spec remove(String.t(), integer(), keyword()) :: t()
@@ -161,6 +242,15 @@ defmodule Aerospike.Op.List do
   def remove_range(bin_name, index, count, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_integer(count) do
     CDT.list_modify_op(bin_name, @remove_range, [index, count], ctx(opts))
+  end
+
+  @doc """
+  Removes values from `index` through the end and returns the removed count.
+  """
+  @spec remove_range_from(String.t(), integer(), keyword()) :: t()
+  def remove_range_from(bin_name, index, opts \\ [])
+      when is_binary(bin_name) and is_integer(index) do
+    CDT.list_modify_op(bin_name, @remove_range, [index], ctx(opts))
   end
 
   @doc """
@@ -478,6 +568,17 @@ defmodule Aerospike.Op.List do
 
   defp ctx(opts), do: Keyword.get(opts, :ctx)
   defp rt(opts), do: Keyword.get(opts, :return_type, return_value())
+
+  defp order_attr(order, opts) do
+    case Keyword.get(opts, :persist_index, false) do
+      true -> Bitwise.bor(order, @persist_index)
+      false -> order
+    end
+  end
+
+  defp list_order_flag(1, _pad), do: 0xC0
+  defp list_order_flag(_order, true), do: 0x80
+  defp list_order_flag(_order, false), do: 0x40
 
   defp list_policy(opts) do
     case Keyword.get(opts, :policy) do

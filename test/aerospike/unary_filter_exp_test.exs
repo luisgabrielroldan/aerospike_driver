@@ -1,6 +1,8 @@
 defmodule Aerospike.UnaryFilterExpTest do
   use ExUnit.Case, async: true
 
+  import Bitwise
+
   alias Aerospike.Cluster.NodeSupervisor
   alias Aerospike.Cluster.PartitionMapWriter
   alias Aerospike.Cluster.TableOwner
@@ -93,6 +95,71 @@ defmodule Aerospike.UnaryFilterExpTest do
     assert [] = last_command_msg(ctx.fake) |> filter_fields()
   end
 
+  test "encodes expanded read policy fields on unary reads", ctx do
+    script_bootstrap_node(ctx.fake, features: "compression")
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    Fake.script_command(ctx.fake, "A1", {:ok, metadata_reply(2)})
+
+    _result =
+      Get.execute(tender, key("expanded-read"), :all,
+        read_mode_ap: :all,
+        read_mode_sc: :allow_unavailable,
+        read_touch_ttl_percent: -1,
+        send_key: true,
+        use_compression: true
+      )
+
+    msg = last_command_msg(ctx.fake)
+
+    assert (msg.info1 &&& AsmMsg.info1_read_mode_ap_all()) != 0
+    assert (msg.info1 &&& AsmMsg.info1_compress_response()) != 0
+    assert (msg.info3 &&& AsmMsg.info3_sc_read_type()) != 0
+    assert (msg.info3 &&& AsmMsg.info3_sc_read_relax()) != 0
+    assert msg.expiration == -1
+    assert Enum.any?(msg.fields, &(&1.type == Field.type_key()))
+    assert Keyword.fetch!(Fake.last_command_opts(ctx.fake, "A1"), :use_compression) == true
+  end
+
+  test "encodes expanded write and operate policy fields", ctx do
+    script_bootstrap_node(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    Fake.script_command(ctx.fake, "A1", {:ok, metadata_reply(0)})
+
+    _result =
+      Put.execute(tender, key("expanded-write"), %{count: 1},
+        ttl: :dont_update,
+        generation: 8,
+        generation_policy: :expect_gt,
+        commit_level: :master,
+        send_key: false
+      )
+
+    write_msg = last_command_msg(ctx.fake)
+
+    assert (write_msg.info2 &&& AsmMsg.info2_write()) != 0
+    assert (write_msg.info2 &&& AsmMsg.info2_generation_gt()) != 0
+    assert (write_msg.info3 &&& AsmMsg.info3_commit_master()) != 0
+    assert write_msg.generation == 8
+    assert write_msg.expiration == -2
+    refute Enum.any?(write_msg.fields, &(&1.type == Field.type_key()))
+
+    Fake.script_command(ctx.fake, "A1", {:ok, operate_reply([], [])})
+
+    _result =
+      Operate.execute(tender, key("expanded-operate"), [:touch],
+        respond_per_op: true,
+        commit_level: :master
+      )
+
+    operate_msg = last_command_msg(ctx.fake)
+    assert (operate_msg.info2 &&& AsmMsg.info2_respond_all_ops()) != 0
+    assert (operate_msg.info3 &&& AsmMsg.info3_commit_master()) != 0
+  end
+
   defp last_command_msg(fake) do
     request = Fake.last_command_request(fake, "A1")
     assert {:ok, {_version, type, body}} = request |> IO.iodata_to_binary() |> Message.decode()
@@ -132,10 +199,12 @@ defmodule Aerospike.UnaryFilterExpTest do
     |> IO.iodata_to_binary()
   end
 
-  defp script_bootstrap_node(fake) do
+  defp script_bootstrap_node(fake, opts \\ []) do
+    features = Keyword.get(opts, :features, "")
+
     Fake.script_info(fake, "A1", ["node", "features"], %{
       "node" => "A1",
-      "features" => ""
+      "features" => features
     })
 
     script_cycle(fake,

@@ -139,7 +139,7 @@ defmodule Aerospike.Command.UnaryCommand do
       )
       when is_atom(transport) do
     %__MODULE__{build_request: build_request, parse_response: parse_response} = command
-    request = build_request.(input)
+    request = build_request.(prepare_input(input, command_opts))
 
     case transport.command(
            conn,
@@ -165,6 +165,12 @@ defmodule Aerospike.Command.UnaryCommand do
        when is_function(fun, 1) do
     fun.(opts)
   end
+
+  defp prepare_input(input, command_opts) when is_map(input) do
+    Map.put(input, :use_compression, Keyword.get(command_opts, :use_compression, false))
+  end
+
+  defp prepare_input(input, _command_opts), do: input
 
   defp normalize_result({:ok, _} = ok), do: ok
   defp normalize_result({:error, %Error{}} = err), do: err
