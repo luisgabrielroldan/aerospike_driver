@@ -15,9 +15,53 @@ Then run `iex -S mix` from the package directory.
 
 ## Start A Client
 
-`Aerospike.start_link/1` validates the connection options before the cluster
-runtime is started. The required options are the registered `:name`, transport
-module, host list, and namespace list.
+For application code, define a Repo module that owns one Aerospike cluster
+name:
+
+```elixir
+defmodule MyApp.Repo do
+  use Aerospike.Repo, otp_app: :my_app
+end
+```
+
+Configure the Repo under its module name:
+
+```elixir
+config :my_app, MyApp.Repo,
+  transport: Aerospike.Transport.Tcp,
+  hosts: ["127.0.0.1:3000"],
+  namespaces: ["test"],
+  pool_size: 2
+```
+
+Then add the Repo to your supervision tree:
+
+```elixir
+def start(_type, _args) do
+  children = [
+    MyApp.Repo
+  ]
+
+  Supervisor.start_link(children, strategy: :one_for_one, name: MyApp.Supervisor)
+end
+```
+
+The Repo uses its module name as the default cluster name. To use a different
+registered name, pass `:name` to `use Aerospike.Repo`.
+
+Readiness is separate from supervision startup. Startup validates the options
+and starts the processes; `Aerospike.Cluster.ready?/1` reports whether the
+client has published a routable cluster view.
+
+```elixir
+true = Aerospike.Cluster.ready?(MyApp.Repo.conn())
+```
+
+`Aerospike.Repo` is a thin facade over the canonical `Aerospike` API. It does
+not perform schema mapping, changeset validation, or object reflection.
+
+For scripts, experiments, or custom lifecycle management, you can still start a
+cluster directly:
 
 ```elixir
 {:ok, _pid} =
@@ -30,51 +74,44 @@ module, host list, and namespace list.
   )
 ```
 
-Use `Aerospike.Cluster.ready?/1` when a caller needs to observe that the
-published cluster view is ready for routing:
-
-```elixir
-true = Aerospike.Cluster.ready?(:aerospike)
-```
-
 ## Write And Read
 
-Build keys with `Aerospike.key/3`. Bin maps may use string or atom keys, but
+Build keys with `MyApp.Repo.key/3`. Bin maps may use string or atom keys, but
 string bin names are the clearest match for server-side data.
 
 ```elixir
-key = Aerospike.key("test", "users", "user:1")
+key = MyApp.Repo.key("test", "users", "user:1")
 
 {:ok, metadata} =
-  Aerospike.put(:aerospike, key, %{
+  MyApp.Repo.put(key, %{
     "name" => "Ada",
     "visits" => 1
   })
 
-{:ok, record} = Aerospike.get(:aerospike, key)
+{:ok, record} = MyApp.Repo.get(key)
 
 metadata.generation
 record.bins["name"]
 ```
 
-Read only selected bins by passing a list as the third argument:
+Read only selected bins by passing a list as the second argument:
 
 ```elixir
-{:ok, record} = Aerospike.get(:aerospike, key, ["name"])
+{:ok, record} = MyApp.Repo.get(key, ["name"])
 ```
 
-Use `get_header/3` when only metadata is needed:
+Use `get_header/1` when only metadata is needed:
 
 ```elixir
-{:ok, header} = Aerospike.get_header(:aerospike, key)
+{:ok, header} = MyApp.Repo.get_header(key)
 ```
 
 ## Close The Client
 
-`close/2` currently resolves the running cluster by its registered atom name.
+The Repo closes its supervised cluster by the configured registered name.
 
 ```elixir
-:ok = Aerospike.close(:aerospike)
+:ok = MyApp.Repo.close()
 ```
 
 ## Next Steps

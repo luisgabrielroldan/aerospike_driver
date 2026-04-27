@@ -82,6 +82,69 @@ specific way:
 Deletes and write-bearing operation lists also accept `durable_delete: true`
 when the target namespace and server support tombstones.
 
+## Command Options
+
+The public option surface is intentionally smaller than the full server policy
+matrix. Use the documented options on each function rather than passing
+policy names that are not part of this client's public API.
+
+Common read options:
+
+```elixir
+{:ok, record} =
+  Aerospike.get(:aerospike, key, :all,
+    timeout: 2_000,
+    filter:
+      Aerospike.Exp.eq(
+        Aerospike.Exp.str_bin("status"),
+        Aerospike.Exp.str("active")
+      )
+  )
+```
+
+`:timeout` is the total command budget in milliseconds. `:filter` is a
+non-empty `%Aerospike.Exp{}` used as a server-side expression filter.
+
+Common write options:
+
+```elixir
+{:ok, metadata} =
+  Aerospike.put(:aerospike, key, %{"score" => 12},
+    timeout: 2_000,
+    ttl: 3_600,
+    generation: previous_generation,
+    exists: :update_only,
+    durable_delete: false
+  )
+```
+
+`:ttl` is a server TTL in seconds; `0` uses the namespace default.
+`:generation` enforces equality when non-zero. `:exists` is one of
+`:update`, `:update_only`, `:create_or_replace`, `:replace_only`, or
+`:create_only`. `:durable_delete` asks compatible namespaces to retain a
+tombstone for delete-shaped writes.
+
+Transaction-aware write helpers also accept `txn: txn` when used inside the
+transaction API:
+
+```elixir
+Aerospike.transaction(:aerospike, fn txn ->
+  Aerospike.put(:aerospike, key, %{"status" => "locked"}, txn: txn)
+end)
+```
+
+Admin/info helpers use `:pool_checkout_timeout` because they are one-node pool
+operations:
+
+```elixir
+{:ok, stats} =
+  Aerospike.info(:aerospike, "statistics", pool_checkout_timeout: 1_000)
+```
+
+Batch helpers are deliberately narrower than single-record commands. The
+current batch helper option surface is `timeout:` only; per-entry write policy
+options are not exposed in this release.
+
 ## Operation Lists
 
 Use `operate/4` when multiple server-side operations should run against the

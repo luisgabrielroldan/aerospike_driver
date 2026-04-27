@@ -22,6 +22,42 @@ Pass credentials at cluster startup.
   )
 ```
 
+TLS uses the TLS transport and transport options under `connect_opts`.
+Username/password auth remains top-level cluster configuration.
+
+```elixir
+{:ok, _pid} =
+  Aerospike.start_link(
+    name: :aerospike_tls,
+    transport: Aerospike.Transport.Tls,
+    hosts: ["aerospike.example.com:4333"],
+    namespaces: ["test"],
+    user: "svc_ingest",
+    password: System.fetch_env!("AEROSPIKE_PASSWORD"),
+    pool_size: 4,
+    connect_opts: [
+      tls_name: "aerospike.example.com",
+      tls_cacertfile: "/etc/ssl/aerospike/ca.crt",
+      connect_timeout_ms: 5_000,
+      info_timeout: 5_000
+    ]
+  )
+```
+
+For mTLS or PKI deployments, add client certificate and key files:
+
+```elixir
+connect_opts: [
+  tls_name: "aerospike.example.com",
+  tls_cacertfile: "/etc/ssl/aerospike/ca.crt",
+  tls_certfile: "/etc/ssl/aerospike/client.crt",
+  tls_keyfile: "/etc/ssl/aerospike/client.key"
+]
+```
+
+`tls_verify: :verify_peer` is the default. Use `tls_verify: :verify_none` only
+for local test environments.
+
 ## Users
 
 Create password-authenticated users with role names.

@@ -47,6 +47,34 @@ key = Aerospike.key("test", "sessions", "session:events")
 record.bins["events"]
 ```
 
+Selector helpers can address list entries by index, rank, or value. Index is
+position in the list. Rank is position in value order, so `-1` means the
+highest-ranked value. `return_type:` controls whether the server returns
+values, indexes, ranks, counts, or an existence flag.
+
+```elixir
+{:ok, record} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.List.get_by_index("events", 0,
+      return_type: Aerospike.Op.List.return_value()
+    ),
+    Aerospike.Op.List.get_by_rank("events", -1,
+      return_type: Aerospike.Op.List.return_value()
+    ),
+    Aerospike.Op.List.get_by_value("events", "opened",
+      return_type: Aerospike.Op.List.return_exists()
+    )
+  ])
+```
+
+List write policies are passed as raw server policy integers. Defaults are the
+safest choice; set policy values only when your application needs ordered-list
+or write-flag behavior.
+
+```elixir
+Aerospike.Op.List.append("events", "clicked", policy: %{order: 0, flags: 0})
+```
+
 ## Map Operations
 
 Map operations live in `Aerospike.Op.Map`.
@@ -69,6 +97,37 @@ key = Aerospike.key("test", "profiles", "user:stats")
 record.bins["stats"]
 ```
 
+Map selectors can return keys, values, key/value pairs, indexes, ranks, counts,
+or existence flags. Key selectors default to keys, value/rank selectors default
+to values or key/value pairs depending on the operation; pass `return_type:`
+when the desired shape matters.
+
+```elixir
+{:ok, record} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.Map.get_by_key("stats", "views",
+      return_type: Aerospike.Op.Map.return_value()
+    ),
+    Aerospike.Op.Map.get_by_rank("stats", -1,
+      return_type: Aerospike.Op.Map.return_key_value()
+    ),
+    Aerospike.Op.Map.get_by_value("stats", 1,
+      return_type: Aerospike.Op.Map.return_key()
+    )
+  ])
+
+record.bins["stats"]
+```
+
+Map write policies are also thin wrappers around server policy integers.
+`attr: 0` uses the default unordered map behavior; non-zero values request
+server map attributes such as ordered maps. `flags:` applies write flags when
+the operation supports them.
+
+```elixir
+Aerospike.Op.Map.put_items("stats", %{"likes" => 2}, policy: %{attr: 0, flags: 0})
+```
+
 ## Nested CDT Paths
 
 Nested CDT operations use `Aerospike.Ctx` path steps through the `:ctx` option.
@@ -88,6 +147,48 @@ key = Aerospike.key("test", "profiles", "user:nested")
     )
   ])
 ```
+
+Context paths can move through maps and lists by key, value, index, or rank.
+The operation bin is the top-level CDT bin; each context step navigates inside
+that value before the operation runs.
+
+```elixir
+key = Aerospike.key("test", "profiles", "user:nested-scores")
+
+{:ok, _metadata} =
+  Aerospike.put(:aerospike, key, %{
+    "profile" => %{
+      "teams" => [
+        %{"name" => "red", "scores" => [10, 20]},
+        %{"name" => "blue", "scores" => [15]}
+      ]
+    }
+  })
+
+{:ok, record} =
+  Aerospike.operate(:aerospike, key, [
+    Aerospike.Op.List.append("profile", 25,
+      ctx: [
+        Aerospike.Ctx.map_key("teams"),
+        Aerospike.Ctx.list_index(0),
+        Aerospike.Ctx.map_key("scores")
+      ]
+    ),
+    Aerospike.Op.List.get_by_rank("profile", -1,
+      ctx: [
+        Aerospike.Ctx.map_key("teams"),
+        Aerospike.Ctx.list_index(0),
+        Aerospike.Ctx.map_key("scores")
+      ],
+      return_type: Aerospike.Op.List.return_value()
+    )
+  ])
+
+record.bins["profile"]
+```
+
+See `Aerospike.Op.List`, `Aerospike.Op.Map`, and `Aerospike.Ctx` for the full
+operation reference.
 
 ## Bit Operations
 

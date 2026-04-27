@@ -4,6 +4,66 @@ The public UDF surface covers package list/register/remove, single-record UDF
 execution, batch record UDF execution, background query UDF jobs, and aggregate
 queries. It does not claim broad UDF package tooling beyond those commands.
 
+## Lua Package Example
+
+A UDF package is a `.lua` file with one or more named functions. Record UDFs
+receive the target record as the first argument, followed by the arguments
+passed from Elixir.
+
+```lua
+-- priv/udf/records.lua
+
+function mark_seen(rec, source)
+  local visits = rec["visits"]
+
+  if visits == nil then
+    visits = 0
+  end
+
+  rec["visits"] = visits + 1
+  rec["last_seen_source"] = source
+
+  aerospike:update(rec)
+
+  return rec["visits"]
+end
+```
+
+After registering this file as `records.lua`, call it with package name
+`"records"` and function name `"mark_seen"`.
+
+Aggregate UDFs receive a stream instead of one record. The same package can
+contain record UDF functions and aggregate functions, but aggregate functions
+must return stream operations.
+
+```lua
+-- priv/udf/user_stats.lua
+
+local function add_bin(total, rec, bin_name)
+  return total + (rec[bin_name] or 0)
+end
+
+local function add_age(total, rec)
+  return add_bin(total, rec, "age")
+end
+
+local function merge_sum(left, right)
+  return left + right
+end
+
+function sum_age(stream, bin_name)
+  return stream : aggregate(0, function(total, rec)
+    return add_bin(total, rec, bin_name)
+  end) : reduce(merge_sum)
+end
+
+function sum_summary(stream)
+  return stream : aggregate(0, add_age) : reduce(merge_sum) : map(function(total)
+    return map{sum = total, labels = {"total", tostring(total)}}
+  end)
+end
+```
+
 ## Package Lifecycle
 
 Upload a Lua package from a readable path or inline source. The server filename
@@ -71,6 +131,14 @@ Pass `node: node_name` when the background job should target one active node.
 client does not run local Lua finalization on this path.
 
 ```elixir
+server_name = "user_stats.lua"
+package = "user_stats"
+
+{:ok, task} =
+  Aerospike.register_udf(:aerospike, "priv/udf/user_stats.lua", server_name)
+
+:ok = Aerospike.RegisterTask.wait(task, timeout: 10_000, poll_interval: 200)
+
 query =
   Aerospike.Query.new("test", "users")
   |> Aerospike.Query.where(Aerospike.Filter.range("age", 18, 65))
@@ -82,6 +150,10 @@ query =
 
 total = partials |> Enum.to_list() |> Enum.sum()
 ```
+
+In this example, the server package was registered as `"user_stats.lua"`, the
+package argument is `"user_stats"`, the function argument is `"sum_age"`, and
+`["age"]` is passed to the Lua function after the stream.
 
 ## Finalized Aggregate Results
 
@@ -97,7 +169,7 @@ registered on the server.
     package,
     "sum_age",
     ["age"],
-    source_path: "priv/udf/records.lua",
+    source_path: "priv/udf/user_stats.lua",
     timeout: 10_000
   )
 ```
@@ -106,6 +178,19 @@ Pass exactly one of `source: lua_source` or `source_path: path`. Missing
 source, both source options, unreadable files, unsupported local arguments, or
 `node: node_name` return an invalid-argument error before the server query is
 opened.
+
+The registered server package and the local source are related but separate:
+
+- Register `"user_stats.lua"` on the server before calling
+  `query_aggregate/6` or `query_aggregate_result/6`.
+- Pass package name `"user_stats"` and function name `"sum_age"` to the query
+  call.
+- Pass `source_path: "priv/udf/user_stats.lua"` or `source: lua_source` only
+  for `query_aggregate_result/6`, because local finalization needs the Lua
+  source available to the Elixir client.
+- Keep the local source aligned with the registered package. The client does
+  not fetch Lua source back from the server or infer a path from the package
+  name.
 
 The local reducer runs in a bounded Lua state. Supported stream helpers are
 `map`, `filter`, `aggregate`, and `reduce`; logging helpers are no-ops. Local
@@ -116,3 +201,18 @@ fail explicitly.
 Values crossing the local Lua boundary are limited to `nil`, booleans,
 integers, floats, binaries, lists, and maps with scalar keys. Empty
 finalization returns `{:ok, nil}`; multiple final values return an error.
+
+```elixir
+{:ok, summary} =
+  Aerospike.query_aggregate_result(
+    :aerospike,
+    query,
+    package,
+    "sum_summary",
+    [],
+    source_path: "priv/udf/user_stats.lua",
+    timeout: 10_000
+  )
+
+%{"labels" => labels, "sum" => sum} = summary
+```

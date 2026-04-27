@@ -95,6 +95,13 @@ end
 Cursors resume partition progress. They are suitable for continuing a query
 walk, but they are not snapshot tokens.
 
+Scan and query execution options are runtime controls, not record write
+policies. Common options include `timeout:`, `task_timeout:`,
+`pool_checkout_timeout:`, `max_concurrent_nodes:`, `task_id:`, and `cursor:`
+where the helper supports paging. Use builder functions such as
+`Scan.filter/2`, `Query.filter/2`, `Query.where/2`, and `max_records/2` for
+server-visible query shape.
+
 Scan pages use the same cursor shape:
 
 ```elixir

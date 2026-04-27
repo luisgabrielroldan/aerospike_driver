@@ -29,41 +29,61 @@ Start a local Aerospike Community Edition node from this repository:
 docker compose up -d
 ```
 
-Start a client cluster and write a record:
+Define an application Repo module:
 
 ```elixir
-{:ok, _sup} =
-  Aerospike.start_link(
-    name: :aerospike,
-    transport: Aerospike.Transport.Tcp,
-    hosts: ["127.0.0.1:3000"],
-    namespaces: ["test"],
-    pool_size: 2
-  )
+defmodule MyApp.Repo do
+  use Aerospike.Repo, otp_app: :my_app
+end
+```
 
-key = Aerospike.key("test", "demo", "user:1")
+Configure and supervise it from your application:
+
+```elixir
+# config/config.exs
+config :my_app, MyApp.Repo,
+  transport: Aerospike.Transport.Tcp,
+  hosts: ["127.0.0.1:3000"],
+  namespaces: ["test"],
+  pool_size: 2
+
+# lib/my_app/application.ex
+children = [
+  MyApp.Repo
+]
+```
+
+Then write and read records without repeating the cluster name:
+
+```elixir
+key = MyApp.Repo.key("test", "demo", "user:1")
 
 {:ok, _meta} =
-  Aerospike.put(:aerospike, key, %{
+  MyApp.Repo.put(key, %{
     "name" => "Ada",
     "visits" => 1
   })
 
-{:ok, record} = Aerospike.get(:aerospike, key)
+{:ok, record} = MyApp.Repo.get(key)
 %{"name" => "Ada", "visits" => 1} = record.bins
 ```
 
-Required startup options are `:name`, `:transport`, `:hosts`, and
-`:namespaces`. Startup validation runs synchronously in `Aerospike.start_link/1`
-so malformed cluster, retry, pool, auth, and transport options fail before the
-runtime is published.
+Required startup options are `:transport`, `:hosts`, and `:namespaces`. The
+Repo uses its module name as the default cluster name; pass `:name` to
+`use Aerospike.Repo` when you need a different registered name.
 
-Use `Aerospike.Cluster.ready?/1` when your application wants to wait until the
-first cluster view is available for routing.
+Startup validation runs synchronously through the underlying
+`Aerospike.start_link/1`, so malformed cluster, retry, pool, auth, and
+transport options fail before the runtime is published.
+
+Use `Aerospike.Cluster.ready?(MyApp.Repo.conn())` when your application wants
+to wait until the first cluster view is available for routing.
 
 ## What It Supports
 
-The main public entry point is `Aerospike`. The current surface includes:
+The canonical low-level public entry point is `Aerospike`. Applications can
+define a thin `Aerospike.Repo` module to bind that API to one supervised
+cluster. The current surface includes:
 
 - Record commands: `get/3`, `get_header/3`, `put/4`, `exists/3`, `touch/3`,
   `delete/3`, `add/4`, `append/4`, and `prepend/4`
@@ -95,8 +115,18 @@ transaction handles.
 
 The client starts a supervised cluster per configured `:name`. Internally, that
 cluster owns node discovery, partition maps, per-node connection pools, retry
-budgets, circuit-breaker state, and transaction tracking. Application code uses
-the registered cluster name when calling the public API:
+budgets, circuit-breaker state, and transaction tracking. Most applications
+should define a Repo module as their boundary:
+
+```elixir
+defmodule MyApp.Repo do
+  use Aerospike.Repo, otp_app: :my_app
+end
+```
+
+The Repo is a thin facade over one cluster. It does not perform schema mapping,
+changeset validation, or object reflection. Lower-level code can call the
+registered cluster directly:
 
 ```elixir
 Aerospike.get(:aerospike, key)
@@ -119,6 +149,7 @@ Use these guides for task-oriented examples:
 - [Queries And Scans](guides/queries-and-scans.md)
 - [Expressions And Server Features](guides/expressions-and-server-features.md)
 - [UDFs And Aggregates](guides/udfs-and-aggregates.md)
+- [Operator And Admin Tasks](guides/operator-and-admin-tasks.md)
 - [Security And XDR](guides/security-and-xdr.md)
 - [Transactions](guides/transactions.md)
 - [Telemetry And Runtime Metrics](guides/telemetry-and-runtime-metrics.md)

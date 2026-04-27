@@ -18,6 +18,40 @@ adult =
 {:ok, record} = Aerospike.get(:aerospike, key, :all, filter: adult)
 ```
 
+Compose boolean expressions with `Exp.and_/1`, `Exp.or_/1`, and `Exp.not_/1`.
+The trailing underscores avoid Elixir reserved words.
+
+```elixir
+eligible =
+  Aerospike.Exp.and_([
+    Aerospike.Exp.gte(Aerospike.Exp.int_bin("age"), Aerospike.Exp.int(18)),
+    Aerospike.Exp.or_([
+      Aerospike.Exp.eq(Aerospike.Exp.str_bin("status"), Aerospike.Exp.str("active")),
+      Aerospike.Exp.eq(Aerospike.Exp.str_bin("status"), Aerospike.Exp.str("trial"))
+    ]),
+    Aerospike.Exp.not_(
+      Aerospike.Exp.eq(Aerospike.Exp.bool_bin("blocked"), Aerospike.Exp.bool(true))
+    )
+  ])
+
+{:ok, record} = Aerospike.get(:aerospike, key, :all, filter: eligible)
+```
+
+Metadata expressions read record metadata instead of bin values. The current
+builder surface includes TTL, last-update time, stored-key presence, set name,
+and storage size.
+
+```elixir
+recent_persistent_user =
+  Aerospike.Exp.and_([
+    Aerospike.Exp.gt(Aerospike.Exp.ttl(), Aerospike.Exp.int(0)),
+    Aerospike.Exp.gt(Aerospike.Exp.last_update(), Aerospike.Exp.int(0)),
+    Aerospike.Exp.key_exists(),
+    Aerospike.Exp.eq(Aerospike.Exp.set_name(), Aerospike.Exp.str("users")),
+    Aerospike.Exp.lt(Aerospike.Exp.record_size(), Aerospike.Exp.int(16_384))
+  ])
+```
+
 Scans and queries use builder-level filters:
 
 ```elixir
@@ -32,7 +66,16 @@ query =
 ```
 
 Multiple scan or query filters are combined server-side with boolean AND when
-encoded.
+encoded. Expressions can currently be used in these places:
+
+- Command filters through options like `filter: exp` on supported record
+  commands.
+- Scan and query filters through `Aerospike.Scan.filter/2` and
+  `Aerospike.Query.filter/2`.
+- Expression operate operations through `Aerospike.Op.Exp`.
+- Expression-backed secondary indexes through
+  `Aerospike.create_expression_index/5`.
+- Enterprise XDR filters through `Aerospike.set_xdr_filter/4`.
 
 ## Expression Operations
 

@@ -95,6 +95,7 @@ defmodule Aerospike.MixProject do
         {"guides/queries-and-scans.md", [title: "Queries And Scans"]},
         {"guides/expressions-and-server-features.md", [title: "Expressions And Server Features"]},
         {"guides/udfs-and-aggregates.md", [title: "UDFs And Aggregates"]},
+        {"guides/operator-and-admin-tasks.md", [title: "Operator And Admin Tasks"]},
         {"guides/security-and-xdr.md", [title: "Security And XDR"]},
         {"guides/transactions.md", [title: "Transactions"]},
         {"guides/telemetry-and-runtime-metrics.md", [title: "Telemetry And Runtime Metrics"]}
@@ -111,6 +112,7 @@ defmodule Aerospike.MixProject do
       groups_for_modules: [
         "Core API": [
           Aerospike,
+          Aerospike.Repo,
           Aerospike.Cluster,
           Aerospike.Key,
           Aerospike.Record,
