@@ -433,6 +433,35 @@ defmodule Aerospike.Command.ScanOpsTest do
             }} = Aerospike.query_udf(tender, query, "pkg", "fun", [])
   end
 
+  test "query_execute normalizes simple write operation shapes and rejects reads", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    query =
+      Query.new(@namespace, "scan_ops")
+      |> Query.where(Filter.range("payload", 0, 9))
+
+    assert {:error, %Aerospike.Error{code: :invalid_argument, message: message}} =
+             Aerospike.query_execute(tender, query, [{:read, :payload}])
+
+    assert message =~ "background query operations must all be write operations"
+
+    Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 4, 60)})
+    Fake.script_command(ctx.fake, "B1", {:ok, scripted_reply_body(0, 4, 60)})
+
+    assert {:ok, %Aerospike.ExecuteTask{kind: :query_execute}} =
+             Aerospike.query_execute(tender, query, [{:write, :state, "executed"}])
+
+    assert %Operation{op_type: op_type, bin_name: "state", data: "executed"} =
+             ctx.fake
+             |> Fake.last_command_request("A1")
+             |> decode_command_request()
+             |> List.first()
+
+    assert op_type == Operation.op_write()
+  end
+
   test "count and paging surface deterministic parse and cursor errors as Aerospike.Error values",
        ctx do
     script_two_node_cluster(ctx.fake)
@@ -617,6 +646,12 @@ defmodule Aerospike.Command.ScanOpsTest do
   end
 
   defp encode_bin(msg), do: IO.iodata_to_binary(Message.encode_as_msg_iodata(AsmMsg.encode(msg)))
+
+  defp decode_command_request(request) do
+    assert {:ok, {_version, 3, body}} = request |> IO.iodata_to_binary() |> Message.decode()
+    assert {:ok, %AsmMsg{operations: operations}} = AsmMsg.decode(body)
+    operations
+  end
 
   defp digest_fixture(seed) do
     :crypto.hash(:ripemd160, seed)

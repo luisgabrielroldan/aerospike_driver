@@ -203,7 +203,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
 
     assert msg.info1 == 0
     assert msg.info2 == AsmMsg.info2_write()
-    assert msg.info3 == @info3_partition_done
+    assert msg.info3 == 0
     assert Enum.map(msg.operations, & &1.bin_name) == ["state"]
 
     assert field_data(msg, Field.type_index_range()) ==
@@ -273,7 +273,7 @@ defmodule Aerospike.Protocol.ScanQueryTest do
 
     assert msg.info1 == 0
     assert msg.info2 == AsmMsg.info2_write()
-    assert msg.info3 == @info3_partition_done
+    assert msg.info3 == 0
     assert msg.operations == []
     assert field_data(msg, Field.type_udf_op()) == <<2>>
     assert field_data(msg, Field.type_udf_package_name()) == "demo"

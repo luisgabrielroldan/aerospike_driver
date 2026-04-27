@@ -106,8 +106,25 @@ defmodule Aerospike.Integration.PutPayloadTest do
     |> IO.iodata_to_binary()
   end
 
-  defp cleanup_key(cluster, %Key{} = key) do
-    Aerospike.delete(cluster, key)
+  defp cleanup_key(_cluster, %Key{} = key) do
+    name = IntegrationSupport.unique_atom("spike_put_payload_cleanup")
+
+    with {:ok, sup} <-
+           Aerospike.start_link(
+             name: name,
+             transport: Aerospike.Transport.Tcp,
+             hosts: ["#{@host}:#{@port}"],
+             namespaces: [@namespace],
+             tend_trigger: :manual,
+             pool_size: 1
+           ) do
+      try do
+        IntegrationSupport.wait_for_tender_ready!(name, 5_000)
+        _ = Aerospike.delete(name, key)
+      after
+        IntegrationSupport.stop_supervisor_quietly(sup)
+      end
+    end
   catch
     :exit, _ -> :ok
   end

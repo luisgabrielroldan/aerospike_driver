@@ -290,7 +290,7 @@ defmodule Aerospike.Protocol.ScanQuery do
     %AsmMsg{
       info1: 0,
       info2: AsmMsg.info2_write(),
-      info3: @info3_partition_done,
+      info3: 0,
       timeout: timeout,
       fields: fields,
       operations: background_query_operations(background)

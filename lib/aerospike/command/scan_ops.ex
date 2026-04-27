@@ -10,6 +10,7 @@ defmodule Aerospike.Command.ScanOps do
   alias Aerospike.ExecuteTask
   alias Aerospike.Page
   alias Aerospike.PartitionFilter
+  alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Query
   alias Aerospike.Query.AggregateReducer
   alias Aerospike.Scan
@@ -124,8 +125,9 @@ defmodule Aerospike.Command.ScanOps do
           {:ok, ExecuteTask.t()} | {:error, Error.t()}
   def query_execute(tender, %Query{} = query, ops, opts \\ [])
       when is_list(ops) and is_list(opts) do
-    with {:ok, node_name, opts2} <- normalize_node_opt(opts) do
-      query_execute_with_node(tender, query, ops, node_name, opts2)
+    with {:ok, built_ops} <- build_background_operations(ops),
+         {:ok, node_name, opts2} <- normalize_node_opt(opts) do
+      query_execute_with_node(tender, query, built_ops, node_name, opts2)
     end
   end
 
@@ -264,6 +266,81 @@ defmodule Aerospike.Command.ScanOps do
   defp aggregate_transport_opts(opts) do
     Keyword.drop(opts, [:source, :source_path])
   end
+
+  defp build_background_operations(operations) do
+    operations
+    |> Enum.reduce_while({:ok, []}, fn operation, {:ok, acc} ->
+      case build_background_operation(operation) do
+        {:ok, built_operation} -> {:cont, {:ok, [built_operation | acc]}}
+        {:error, %Error{}} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, built_operations} -> {:ok, Enum.reverse(built_operations)}
+      {:error, %Error{}} = err -> err
+    end
+  end
+
+  defp build_background_operation(%Operation{} = operation) do
+    validate_background_write_operation({:ok, operation}, operation)
+  end
+
+  defp build_background_operation({:read, bin_name} = operation) do
+    {:read, normalize_bin_name(bin_name)}
+    |> Operation.from_simple()
+    |> validate_background_write_operation(operation)
+  end
+
+  defp build_background_operation({kind, bin_name, value} = operation)
+       when kind in [:write, :add, :append, :prepend] do
+    {kind, normalize_bin_name(bin_name), value}
+    |> Operation.from_simple()
+    |> validate_background_write_operation(operation)
+  end
+
+  defp build_background_operation(operation) do
+    operation
+    |> Operation.from_simple()
+    |> validate_background_write_operation(operation)
+  end
+
+  defp validate_background_write_operation({:ok, %Operation{} = operation}, source) do
+    if background_write_operation?(operation) do
+      {:ok, operation}
+    else
+      invalid_background_operation(source)
+    end
+  end
+
+  defp validate_background_write_operation({:error, %Error{}} = err, _source), do: err
+
+  defp background_write_operation?(%Operation{read_header: true}), do: false
+
+  defp background_write_operation?(%Operation{op_type: op_type}) do
+    op_type in [
+      Operation.op_write(),
+      Operation.op_cdt_modify(),
+      Operation.op_add(),
+      Operation.op_exp_modify(),
+      Operation.op_append(),
+      Operation.op_prepend(),
+      Operation.op_touch(),
+      Operation.op_bit_modify(),
+      Operation.op_delete(),
+      Operation.op_hll_modify()
+    ]
+  end
+
+  defp invalid_background_operation(operation) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message:
+         "background query operations must all be write operations, got: #{inspect(operation)}"
+     )}
+  end
+
+  defp normalize_bin_name(bin_name) when is_atom(bin_name), do: Atom.to_string(bin_name)
+  defp normalize_bin_name(bin_name), do: bin_name
 
   defp normalize_node_opt(opts) when is_list(opts) do
     case Keyword.pop(opts, :node) do
