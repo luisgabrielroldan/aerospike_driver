@@ -302,5 +302,3 @@ defmodule Aerospike.PolicyTest do
     end
   end
 end
-
-

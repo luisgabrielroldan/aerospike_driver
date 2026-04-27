@@ -86,21 +86,24 @@ defmodule Aerospike.Command.BatchRouter do
   defp reduce_entries([], _tables), do: {:ok, %{}, [], []}
 
   defp reduce_entries(entries, tables) do
-    if Router.ready?(tables) do
-      Enum.reduce(entries, {:ok, %{}, [], []}, fn %Entry{} = entry,
-                                                  {:ok, grouped, node_order, failures} ->
-        case route_entry_ready(tables, entry) do
-          {:ok, node_name} ->
-            {next_grouped, next_node_order} = put_entry(grouped, node_order, node_name, entry)
-            {:ok, next_grouped, next_node_order, failures}
+    if Router.ready?(tables),
+      do: reduce_ready_entries(entries, tables),
+      else: {:error, :cluster_not_ready}
+  end
 
-          {:error, reason} ->
-            failure = %RoutingFailure{entry: entry, reason: reason}
-            {:ok, grouped, node_order, [failure | failures]}
-        end
-      end)
-    else
-      {:error, :cluster_not_ready}
+  defp reduce_ready_entries(entries, tables) do
+    Enum.reduce(entries, {:ok, %{}, [], []}, &reduce_ready_entry(&1, &2, tables))
+  end
+
+  defp reduce_ready_entry(%Entry{} = entry, {:ok, grouped, node_order, failures}, tables) do
+    case route_entry_ready(tables, entry) do
+      {:ok, node_name} ->
+        {next_grouped, next_node_order} = put_entry(grouped, node_order, node_name, entry)
+        {:ok, next_grouped, next_node_order, failures}
+
+      {:error, reason} ->
+        failure = %RoutingFailure{entry: entry, reason: reason}
+        {:ok, grouped, node_order, [failure | failures]}
     end
   end
 

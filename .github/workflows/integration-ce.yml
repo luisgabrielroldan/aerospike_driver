@@ -1,0 +1,79 @@
+name: Integration CE
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+
+jobs:
+  integration-ce:
+    name: Community Edition Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18.2"
+
+      - name: Restore Mix cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}-${{ hashFiles('mix.exs') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Start Aerospike Community Edition cluster
+        run: docker compose --profile cluster up -d aerospike aerospike2 aerospike3
+
+      - name: Wait for Aerospike cluster
+        run: |
+          deadline=$((SECONDS + 180))
+          until \
+            docker exec aerospike1 asinfo -v status | grep -q '^ok$' && \
+            docker exec aerospike2 asinfo -v status | grep -q '^ok$' && \
+            docker exec aerospike3 asinfo -v status | grep -q '^ok$' && \
+            stable="$(docker exec aerospike1 asinfo -v 'cluster-stable:size=3;ignore-migrations=true')" && \
+            [ -n "$stable" ] && [ "$stable" != "false" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              docker compose ps
+              docker logs aerospike1
+              docker logs aerospike2
+              docker logs aerospike3
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Run CE integration tests
+        run: mix test.integration.ce
+
+      - name: Show Aerospike logs on failure
+        if: failure()
+        run: |
+          docker logs aerospike1 || true
+          docker logs aerospike2 || true
+          docker logs aerospike3 || true
+
+      - name: Stop Aerospike
+        if: always()
+        run: docker compose down -v
