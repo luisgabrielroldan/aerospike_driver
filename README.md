@@ -1,10 +1,13 @@
 # Aerospike Driver
 
-`aerospike_driver` is an OTP-native Aerospike client for Elixir.
+`aerospike_driver` is an OTP-native Aerospike client for Elixir. It provides a
+supervised cluster runtime, partition-aware routing, pooled TCP/TLS
+connections, and a public API for records, batch commands, scans, queries,
+CDTs, expressions, UDFs, security administration, and transactions.
 
-It provides a supervised cluster runtime, partition-aware routing, connection
-pools, retry-aware command execution, streaming scan/query helpers, telemetry,
-and a public API centered on the `Aerospike` module.
+The library is still pre-1.0, so the README calls out current boundaries rather
+than presenting the package as complete parity with every official Aerospike
+client.
 
 ## Installation
 
