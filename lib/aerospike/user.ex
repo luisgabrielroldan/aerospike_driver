@@ -11,6 +11,7 @@ defmodule Aerospike.User do
   @typedoc "Opaque ordered statistics vector returned by the server."
   @type info_counters :: [non_neg_integer()]
 
+  @typedoc "Security user metadata returned by user queries."
   @type t :: %__MODULE__{
           name: String.t(),
           roles: [String.t()],

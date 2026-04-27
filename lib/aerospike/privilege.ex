@@ -26,6 +26,7 @@ defmodule Aerospike.Privilege do
           | :write_masked
           | :unknown
 
+  @typedoc "Privilege metadata returned by role queries."
   @type t :: %__MODULE__{
           code: code(),
           raw_code: non_neg_integer() | nil,

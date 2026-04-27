@@ -60,8 +60,7 @@ defmodule Aerospike.Cluster.NodeTransport do
     * `:use_compression` — when `true`, requests whose encoded size exceeds
       a fixed 128-byte threshold are wrapped in a type-4
       (`AS_MSG_COMPRESSED`) proto frame before being sent. Smaller requests
-      are sent plain even when the flag is set, matching the Go and Java
-      clients (`_COMPRESS_THRESHOLD = 128`). Implementations that ignore
+      are sent plain even when the flag is set. Implementations that ignore
       compression must still accept the option without error. Defaults to
       `false`.
     * `:message_type` — `:as_msg` (default) or `:admin`. `:admin` is the

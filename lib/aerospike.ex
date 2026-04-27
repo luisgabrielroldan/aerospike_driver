@@ -623,7 +623,11 @@ defmodule Aerospike do
     end
   end
 
+  @doc """
+  Deprecated alias for `scan_stream!/3`.
+  """
   @deprecated "Use scan_stream!/3 instead."
+  @spec stream!(cluster(), Scan.t(), keyword()) :: Enumerable.t()
   def stream!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_stream!(cluster, scan, opts)
   end
@@ -665,7 +669,12 @@ defmodule Aerospike do
     ScanOps.all(cluster, scan, opts)
   end
 
+  @doc """
+  Deprecated alias for `scan_all/3`.
+  """
   @deprecated "Use scan_all/3 instead."
+  @spec all(cluster(), Scan.t(), keyword()) ::
+          {:ok, [Aerospike.Record.t()]} | {:error, Aerospike.Error.t()}
   def all(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_all(cluster, scan, opts)
   end
@@ -735,7 +744,11 @@ defmodule Aerospike do
     end
   end
 
+  @doc """
+  Deprecated alias for `scan_all!/3`.
+  """
   @deprecated "Use scan_all!/3 instead."
+  @spec all!(cluster(), Scan.t(), keyword()) :: [Aerospike.Record.t()]
   def all!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_all!(cluster, scan, opts)
   end
@@ -752,7 +765,12 @@ defmodule Aerospike do
     ScanOps.count(cluster, scan, opts)
   end
 
+  @doc """
+  Deprecated alias for `scan_count/3`.
+  """
   @deprecated "Use scan_count/3 instead."
+  @spec count(cluster(), Scan.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, Aerospike.Error.t()}
   def count(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_count(cluster, scan, opts)
   end
@@ -1632,7 +1650,11 @@ defmodule Aerospike do
     end
   end
 
+  @doc """
+  Deprecated alias for `scan_count!/3`.
+  """
   @deprecated "Use scan_count!/3 instead."
+  @spec count!(cluster(), Scan.t(), keyword()) :: non_neg_integer()
   def count!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     scan_count!(cluster, scan, opts)
   end

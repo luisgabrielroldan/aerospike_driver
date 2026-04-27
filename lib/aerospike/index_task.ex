@@ -9,6 +9,7 @@ defmodule Aerospike.IndexTask do
   @enforce_keys [:conn, :namespace, :index_name]
   defstruct [:conn, :namespace, :index_name]
 
+  @typedoc "Handle returned while a secondary index is being built."
   @type t :: %__MODULE__{
           conn: GenServer.server(),
           namespace: String.t(),

@@ -21,6 +21,7 @@ defmodule Aerospike.Batch do
     @enforce_keys [:key]
     defstruct [:key]
 
+    @typedoc "Batch read entry targeting one key."
     @type t :: %__MODULE__{key: Key.t()}
   end
 
@@ -30,6 +31,7 @@ defmodule Aerospike.Batch do
     @enforce_keys [:key, :bins]
     defstruct [:key, :bins]
 
+    @typedoc "Batch put entry with bins to write for one key."
     @type t :: %__MODULE__{key: Key.t(), bins: Record.bins_input()}
   end
 
@@ -39,6 +41,7 @@ defmodule Aerospike.Batch do
     @enforce_keys [:key]
     defstruct [:key]
 
+    @typedoc "Batch delete entry targeting one key."
     @type t :: %__MODULE__{key: Key.t()}
   end
 
@@ -48,6 +51,7 @@ defmodule Aerospike.Batch do
     @enforce_keys [:key, :operations]
     defstruct [:key, :operations]
 
+    @typedoc "Batch operate entry with record operations for one key."
     @type t :: %__MODULE__{key: Key.t(), operations: [Aerospike.Op.t()]}
   end
 
@@ -57,6 +61,7 @@ defmodule Aerospike.Batch do
     @enforce_keys [:key, :package, :function, :args]
     defstruct [:key, :package, :function, :args]
 
+    @typedoc "Batch record-UDF entry targeting one key."
     @type t :: %__MODULE__{
             key: Key.t(),
             package: String.t(),
@@ -114,6 +119,7 @@ defmodule Aerospike.Batch do
   @doc """
   Builds a record-UDF entry.
   """
+  @spec udf(Key.key_input(), String.t(), String.t()) :: UDF.t()
   @spec udf(Key.key_input(), String.t(), String.t(), list()) :: UDF.t()
   def udf(key, package, function, args \\ [])
       when is_binary(package) and is_binary(function) and is_list(args) do

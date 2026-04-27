@@ -103,6 +103,7 @@ defmodule Aerospike.Transport.Tcp do
   import Bitwise
 
   alias Aerospike.Error
+  alias Aerospike.Cluster.NodeTransport
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message
@@ -112,8 +113,7 @@ defmodule Aerospike.Transport.Tcp do
   @default_connect_timeout_ms 5_000
   @header_size 8
   # Outbound requests below this size are sent uncompressed even when the
-  # caller sets `use_compression: true`. Matches Go
-  # `command.go:_COMPRESS_THRESHOLD` and Java `Command.COMPRESS_THRESHOLD`.
+  # caller sets `use_compression: true`.
   @compress_threshold 128
   @proto_version Message.proto_version()
   @type_info Message.type_info()
@@ -129,6 +129,7 @@ defmodule Aerospike.Transport.Tcp do
           node_name: String.t() | nil
         }
 
+  @typedoc "Opaque TCP connection handle."
   @opaque conn :: t()
 
   @typedoc "Opaque stream handle owned by a dedicated socket worker."
@@ -137,7 +138,15 @@ defmodule Aerospike.Transport.Tcp do
   @enforce_keys [:socket, :info_timeout]
   defstruct [:socket, :info_timeout, socket_mod: :gen_tcp, node_name: nil]
 
+  @doc """
+  Opens a plaintext TCP connection to an Aerospike node.
+
+  Options mirror the cluster `:connect_opts` accepted by
+  `Aerospike.start_link/1`, including timeouts, TCP socket tuning, node name,
+  and optional auth credentials.
+  """
   @impl true
+  @spec connect(String.t(), :inet.port_number(), keyword()) :: {:ok, conn()} | {:error, Error.t()}
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
     info_timeout = Keyword.get(opts, :info_timeout, connect_timeout_ms)
@@ -156,7 +165,12 @@ defmodule Aerospike.Transport.Tcp do
     end
   end
 
-  @doc false
+  @doc """
+  Wraps an upgraded SSL socket in the TCP transport connection struct.
+
+  This package-internal helper is used by `Aerospike.Transport.Tls` after the
+  TLS handshake succeeds.
+  """
   # Package-internal constructor used by `Aerospike.Transport.Tls.connect/3`
   # to wrap a freshly upgraded `:ssl` socket in the same opaque struct the
   # plaintext transport returns from `connect/3`. Keeping the struct field
@@ -177,7 +191,12 @@ defmodule Aerospike.Transport.Tcp do
     }
   end
 
-  @doc false
+  @doc """
+  Runs the optional login/authenticate handshake after a TLS upgrade.
+
+  This package-internal helper lets `Aerospike.Transport.Tls` share the TCP
+  transport's auth behavior.
+  """
   # Package-internal entry point used by `Aerospike.Transport.Tls.connect/3`
   # to run the admin-protocol login handshake on a freshly upgraded TLS
   # socket. Splitting this out of `connect/3` lets the TLS transport reuse
@@ -271,14 +290,15 @@ defmodule Aerospike.Transport.Tcp do
     end
   end
 
-  # Public entry point so callers that want the raw login reply (the
-  # Tender, which caches the session token per node) can reach it
-  # without going through `connect/3`'s default swallow-the-token
-  # behaviour. Runs on an already-connected socket; the caller owns
-  # the socket and is expected to close it on error.
+  @doc """
+  Runs the admin-protocol login or authenticate handshake on an open socket.
+
+  The Tender uses this callback to obtain and cache session tokens. Callers
+  own the socket and are expected to close it after an error.
+  """
   @impl true
   @spec login(conn(), keyword()) ::
-          {:ok, Login.login_reply()} | {:error, Error.t()}
+          {:ok, NodeTransport.login_reply()} | {:error, Error.t()}
   def login(%__MODULE__{} = conn, opts) when is_list(opts) do
     timeout_ms = Keyword.get(opts, :login_timeout_ms, conn.info_timeout)
 
@@ -484,13 +504,22 @@ defmodule Aerospike.Transport.Tcp do
       "got #{inspect(value)}"
   end
 
+  @doc """
+  Closes the TCP or TLS socket.
+  """
   @impl true
+  @spec close(conn()) :: :ok
   def close(%__MODULE__{socket_mod: mod, socket: socket}) do
     _ = mod.close(socket)
     :ok
   end
 
+  @doc """
+  Sends a streaming request and returns a stream handle for incremental reads.
+  """
   @impl true
+  @spec stream_open(conn(), iodata(), non_neg_integer(), keyword()) ::
+          {:ok, stream()} | {:error, Error.t()}
   def stream_open(%__MODULE__{} = conn, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
              deadline_ms >= 0 and is_list(opts) do
@@ -508,18 +537,30 @@ defmodule Aerospike.Transport.Tcp do
     end
   end
 
+  @doc """
+  Reads the next frame from a stream opened by `stream_open/4`.
+  """
   @impl true
+  @spec stream_read(stream(), non_neg_integer()) :: {:ok, binary()} | :done | {:error, Error.t()}
   def stream_read(stream, deadline_ms)
       when is_pid(stream) and is_integer(deadline_ms) and deadline_ms >= 0 do
     stream_call(stream, {:read, deadline_ms}, :done)
   end
 
+  @doc """
+  Closes a stream handle.
+  """
   @impl true
+  @spec stream_close(stream()) :: :ok
   def stream_close(stream) when is_pid(stream) do
     stream_call(stream, :close, :ok)
   end
 
+  @doc """
+  Sends one or more info commands and returns the decoded response map.
+  """
   @impl true
+  @spec info(conn(), [String.t()]) :: {:ok, %{String.t() => String.t()}} | {:error, Error.t()}
   def info(%__MODULE__{info_timeout: timeout, node_name: node_name} = conn, commands)
       when is_list(commands) do
     :telemetry.span(
@@ -540,7 +581,12 @@ defmodule Aerospike.Transport.Tcp do
     )
   end
 
+  @doc """
+  Sends one pre-encoded command frame and returns one decoded response body.
+  """
   @impl true
+  @spec command(conn(), iodata(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, Error.t()}
   def command(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
       when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
     message_type = Keyword.get(opts, :message_type, :as_msg)
@@ -557,7 +603,12 @@ defmodule Aerospike.Transport.Tcp do
     end
   end
 
+  @doc """
+  Sends one pre-encoded command frame and reads a bounded multi-frame response.
+  """
   @impl true
+  @spec command_stream(conn(), iodata(), non_neg_integer(), keyword()) ::
+          {:ok, binary()} | {:error, Error.t()}
   def command_stream(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
       when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
     message_type = Keyword.get(opts, :message_type, :as_msg)
@@ -859,7 +910,9 @@ defmodule Aerospike.Transport.Tcp do
     %Error{code: :network_error, message: "#{op} failed: #{format_reason(reason)}"}
   end
 
-  @doc false
+  @doc """
+  Returns `true` when a stream frame is marked as the terminal frame.
+  """
   @spec stream_last_frame?(binary()) :: boolean()
   def stream_last_frame?(<<_hdr::8, _info1::8, _info2::8, info3::8, _::binary>>) do
     (info3 &&& 0x01) == 0x01

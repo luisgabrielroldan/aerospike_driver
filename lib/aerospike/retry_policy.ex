@@ -83,9 +83,16 @@ defmodule Aerospike.RetryPolicy do
 
   @meta_key :retry_opts
 
+  @typedoc "Replica selection policy used when retrying read commands."
   @type replica_policy :: :master | :sequence
+
+  @typedoc "High-level outcome bucket used by retry and pool-failure logic."
   @type bucket :: :ok | :rebalance | :transport | :routing_refusal | :server_fatal
+
+  @typedoc "Telemetry retry label derived from a command outcome."
   @type retry_classification :: :rebalance | :transport | :circuit_open | nil
+
+  @typedoc "Complete retry classification for one command outcome."
   @type classification :: %{
           bucket: bucket(),
           retry_classification: retry_classification(),

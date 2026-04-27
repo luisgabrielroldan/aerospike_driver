@@ -38,6 +38,12 @@ defmodule Aerospike.Query do
     no_bins: false
   ]
 
+  @typedoc """
+  Query description consumed by `Aerospike.query_*` helpers.
+
+  `index_filter` is the single secondary-index query filter. `filters` are
+  server-side filter expressions combined with boolean AND by the encoder.
+  """
   @type t :: %__MODULE__{
           namespace: String.t(),
           set: String.t(),

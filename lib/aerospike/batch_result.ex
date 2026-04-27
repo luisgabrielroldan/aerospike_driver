@@ -21,9 +21,20 @@ defmodule Aerospike.BatchResult do
   @enforce_keys [:key, :status]
   defstruct [:key, :status, :record, :error, in_doubt: false]
 
+  @typedoc "Per-key batch status."
   @type status :: :ok | :error
+
+  @typedoc "Per-key batch error returned for failed entries."
   @type error_reason :: Error.t() | atom()
 
+  @typedoc """
+  Per-key result returned by heterogeneous batch helpers.
+
+  `record` contains returned bins or metadata for successful entries that
+  produce data. `error` is set only when `status` is `:error`. `in_doubt`
+  indicates that a write-style entry may have reached the server even though
+  the client received an error.
+  """
   @type t :: %__MODULE__{
           key: Key.t(),
           status: status(),
@@ -32,8 +43,10 @@ defmodule Aerospike.BatchResult do
           in_doubt: boolean()
         }
 
-  @doc false
-  @spec from_command_results([Result.t()]) :: [t()]
+  @doc """
+  Converts command-layer batch results into public batch result structs.
+  """
+  @spec from_command_results([term()]) :: [t()]
   def from_command_results(results) when is_list(results) do
     from_command_results(results, [])
   end
@@ -89,8 +102,10 @@ defmodule Aerospike.BatchResult do
     from_command_results(rest, [result | acc])
   end
 
-  @doc false
-  @spec from_command_result(Result.t()) :: t()
+  @doc """
+  Converts one command-layer batch result into a public batch result struct.
+  """
+  @spec from_command_result(term()) :: t()
   def from_command_result(%Result{
         key: key,
         status: :ok,

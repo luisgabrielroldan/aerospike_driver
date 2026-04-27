@@ -8,7 +8,9 @@ defmodule Aerospike.PartitionFilter do
 
   @partitions 4_096
 
-  @doc false
+  @doc """
+  Returns the fixed Aerospike partition count.
+  """
   @spec partition_count() :: pos_integer()
   def partition_count, do: @partitions
 
@@ -20,12 +22,19 @@ defmodule Aerospike.PartitionFilter do
             done?: false,
             retry?: true
 
+  @typedoc """
+  Per-partition resume state used by scan/query pagination.
+
+  `:digest` and `:bval` represent the last server cursor position for the
+  partition, not user-key order.
+  """
   @type partition_entry :: %{
           required(:id) => non_neg_integer(),
           optional(:digest) => binary() | nil,
           optional(:bval) => integer() | nil
         }
 
+  @typedoc "Partition selection and resume state for scans and queries."
   @type t :: %__MODULE__{
           begin: non_neg_integer(),
           count: pos_integer(),

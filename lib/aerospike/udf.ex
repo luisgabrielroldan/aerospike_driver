@@ -8,6 +8,7 @@ defmodule Aerospike.UDF do
   @enforce_keys [:filename, :hash, :language]
   defstruct [:filename, :hash, :language]
 
+  @typedoc "Metadata for one registered UDF package."
   @type t :: %__MODULE__{
           filename: String.t(),
           hash: String.t(),

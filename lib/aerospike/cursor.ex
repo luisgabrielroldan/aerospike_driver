@@ -26,6 +26,12 @@ defmodule Aerospike.Cursor do
   @flag_digest 1
   @flag_bval 2
 
+  @typedoc """
+  Partition resume cursor used by paged scans and queries.
+
+  Partition entries may carry the last digest and bval observed for each
+  partition so a later page can resume partition-order traversal.
+  """
   @type t :: %__MODULE__{partitions: [PartitionFilter.partition_entry()]}
 
   @min_int64 -9_223_372_036_854_775_808

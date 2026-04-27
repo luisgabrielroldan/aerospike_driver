@@ -17,11 +17,21 @@ defmodule Aerospike.Filter do
   @enforce_keys [:bin_name, :index_type, :particle_type, :begin, :end]
   defstruct [:bin_name, :index_type, :particle_type, :begin, :end, :index_name, :ctx]
 
+  @typedoc """
+  Secondary-index filter kind encoded for the query predicate.
+
+  `:list`, `:mapkeys`, and `:mapvalues` target CDT collection indexes.
+  `:geo_within` and `:geo_contains` target geospatial predicates.
+  """
   @type index_type :: :default | :list | :mapkeys | :mapvalues | :geo_within | :geo_contains
+
+  @typedoc "Indexed scalar particle type."
   @type particle_type :: :integer | :string
 
+  @typedoc "GeoJSON input accepted by geospatial query filters."
   @type geo_geometry :: String.t() | Geo.Point.t() | Geo.Polygon.t() | Geo.Circle.t()
 
+  @typedoc "Secondary-index query filter."
   @type t :: %__MODULE__{
           bin_name: String.t(),
           index_type: index_type(),

@@ -39,6 +39,12 @@ defmodule Aerospike.Record do
   """
   @type metadata :: %{generation: non_neg_integer(), ttl: non_neg_integer()}
 
+  @typedoc """
+  Record returned by read, operate, scan, and query APIs.
+
+  `ttl` is the server-reported expiration/TTL value carried in the record
+  header, using the same value returned by the Aerospike wire protocol.
+  """
   @type t :: %__MODULE__{
           key: Key.t(),
           bins: bins(),

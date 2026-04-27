@@ -4,7 +4,9 @@ defmodule Aerospike.Integration.AdminTruncateTest do
   @moduletag :integration
 
   alias Aerospike.Error
+  alias Aerospike.Exp
   alias Aerospike.Key
+  alias Aerospike.Op
   alias Aerospike.Test.IntegrationSupport
 
   @host "localhost"
@@ -72,7 +74,8 @@ defmodule Aerospike.Integration.AdminTruncateTest do
     assert {:ok, _metadata} = Aerospike.put(cluster, trunc_key, %{"v" => 1})
     assert {:ok, _metadata} = Aerospike.put(cluster, keep_key, %{"v" => 2})
 
-    assert :ok = Aerospike.truncate(cluster, @namespace, set)
+    before = truncate_cutoff_after_lut!(cluster, trunc_key)
+    assert_truncate_accepted!(cluster, @namespace, set, before)
 
     IntegrationSupport.assert_eventually(
       "set truncate applied",
@@ -89,4 +92,34 @@ defmodule Aerospike.Integration.AdminTruncateTest do
   end
 
   defp truncate_wait_timeout_ms, do: 15_000
+
+  defp truncate_cutoff_after_lut!(cluster, key) do
+    assert {:ok, %{bins: %{"last_update" => last_update}}} =
+             Aerospike.operate(cluster, key, [
+               Op.Exp.read("last_update", Exp.last_update())
+             ])
+
+    DateTime.from_unix!(last_update + 1_000_000, :nanosecond)
+  end
+
+  defp assert_truncate_accepted!(cluster, namespace, set, before) do
+    IntegrationSupport.assert_eventually(
+      "set truncate cutoff accepted",
+      fn ->
+        case Aerospike.truncate(cluster, namespace, set, before: before) do
+          :ok ->
+            true
+
+          {:error, %Error{message: message}} = error ->
+            if String.contains?(message, "would truncate in the future") do
+              false
+            else
+              flunk("truncate failed unexpectedly: #{inspect(error)}")
+            end
+        end
+      end,
+      truncate_wait_timeout_ms(),
+      50
+    )
+  end
 end

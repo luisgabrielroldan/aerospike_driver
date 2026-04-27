@@ -9,6 +9,12 @@ defmodule Aerospike.Page do
   @enforce_keys [:records, :cursor, :done?]
   defstruct [:records, :cursor, :done?]
 
+  @typedoc """
+  One collected page of records.
+
+  `cursor` is `nil` when no resume state is needed. `done?` indicates whether
+  the server-side partition walk has completed.
+  """
   @type t :: %__MODULE__{
           records: [Record.t()],
           cursor: Cursor.t() | nil,

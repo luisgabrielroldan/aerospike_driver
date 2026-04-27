@@ -19,12 +19,17 @@ defmodule Aerospike.Op.Exp do
   alias Aerospike.Exp
   alias Aerospike.Protocol.AsmMsg.Operation
 
+  @typedoc """
+  Opaque expression operation for `Aerospike.operate/4`.
+  """
   @opaque t :: Aerospike.Op.t()
 
   @doc """
   Reads the result of a server-side expression into `bin_name`.
 
-  The optional `:flags` value is passed as the raw expression read flag integer.
+  The optional `:flags` value is the expression read-flags integer
+  (`ExpReadFlags` in the official clients), used for server-side expression
+  evaluation behavior such as no-fail reads.
 
       Aerospike.Op.Exp.read("projected", Aerospike.Exp.int_bin("count"))
   """
@@ -43,7 +48,10 @@ defmodule Aerospike.Op.Exp do
   @doc """
   Writes the result of a server-side expression to `bin_name`.
 
-  The optional `:flags` value is passed as the raw expression write flag integer.
+  The optional `:flags` value is the expression write-flags integer
+  (`ExpWriteFlags` in the official clients), used for server-side expression
+  write behavior such as create-only, update-only, allow-delete, and policy
+  no-fail.
 
       Aerospike.Op.Exp.write("computed", Aerospike.Exp.int(99))
   """

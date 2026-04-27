@@ -17,15 +17,24 @@ defmodule Aerospike.Cluster do
   alias Aerospike.Key
   alias Aerospike.RetryPolicy
 
+  @typedoc "Cluster identity accepted by read-side helpers."
   @type cluster :: atom() | pid()
+
+  @typedoc "ETS table names published for one cluster runtime."
   @type tables :: %{
           owners: atom(),
           node_gens: atom(),
           meta: atom(),
           txn_tracking: atom()
         }
+
+  @typedoc "Replica selection policy used by read routing."
   @type replica_policy :: :master | :sequence
+
+  @typedoc "Result returned by cluster routing helpers."
   @type route_result :: {:ok, String.t()} | {:error, :cluster_not_ready | :no_master}
+
+  @typedoc "Active node metadata returned by `nodes/1`."
   @type node_info :: %{name: String.t(), host: String.t(), port: :inet.port_number()}
 
   @doc """

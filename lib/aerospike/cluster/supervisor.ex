@@ -77,7 +77,10 @@ defmodule Aerospike.Cluster.Supervisor do
           | {:namespaces, [String.t(), ...]}
           | {atom(), term()}
 
-  @doc false
+  @doc """
+  Returns the OTP child specification for one named Aerospike cluster.
+  """
+  @spec child_spec([option()]) :: Supervisor.child_spec()
   def child_spec(opts) when is_list(opts) do
     name = Keyword.fetch!(opts, :name)
 
@@ -131,11 +134,14 @@ defmodule Aerospike.Cluster.Supervisor do
     Supervisor.start_link(children, strategy: :rest_for_one, name: sup_name(name))
   end
 
-  @doc false
-  # Starts the PartitionMapWriter after resolving the TableOwner's tables at
-  # supervisor init time. TableOwner is already up at this point (first
-  # child under `rest_for_one`), so `tables/1` is a synchronous call on a
-  # live process.
+  @doc """
+  Starts the partition-map writer child for `name`.
+
+  This function is public because it is referenced from the supervisor child
+  spec. Callers should start clusters through `start_link/1`.
+  """
+  # Resolves TableOwner tables at supervisor init time. TableOwner is already
+  # up at this point, so `tables/1` is a synchronous call on a live process.
   @spec start_writer(atom()) :: GenServer.on_start()
   def start_writer(name) do
     tables = TableOwner.tables(TableOwner.via(name))
@@ -143,10 +149,14 @@ defmodule Aerospike.Cluster.Supervisor do
     PartitionMapWriter.start_link(name: name, tables: tables)
   end
 
-  @doc false
-  # Starts the Tender after resolving the TableOwner's tables at supervisor
-  # init time. TableOwner is already up at this point (first child under
-  # `rest_for_one`), so `tables/1` is a synchronous call on a live process.
+  @doc """
+  Starts the tend-cycle worker child for `name`.
+
+  This function is public because it is referenced from the supervisor child
+  spec. Callers should start clusters through `start_link/1`.
+  """
+  # Resolves TableOwner tables at supervisor init time. TableOwner is already
+  # up at this point, so `tables/1` is a synchronous call on a live process.
   @spec start_tender(atom(), keyword()) :: GenServer.on_start()
   def start_tender(name, tender_opts) do
     tables = TableOwner.tables(TableOwner.via(name))

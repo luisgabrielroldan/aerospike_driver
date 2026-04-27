@@ -15,6 +15,7 @@ defmodule Aerospike.RegisterTask do
   @enforce_keys [:conn, :package_name]
   defstruct [:conn, :package_name]
 
+  @typedoc "Handle returned while a UDF package propagates through the cluster."
   @type t :: %__MODULE__{
           conn: Aerospike.cluster(),
           package_name: String.t()

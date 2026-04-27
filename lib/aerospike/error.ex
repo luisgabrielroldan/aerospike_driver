@@ -11,12 +11,46 @@ defmodule Aerospike.Error do
   @enforce_keys [:code, :message]
   defexception [:code, :message, node: nil, in_doubt: false]
 
+  @typedoc "Aerospike client or server error."
   @type t :: %__MODULE__{
           code: atom(),
           message: String.t(),
           node: String.t() | nil,
           in_doubt: boolean()
         }
+
+  @doc """
+  Builds an exception struct from keyword, map, string, or atom input.
+
+  Keyword and map input may include `:code`, `:message`, `:node`, and
+  `:in_doubt`. String input becomes a client error message, and atom input is
+  treated as an Aerospike result code.
+  """
+  @spec exception(keyword() | map() | String.t() | atom()) :: t()
+  def exception(message) when is_binary(message) do
+    %__MODULE__{code: :client_error, message: message}
+  end
+
+  def exception(code) when is_atom(code) do
+    from_result_code(code)
+  end
+
+  def exception(opts) when is_map(opts) do
+    opts
+    |> Map.to_list()
+    |> exception()
+  end
+
+  def exception(opts) when is_list(opts) do
+    code = Keyword.get(opts, :code, :client_error)
+
+    %__MODULE__{
+      code: code,
+      message: Keyword.get(opts, :message, ResultCode.message(code)),
+      node: Keyword.get(opts, :node, nil),
+      in_doubt: Keyword.get(opts, :in_doubt, false)
+    }
+  end
 
   @doc """
   Builds an error struct from a result code atom.
@@ -104,6 +138,10 @@ defmodule Aerospike.Error do
   def rebalance?(_other), do: false
 
   @impl true
+  @doc """
+  Formats the error for exception messages.
+  """
+  @spec message(t()) :: String.t()
   def message(%__MODULE__{code: code, message: msg}) do
     "Aerospike error #{code}: #{msg}"
   end

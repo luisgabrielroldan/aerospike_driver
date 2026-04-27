@@ -36,6 +36,7 @@ defmodule Aerospike.Key do
   @enforce_keys [:namespace, :digest]
   defstruct namespace: nil, set: "", user_key: nil, digest: nil
 
+  @typedoc "Record key with namespace, set, optional user key, and digest."
   @type t :: %__MODULE__{
           namespace: String.t(),
           set: String.t(),
@@ -54,7 +55,13 @@ defmodule Aerospike.Key do
   """
   @type key_input :: t() | key_tuple()
 
-  @doc false
+  @doc """
+  Validates that `value` fits in Aerospike's signed 64-bit integer range.
+
+  This helper is used by key and secondary-index filter builders before values
+  are encoded for the server. It returns the integer unchanged or raises
+  `ArgumentError` with `label` in the message.
+  """
   @spec validate_int64!(integer(), String.t()) :: integer()
   def validate_int64!(value, _label)
       when is_integer(value) and value >= @min_int64 and value <= @max_int64 do

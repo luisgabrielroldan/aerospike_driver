@@ -8,6 +8,7 @@ defmodule Aerospike.ExecuteTask do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
 
+  @typedoc "Background query task kind."
   @type kind :: :query_execute | :query_udf
 
   @default_checkout_timeout 5_000
@@ -17,6 +18,7 @@ defmodule Aerospike.ExecuteTask do
   @enforce_keys [:conn, :namespace, :set, :task_id, :kind]
   defstruct [:conn, :namespace, :set, :task_id, :kind, node_name: nil]
 
+  @typedoc "Handle returned by background query execution helpers."
   @type t :: %__MODULE__{
           conn: GenServer.server(),
           namespace: String.t(),
@@ -60,7 +62,15 @@ defmodule Aerospike.ExecuteTask do
     do_wait(task, poll_interval, deadline, MapSet.new(), 0)
   end
 
-  @doc false
+  @doc """
+  Parses a raw background query status response from the Aerospike info protocol.
+
+  Empty replies and server `ERROR:2` replies are treated as `:not_found`
+  because a background task can briefly be invisible before every target node
+  has observed it.
+  """
+  @spec parse_status_response(String.t()) ::
+          :complete | :in_progress | :not_found | {:error, Error.t()}
   def parse_status_response(response) when is_binary(response) do
     cond do
       response == "" ->

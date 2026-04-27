@@ -18,6 +18,7 @@ defmodule Aerospike.Geo do
     @enforce_keys [:lng, :lat]
     defstruct [:lng, :lat]
 
+    @typedoc "GeoJSON point using longitude and latitude."
     @type t :: %__MODULE__{
             lng: float(),
             lat: float()
@@ -32,8 +33,13 @@ defmodule Aerospike.Geo do
     @enforce_keys [:coordinates]
     defstruct [:coordinates]
 
+    @typedoc "Longitude/latitude coordinate pair."
     @type coordinate_pair :: {float(), float()}
+
+    @typedoc "One polygon ring."
     @type ring :: [coordinate_pair()]
+
+    @typedoc "GeoJSON polygon with one or more rings."
     @type t :: %__MODULE__{
             coordinates: [ring()]
           }
@@ -47,6 +53,7 @@ defmodule Aerospike.Geo do
     @enforce_keys [:lng, :lat, :radius]
     defstruct [:lng, :lat, :radius]
 
+    @typedoc "Aerospike AeroCircle value."
     @type t :: %__MODULE__{
             lng: float(),
             lat: float(),

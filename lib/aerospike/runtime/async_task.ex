@@ -29,6 +29,8 @@ defmodule Aerospike.Runtime.AsyncTask do
         * `:timeout` — maximum milliseconds to wait. When omitted, polling
           continues until the operation completes or returns an error.
       """
+      @spec wait(struct()) :: :ok | {:error, Aerospike.Error.t()}
+      @spec wait(struct(), keyword()) :: :ok | {:error, Aerospike.Error.t()}
       def wait(task, opts \\ []) do
         AsyncTask.poll(__MODULE__, task, opts)
       end

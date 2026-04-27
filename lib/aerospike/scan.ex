@@ -31,6 +31,12 @@ defmodule Aerospike.Scan do
     no_bins: false
   ]
 
+  @typedoc """
+  Scan description consumed by `Aerospike.scan_*` helpers.
+
+  `filters` are server-side filter expressions combined with boolean AND by
+  the encoder.
+  """
   @type t :: %__MODULE__{
           namespace: String.t(),
           set: String.t() | nil,
