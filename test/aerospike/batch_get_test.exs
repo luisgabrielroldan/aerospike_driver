@@ -126,6 +126,53 @@ defmodule Aerospike.Command.BatchGetTest do
       assert {:error, %Error{code: :network_error}} = third
     end
 
+    test "returns projected bin results in caller order", ctx do
+      script_two_node_cluster(ctx.fake)
+      {:ok, tender} = start_tender(ctx)
+      :ok = Tender.tend_now(tender)
+
+      key_a = key_for_partition("test", "batch", 100, "a")
+      key_b = key_for_partition("test", "batch", 101, "b")
+      key_c = key_for_partition("test", "batch", 100, "c")
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "A1",
+        {:ok,
+         IO.iodata_to_binary([
+           batch_row(0, 0, 3, 120, [
+             %Operation{op_type: 1, particle_type: 3, bin_name: "name", data: "Ada"}
+           ]),
+           batch_row(2, 2, 0, 0, []),
+           last_row()
+         ])}
+      )
+
+      Fake.script_command_stream(
+        ctx.fake,
+        "B1",
+        {:ok,
+         IO.iodata_to_binary([
+           batch_row(1, 0, 5, 240, [
+             %Operation{
+               op_type: 1,
+               particle_type: 1,
+               bin_name: "count",
+               data: <<7::64-signed-big>>
+             }
+           ]),
+           last_row()
+         ])}
+      )
+
+      assert {:ok, [first, second, third]} =
+               Aerospike.batch_get(tender, [key_a, key_b, key_c], ["name", :count])
+
+      assert {:ok, %{key: ^key_a, bins: %{"name" => "Ada"}, generation: 3, ttl: 120}} = first
+      assert {:ok, %{key: ^key_b, bins: %{"count" => 7}, generation: 5, ttl: 240}} = second
+      assert {:error, %Error{code: :key_not_found}} = third
+    end
+
     test "rejects unsupported batch opts instead of silently dropping them" do
       key = Key.new("test", "batch", "k1")
 
@@ -155,7 +202,26 @@ defmodule Aerospike.Command.BatchGetTest do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
                BatchGet.execute(:unused_tender, [key], :bins, [])
 
-      assert message =~ "supports only :all bins in the current driver"
+      assert message =~ "expects :all, :header, :exists"
+    end
+
+    test "rejects invalid named-bin lists before dispatch" do
+      key = Key.new("test", "batch", "k1")
+
+      assert {:error, %Error{code: :invalid_argument, message: empty_message}} =
+               BatchGet.execute(:unused_tender, [key], [], [])
+
+      assert empty_message =~ "at least one named bin"
+
+      assert {:error, %Error{code: :invalid_argument, message: blank_message}} =
+               BatchGet.execute(:unused_tender, [key], [""], [])
+
+      assert blank_message =~ "non-empty strings or atoms"
+
+      assert {:error, %Error{code: :invalid_argument, message: type_message}} =
+               BatchGet.execute(:unused_tender, [key], ["name", 1], [])
+
+      assert type_message =~ "non-empty strings or atoms"
     end
   end
 

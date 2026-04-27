@@ -7,11 +7,14 @@ defmodule Aerospike.Command.BatchGet do
   alias Aerospike.Error
   alias Aerospike.Key
   alias Aerospike.Policy
+  alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Record
 
   @type option :: {:timeout, non_neg_integer()}
-  @type mode :: :all | :header | :exists
+  @type bin_name :: String.t() | atom()
+  @type mode :: :all | :header | :exists | [bin_name()]
+  @type public_result_mode :: :all | :header | :exists | :bins
 
   @type record_item_result ::
           {:ok, Record.t()}
@@ -33,23 +36,26 @@ defmodule Aerospike.Command.BatchGet do
           record_result() | exists_result()
   def execute(tender, keys, mode, opts \\ [])
 
-  def execute(_tender, [], mode, opts) when mode in [:all, :header, :exists] and is_list(opts) do
-    with {:ok, _policy} <- Policy.batch_read(opts) do
+  def execute(_tender, [], mode, opts) when is_list(opts) do
+    with {:ok, _read_spec} <- read_spec(mode),
+         {:ok, _policy} <- Policy.batch_read(opts) do
       {:ok, []}
     end
   end
 
-  def execute(tender, keys, mode, opts)
-      when mode in [:all, :header, :exists] and is_list(keys) and is_list(opts) do
+  def execute(tender, keys, mode, opts) when is_list(keys) and is_list(opts) do
     with :ok <- validate_keys(keys),
+         {:ok, read_spec} <- read_spec(mode),
          {:ok, policy} <- batch_policy(tender, opts),
-         {:ok, results} <- MixedBatch.execute(tender, entries(keys, policy, mode), opts) do
-      {:ok, to_public_results(results, mode)}
+         {:ok, results} <- MixedBatch.execute(tender, entries(keys, policy, read_spec), opts) do
+      {:ok, to_public_results(results, public_result_mode(read_spec))}
     end
   end
 
   def execute(_tender, _keys, _bins, _opts) do
-    invalid_argument("Aerospike.batch_get/4 supports only :all bins in the current driver")
+    invalid_argument(
+      "Aerospike.batch_get/4 expects :all, :header, :exists, or a non-empty list of string or atom bin names"
+    )
   end
 
   @spec execute_operate(GenServer.server(), [Key.t()], [Aerospike.Op.t()], [option()]) ::
@@ -76,31 +82,76 @@ defmodule Aerospike.Command.BatchGet do
   end
 
   @doc false
-  @spec to_public_results([BatchCommand.Result.t()], mode()) :: [
+  @spec to_public_results([BatchCommand.Result.t()], public_result_mode()) :: [
           record_item_result() | exists_item_result()
         ]
   def to_public_results(results, mode)
-      when is_list(results) and mode in [:all, :header, :exists] do
+      when is_list(results) and mode in [:all, :header, :exists, :bins] do
     do_to_public_results(results, mode, [])
   end
 
-  defp entries(keys, %Policy.BatchRead{} = policy, mode) do
+  defp entries(keys, %Policy.BatchRead{} = policy, read_spec) do
     keys
     |> Enum.with_index()
     |> Enum.map(fn {key, index} ->
       %Entry{
         index: index,
         key: key,
-        kind: entry_kind(mode),
+        kind: entry_kind(read_spec),
         dispatch: {:read, policy.retry.replica_policy, 0},
-        payload: nil
+        payload: entry_payload(read_spec)
       }
     end)
+  end
+
+  defp read_spec(mode) when mode in [:all, :header, :exists], do: {:ok, mode}
+
+  defp read_spec(bins) when is_list(bins) do
+    with {:ok, operations} <- read_operations(bins) do
+      {:ok, {:bins, operations}}
+    end
+  end
+
+  defp read_spec(_mode) do
+    invalid_argument(
+      "Aerospike.batch_get/4 expects :all, :header, :exists, or a non-empty list of string or atom bin names"
+    )
   end
 
   defp entry_kind(:all), do: :read
   defp entry_kind(:header), do: :read_header
   defp entry_kind(:exists), do: :exists
+  defp entry_kind({:bins, _operations}), do: :read
+
+  defp entry_payload({:bins, operations}), do: %{operations: operations}
+  defp entry_payload(_read_spec), do: nil
+
+  defp public_result_mode({:bins, _operations}), do: :bins
+  defp public_result_mode(mode), do: mode
+
+  defp read_operations([]) do
+    invalid_argument("Aerospike.batch_get/4 expects at least one named bin")
+  end
+
+  defp read_operations(bins) do
+    do_read_operations(bins, [])
+  end
+
+  defp do_read_operations([], acc), do: {:ok, Enum.reverse(acc)}
+
+  defp do_read_operations([bin | rest], acc) when is_binary(bin) and byte_size(bin) > 0 do
+    do_read_operations(rest, [Operation.read(bin) | acc])
+  end
+
+  defp do_read_operations([bin | rest], acc) when is_atom(bin) do
+    do_read_operations([Atom.to_string(bin) | rest], acc)
+  end
+
+  defp do_read_operations([bin | _rest], _acc) do
+    invalid_argument(
+      "Aerospike.batch_get/4 bin names must be non-empty strings or atoms, got: #{inspect(bin)}"
+    )
+  end
 
   defp operate_entries(keys, %Policy.BatchRead{} = policy, operations, flags) do
     keys
@@ -124,6 +175,14 @@ defmodule Aerospike.Command.BatchGet do
          acc
        ) do
     do_to_public_results(rest, :all, [{:ok, record} | acc])
+  end
+
+  defp do_to_public_results(
+         [%BatchCommand.Result{status: :ok, record: %Record{} = record} | rest],
+         :bins,
+         acc
+       ) do
+    do_to_public_results(rest, :bins, [{:ok, record} | acc])
   end
 
   defp do_to_public_results(

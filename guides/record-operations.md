@@ -28,7 +28,9 @@ key = Aerospike.key_digest("test", "profiles", <<0::160>>)
   Aerospike.put(:aerospike, key, %{
     "name" => "Grace",
     "score" => 10,
-    "active" => true
+    "active" => true,
+    "tags" => ["admin", "mentor"],
+    "profile" => %{"city" => "Arlington"}
   })
 
 metadata.generation
@@ -65,6 +67,20 @@ Delete returns whether the server deleted an existing record:
 ```elixir
 {:ok, deleted?} = Aerospike.delete(:aerospike, key)
 ```
+
+Use `:exists` when a write should require or replace an existing record in a
+specific way:
+
+```elixir
+{:ok, _metadata} =
+  Aerospike.put(:aerospike, key, %{"score" => 11}, exists: :replace_only)
+
+{:ok, _metadata} =
+  Aerospike.put(:aerospike, new_key, %{"score" => 1}, exists: :create_only)
+```
+
+Deletes and write-bearing operation lists also accept `durable_delete: true`
+when the target namespace and server support tombstones.
 
 ## Operation Lists
 

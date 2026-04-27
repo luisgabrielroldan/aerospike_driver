@@ -69,15 +69,48 @@ defmodule Aerospike.PolicyTest do
                 retry: %{max_retries: 0, sleep_between_retries_ms: 0, replica_policy: :sequence},
                 ttl: 120,
                 generation: 3,
-                filter: ^filter
+                filter: ^filter,
+                exists: :replace_only,
+                durable_delete: true
               }} =
                Policy.unary_write(base_retry,
                  timeout: 1_500,
                  max_retries: 0,
                  ttl: 120,
                  generation: 3,
+                 exists: :replace_only,
+                 durable_delete: true,
                  filter: filter
                )
+    end
+
+    test "defaults and validates record-exists write policy values" do
+      assert {:ok, %Policy.UnaryWrite{exists: :update}} =
+               Policy.unary_write(RetryPolicy.defaults(), [])
+
+      for action <- [:update, :update_only, :create_or_replace, :replace_only, :create_only] do
+        assert {:ok, %Policy.UnaryWrite{exists: ^action}} =
+                 Policy.unary_write(RetryPolicy.defaults(), exists: action)
+      end
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.unary_write(RetryPolicy.defaults(), exists: :replace)
+
+      assert message =~ "record-exists write policy"
+      assert message =~ ":replace"
+    end
+
+    test "defaults and validates durable delete values" do
+      assert {:ok, %Policy.UnaryWrite{durable_delete: false}} =
+               Policy.unary_write(RetryPolicy.defaults(), [])
+
+      assert {:ok, %Policy.UnaryWrite{durable_delete: true}} =
+               Policy.unary_write(RetryPolicy.defaults(), durable_delete: true)
+
+      assert {:error, %Error{code: :invalid_argument, message: message}} =
+               Policy.unary_write(RetryPolicy.defaults(), durable_delete: :yes)
+
+      assert message =~ "durable_delete must be a boolean"
     end
 
     test "rejects invalid ttl and generation values" do

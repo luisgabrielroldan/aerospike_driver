@@ -67,8 +67,9 @@ supports both.
 
 ## Collection And Paging
 
-`query_all/3` and `query_page/3` require an explicit `max_records` budget.
-That budget bounds each page walk; it is not a stable snapshot size guarantee.
+`query_all/3`, `scan_page/3`, and `query_page/3` require an explicit
+`max_records` budget. That budget bounds each page walk; it is not a stable
+snapshot size guarantee.
 
 ```elixir
 paged_query =
@@ -94,6 +95,16 @@ end
 Cursors resume partition progress. They are suitable for continuing a query
 walk, but they are not snapshot tokens.
 
+Scan pages use the same cursor shape:
+
+```elixir
+paged_scan =
+  Aerospike.Scan.new("test", "events")
+  |> Aerospike.Scan.max_records(100)
+
+{:ok, first_page} = Aerospike.scan_page(:aerospike, paged_scan)
+```
+
 ## Partition And Node Targeting
 
 Use `Aerospike.PartitionFilter` for advanced partial scans or queries.
@@ -115,7 +126,7 @@ Discover names with `Aerospike.node_names/1` or `Aerospike.nodes/1`.
 {:ok, stream} = Aerospike.query_stream(:aerospike, query, node: node_name)
 ```
 
-Node targeting is available for scan/query streams, counts, collected query
-pages, and background query jobs. Finalized aggregate queries do not support
+Node targeting is available for scan/query streams, counts, collected pages,
+and background query jobs. Finalized aggregate queries do not support
 `node: node_name` because they must consume all server partials needed for one
 local result.

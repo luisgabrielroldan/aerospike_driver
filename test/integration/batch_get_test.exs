@@ -81,6 +81,35 @@ defmodule Aerospike.Integration.BatchGetTest do
     assert {:ok, %Record{key: ^key_c, bins: %{"node" => ^node_c, "value" => 33}}} = fourth
   end
 
+  test "batch_get returns only requested bins across multiple live cluster nodes", %{
+    cluster: cluster
+  } do
+    assert Tender.ready?(cluster), "Tender must be ready after one manual tend cycle"
+
+    set = IntegrationSupport.unique_name("spike_batch_bins")
+    [{node_a, key_a}, {node_b, key_b}, {node_c, key_c}] = keys_for_distinct_nodes(cluster, set, 3)
+    missing_key = key_for_node(cluster, set, node_a, "missing")
+
+    assert {:ok, _} =
+             Aerospike.put(cluster, key_a, %{"node" => node_a, "value" => 11, "hidden" => "a"})
+
+    assert {:ok, _} =
+             Aerospike.put(cluster, key_b, %{"node" => node_b, "value" => 22, "hidden" => "b"})
+
+    assert {:ok, _} =
+             Aerospike.put(cluster, key_c, %{"node" => node_c, "value" => 33, "hidden" => "c"})
+
+    assert {:ok, [first, second, third, fourth]} =
+             Aerospike.batch_get(cluster, [key_b, missing_key, key_a, key_c], [:node, "value"],
+               timeout: 5_000
+             )
+
+    assert {:ok, %Record{key: ^key_b, bins: %{"node" => ^node_b, "value" => 22}}} = first
+    assert {:error, %Error{code: :key_not_found}} = second
+    assert {:ok, %Record{key: ^key_a, bins: %{"node" => ^node_a, "value" => 11}}} = third
+    assert {:ok, %Record{key: ^key_c, bins: %{"node" => ^node_c, "value" => 33}}} = fourth
+  end
+
   test "batch_get_header returns header-only records with empty bins in caller order", %{
     cluster: cluster
   } do

@@ -16,6 +16,12 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
     assert Value.encode_value(true) == {:ok, {17, <<1>>}}
     assert Value.encode_value(false) == {:ok, {17, <<0>>}}
 
+    assert {:ok, {20, list_data}} = Value.encode_value([1, "two"])
+    assert MessagePack.unpack!(list_data) == [1, "two"]
+
+    assert {:ok, {19, map_data}} = Value.encode_value(%{"a" => 1, "b" => [2]})
+    assert MessagePack.unpack!(map_data) == %{"a" => 1, "b" => [2]}
+
     assert {:error, %Error{code: :invalid_argument, message: message}} =
              Value.encode_value(:unsupported)
 
@@ -47,6 +53,13 @@ defmodule Aerospike.Protocol.AsmMsg.ValueTest do
 
     prepend_ops = Value.encode_bin_operations(%{"name" => "ada"}, Operation.op_prepend())
     assert [%Operation{particle_type: 3, data: "ada"}] = prepend_ops
+
+    write_ops = Value.encode_bin_operations(%{items: [1], meta: %{"a" => true}})
+    assert Enum.map(write_ops, & &1.bin_name) == ["items", "meta"]
+    assert Enum.map(write_ops, & &1.particle_type) == [20, 19]
+
+    assert MessagePack.unpack!(Enum.at(write_ops, 0).data) == [1]
+    assert MessagePack.unpack!(Enum.at(write_ops, 1).data) == %{"a" => true}
 
     assert_raise ArgumentError, ~r/bin name must be a string or atom/, fn ->
       Value.encode_bin_operations(%{1 => "bad"})

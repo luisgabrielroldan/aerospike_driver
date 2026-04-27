@@ -17,6 +17,7 @@ defmodule Aerospike.Command.Delete do
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:generation, non_neg_integer()}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:durable_delete, boolean()}
 
   @type result ::
           {:ok, boolean()}
@@ -64,7 +65,8 @@ defmodule Aerospike.Command.Delete do
       txn: txn,
       opts: opts,
       generation: policy.generation,
-      filter: policy.filter
+      filter: policy.filter,
+      durable_delete: policy.durable_delete
     }
   end
 
@@ -73,14 +75,16 @@ defmodule Aerospike.Command.Delete do
          conn: conn,
          opts: opts,
          generation: generation,
-         filter: filter
+         filter: filter,
+         durable_delete: durable_delete
        }) do
     key
     |> AsmMsg.key_command([],
       write: true,
       delete: true,
       send_key: true,
-      generation: generation
+      generation: generation,
+      durable_delete: durable_delete
     )
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)

@@ -23,8 +23,8 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
   @doc """
   Encodes an Elixir value into `{particle_type, data}` for a simple write op.
 
-  Supported values are the narrow subset the current driver needs:
-  `nil`, integers, floats, strings, booleans, explicit blobs via
+  Supported values are the current-driver write subset:
+  `nil`, integers, floats, strings, booleans, lists, maps, explicit blobs via
   `{:blob, binary}`, typed geo values, and explicit GeoJSON via
   `{:geojson, binary}`.
   """
@@ -59,12 +59,22 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
     {:ok, {@particle_geojson, <<0::8, 0::16-big, json::binary>>}}
   end
 
+  def encode_value(%_{} = value), do: unsupported_write_particle(value)
+
+  def encode_value(value) when is_list(value) do
+    with {:ok, packed} <- pack_collection_value(value) do
+      {:ok, {@particle_list, MessagePack.pack!(packed)}}
+    end
+  end
+
+  def encode_value(%{} = value) do
+    with {:ok, packed} <- pack_collection_value(value) do
+      {:ok, {@particle_map, MessagePack.pack!(packed)}}
+    end
+  end
+
   def encode_value(value) do
-    {:error,
-     Error.from_result_code(:invalid_argument,
-       message:
-         "unsupported write particle #{inspect(value)}; supported values: nil, integer, float, binary, boolean, {:blob, binary}, Aerospike.Geo structs, {:geojson, binary}"
-     )}
+    unsupported_write_particle(value)
   end
 
   @doc """
@@ -119,6 +129,65 @@ defmodule Aerospike.Protocol.AsmMsg.Value do
     end
 
     encode_value(value)
+  end
+
+  defp pack_collection_value(value) when is_list(value) do
+    value
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc} ->
+      case pack_collection_value(item) do
+        {:ok, packed} -> {:cont, {:ok, [packed | acc]}}
+        {:error, %Error{}} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, packed} -> {:ok, Enum.reverse(packed)}
+      {:error, %Error{}} = error -> error
+    end
+  end
+
+  defp pack_collection_value(%{} = value) do
+    value
+    |> Enum.reduce_while({:ok, []}, fn {key, item}, {:ok, acc} ->
+      with {:ok, packed_key} <- pack_collection_map_key(key),
+           {:ok, packed_value} <- pack_collection_value(item) do
+        {:cont, {:ok, [{packed_key, packed_value} | acc]}}
+      else
+        {:error, %Error{}} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, packed} -> {:ok, Map.new(packed)}
+      {:error, %Error{}} = error -> error
+    end
+  end
+
+  defp pack_collection_value(nil), do: {:ok, nil}
+  defp pack_collection_value(true), do: {:ok, true}
+  defp pack_collection_value(false), do: {:ok, false}
+  defp pack_collection_value(value) when is_integer(value), do: {:ok, value}
+  defp pack_collection_value(value) when is_float(value), do: {:ok, value}
+  defp pack_collection_value(value) when is_binary(value), do: {:ok, {:particle_string, value}}
+
+  defp pack_collection_value(value), do: unsupported_write_particle(value)
+
+  defp pack_collection_map_key(key) when is_binary(key), do: {:ok, {:particle_string, key}}
+
+  defp pack_collection_map_key(key) when is_atom(key),
+    do: {:ok, {:particle_string, Atom.to_string(key)}}
+
+  defp pack_collection_map_key(key) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message: "map key must be a string or atom, got: #{inspect(key)}"
+     )}
+  end
+
+  defp unsupported_write_particle(value) do
+    {:error,
+     Error.from_result_code(:invalid_argument,
+       message:
+         "unsupported write particle #{inspect(value)}; supported values: nil, integer, float, binary, boolean, list, map, {:blob, binary}, Aerospike.Geo structs, {:geojson, binary}"
+     )}
   end
 
   @doc """

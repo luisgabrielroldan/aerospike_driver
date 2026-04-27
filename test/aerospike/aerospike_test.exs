@@ -125,7 +125,8 @@ defmodule Aerospike.PublicApiTest do
       {:scan_all_node!, 4},
       {:scan_count_node, 4},
       {:scan_count_node!, 4},
-      {:scan_page_node, 4}
+      {:scan_page_node, 4},
+      {:scan_page_node!, 4}
     ]
 
     for {name, arity} <- absent_helpers do
@@ -203,9 +204,9 @@ defmodule Aerospike.PublicApiTest do
     conn: conn
   } do
     assert {:error, %Aerospike.Error{code: :invalid_argument, message: bins_message}} =
-             Aerospike.get(conn, {"test", "users", "user:1"}, ["name"])
+             Aerospike.get(conn, {"test", "users", "user:1"}, [""])
 
-    assert bins_message =~ "supports only :all and :header read modes"
+    assert bins_message =~ "non-empty strings or atoms"
 
     assert {:error, %Aerospike.Error{code: :invalid_argument, message: key_message}} =
              Aerospike.exists(conn, {"test", :users, "user:1"})
@@ -502,6 +503,20 @@ defmodule Aerospike.PublicApiTest do
     Fake.script_stream(fake, "A1", {:ok, [frame("node-count"), last_frame()]})
     assert 1 = Aerospike.scan_count!(conn, scan, node: "A1")
 
+    page_scan =
+      scan
+      |> Scan.partition_filter(PartitionFilter.by_id(0))
+      |> Scan.max_records(1)
+
+    Fake.script_stream(
+      fake,
+      "A1",
+      {:ok, [frame("scan-page-A1"), partition_done_frame("scan-page-A1"), last_frame()]}
+    )
+
+    assert %{records: [%{bins: %{"payload" => "scan-page-A1"}}], cursor: %Cursor{}} =
+             Aerospike.scan_page!(conn, page_scan, node: "A1")
+
     query =
       Query.new(@namespace, "scan_ops")
       |> Query.where(Filter.range("payload", 0, 9))
@@ -649,6 +664,10 @@ defmodule Aerospike.PublicApiTest do
 
     assert_raise Aerospike.Error, ~r/invalid cursor/i, fn ->
       Aerospike.query_page!(conn, Query.max_records(query, 1), cursor: 123)
+    end
+
+    assert_raise Aerospike.Error, ~r/max_records_required/i, fn ->
+      Aerospike.scan_page!(conn, scan)
     end
   end
 

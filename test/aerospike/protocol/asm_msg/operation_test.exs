@@ -49,6 +49,20 @@ defmodule Aerospike.Protocol.AsmMsg.OperationTest do
     end
   end
 
+  describe "write/2" do
+    test "encodes direct list and map values as collection particles" do
+      assert {:ok, %Operation{} = list_operation} = Operation.write("items", [1, "two"])
+      assert list_operation.particle_type == 20
+      assert MessagePack.unpack!(list_operation.data) == [1, "two"]
+
+      assert {:ok, %Operation{} = map_operation} =
+               Operation.write("meta", %{"active" => true, "scores" => [1, 2]})
+
+      assert map_operation.particle_type == 19
+      assert MessagePack.unpack!(map_operation.data) == %{"active" => true, "scores" => [1, 2]}
+    end
+  end
+
   describe "expression operations" do
     test "exp_read/3 encodes expression bytes directly in the payload array" do
       expression = Aerospike.Exp.int_bin("age")

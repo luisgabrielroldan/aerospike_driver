@@ -70,9 +70,9 @@ defmodule Aerospike do
     * `query_execute/4` and `query_udf/6` run background query jobs on
       that same setup path and return pollable task handles
     * `scan_stream/3`, `scan_stream!/3`, `scan_all/3`, `scan_all!/3`,
-      `scan_count/3`, and `scan_count!/3` run scan fan-out across the same
-      scan/runtime setup, again with lazy outer streams and node-buffered
-      record delivery
+      `scan_count/3`, `scan_count!/3`, `scan_page/3`, and `scan_page!/3`
+      run scan fan-out across the same scan/runtime setup, again with lazy
+      outer streams, node-buffered record delivery, and resumable pages
     * scan/query helpers that already support node targeting accept
       `node: node_name` in `opts`; discover names with `node_names/1` or
       `nodes/1`
@@ -314,9 +314,8 @@ defmodule Aerospike do
   @doc """
   Reads `key` from `cluster`.
 
-  The driver currently supports only `bins: :all`. Named-bin reads remain
-  out of scope until the unary command surface proves they fall out of
-  the same request/parse contract without extra public API work.
+  Pass `:all` to read every bin, or pass a non-empty list of string or atom bin
+  names to project only those bins.
 
   Options:
 
@@ -337,7 +336,7 @@ defmodule Aerospike do
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
-  @spec get(cluster(), Key.key_input(), :all, keyword()) ::
+  @spec get(cluster(), Key.key_input(), :all | [String.t() | atom()], keyword()) ::
           {:ok, Aerospike.Record.t()}
           | {:error, Aerospike.Error.t()}
           | {:error, :cluster_not_ready | :no_master | :unknown_node}
@@ -395,13 +394,14 @@ defmodule Aerospike do
   that key (`{:error, %Aerospike.Error{}}`, `{:error, :no_master}`, or
   `{:error, :unknown_node}`).
 
-  The driver currently supports only `bins: :all` and only `:timeout` in
-  `opts`. Retry-driven regrouping stays disabled until the batch reroute
-  path can honestly split a failed grouped request back across nodes.
+  Pass `:all` to read every bin, or pass a non-empty list of string or atom bin
+  names to project only those bins. The driver currently supports only
+  `:timeout` in `opts`. Retry-driven regrouping stays disabled until the batch
+  reroute path can honestly split a failed grouped request back across nodes.
 
   Accepts `%Aerospike.Key{}` values or `{namespace, set, user_key}` tuples.
   """
-  @spec batch_get(cluster(), [Key.key_input()], :all, keyword()) ::
+  @spec batch_get(cluster(), [Key.key_input()], :all | [String.t() | atom()], keyword()) ::
           {:ok,
            [
              {:ok, Aerospike.Record.t()}
@@ -702,6 +702,35 @@ defmodule Aerospike do
   def scan_all!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
     case scan_all(cluster, scan, opts) do
       {:ok, records} -> records
+      {:error, %Aerospike.Error{} = err} -> raise err
+    end
+  end
+
+  @doc """
+  Returns one collected scan page and a resumable cursor when more records
+  remain.
+
+  `scan.max_records` is required because it seeds the partition-tracker
+  budget for the page walk. On multi-node scans that budget is distributed
+  across active nodes, so a page is resumable but not guaranteed to contain
+  exactly `scan.max_records` records. The cursor resumes partition progress
+  from the prior page; it is not a stable snapshot token. Pass
+  `node: node_name` in `opts` to collect a page from one active node, using
+  a name returned by `node_names/1` or `nodes/1`.
+  """
+  @spec scan_page(cluster(), Scan.t(), keyword()) ::
+          {:ok, Page.t()} | {:error, Aerospike.Error.t()}
+  def scan_page(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    ScanOps.scan_page(cluster, scan, opts)
+  end
+
+  @doc """
+  Same as `scan_page/3` but returns the page or raises `Aerospike.Error`.
+  """
+  @spec scan_page!(cluster(), Scan.t(), keyword()) :: Page.t()
+  def scan_page!(cluster, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    case scan_page(cluster, scan, opts) do
+      {:ok, page} -> page
       {:error, %Aerospike.Error{} = err} -> raise err
     end
   end
@@ -1620,6 +1649,10 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:exists` — one of `:update`, `:update_only`,
+      `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:durable_delete` — when `true`, write/delete commands that remove a
+      record ask the server to leave a tombstone
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
@@ -1697,6 +1730,10 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:exists` — one of `:update`, `:update_only`,
+      `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:durable_delete` — when `true`, write/delete commands that remove a
+      record ask the server to leave a tombstone
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
@@ -1725,6 +1762,10 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:exists` — one of `:update`, `:update_only`,
+      `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:durable_delete` — when `true`, write/delete commands that remove a
+      record ask the server to leave a tombstone
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
@@ -1753,6 +1794,10 @@ defmodule Aerospike do
     * `:sleep_between_retries_ms`
     * `:ttl`
     * `:generation` — expect generation equality when non-zero
+    * `:exists` — one of `:update`, `:update_only`,
+      `:create_or_replace`, `:replace_only`, or `:create_only`
+    * `:durable_delete` — when `true`, write/delete commands that remove a
+      record ask the server to leave a tombstone
     * `:filter` — non-empty `%Aerospike.Exp{}` server-side filter
       expression, or `nil` for no filter
 
@@ -1809,8 +1854,8 @@ defmodule Aerospike do
 
   Returns `{:ok, true}` when a record was deleted and `{:ok, false}`
   when the key was already absent. Supported write opts are `:timeout`,
-  `:max_retries`, `:sleep_between_retries_ms`, `:generation`, and
-  `:filter`.
+  `:max_retries`, `:sleep_between_retries_ms`, `:generation`,
+  `:durable_delete`, and `:filter`.
 
   Accepts `%Aerospike.Key{}` or `{namespace, set, user_key}`.
   """
@@ -1841,7 +1886,8 @@ defmodule Aerospike do
   any list that includes a write uses write routing.
 
   Supported opts are `:timeout`, `:max_retries`,
-  `:sleep_between_retries_ms`, `:ttl`, `:generation`, and `:filter`.
+  `:sleep_between_retries_ms`, `:ttl`, `:generation`, `:exists`,
+  `:durable_delete`, and `:filter`.
 
   Accepted operations include the simple tuple form plus the public
   `Aerospike.Op` helpers for primitive, CDT, bit, HyperLogLog, and expression

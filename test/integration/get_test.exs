@@ -60,4 +60,20 @@ defmodule Aerospike.Integration.GetTest do
     assert generation >= 1
     assert ttl >= 0
   end
+
+  test "GET projects a subset of named bins for an existing record", %{cluster: cluster} do
+    key = IntegrationSupport.unique_key(@namespace, "spike", "spike_named_bins")
+
+    assert {:ok, %{generation: 1}} =
+             Aerospike.put(cluster, key, %{
+               "name" => "Ada",
+               "score" => 42,
+               "ignored" => "not returned"
+             })
+
+    assert {:ok, %Aerospike.Record{key: ^key, bins: bins}} =
+             Aerospike.get(cluster, key, ["name", :score])
+
+    assert bins == %{"name" => "Ada", "score" => 42}
+  end
 end

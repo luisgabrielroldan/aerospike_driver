@@ -116,4 +116,48 @@ defmodule Aerospike.Integration.WriteFamilyTest do
     assert {:ok, false} = Aerospike.exists(cluster, key)
     assert {:error, %Error{code: :key_not_found}} = Aerospike.get(cluster, key)
   end
+
+  test "record-exists write policies enforce create and replace behavior", %{cluster: cluster} do
+    user_key = IntegrationSupport.unique_name("spike_write_exists")
+    replace_key = Key.new(@namespace, @set, "#{user_key}-replace")
+    create_key = Key.new(@namespace, @set, "#{user_key}-create")
+    missing_key = Key.new(@namespace, @set, "#{user_key}-missing")
+
+    assert {:ok, _metadata} = Aerospike.put(cluster, replace_key, %{"keep" => 1, "drop" => 2})
+
+    assert {:ok, _metadata} =
+             Aerospike.put(cluster, replace_key, %{"keep" => 3}, exists: :create_or_replace)
+
+    assert {:ok, %Record{bins: %{"keep" => 3}}} = Aerospike.get(cluster, replace_key)
+
+    assert {:error, %Error{code: :key_not_found}} =
+             Aerospike.put(cluster, missing_key, %{"value" => 1}, exists: :replace_only)
+
+    assert {:ok, _metadata} = Aerospike.put(cluster, create_key, %{"value" => 1})
+
+    assert {:error, %Error{code: :key_exists}} =
+             Aerospike.put(cluster, create_key, %{"value" => 2}, exists: :create_only)
+
+    assert {:ok, %Record{bins: %{"value" => 1}}} = Aerospike.get(cluster, create_key)
+  end
+
+  test "put round-trips direct list and map bin values", %{cluster: cluster} do
+    user_key = IntegrationSupport.unique_name("spike_write_collections")
+    key = Key.new(@namespace, @set, user_key)
+
+    bins = %{
+      "items" => [1, "two", false],
+      "meta" => %{"active" => true, "scores" => [7, 8]}
+    }
+
+    assert {:ok, _metadata} = Aerospike.put(cluster, key, bins)
+
+    assert {:ok,
+            %Record{
+              bins: %{
+                "items" => [1, "two", false],
+                "meta" => %{"active" => true, "scores" => [7, 8]}
+              }
+            }} = Aerospike.get(cluster, key)
+  end
 end

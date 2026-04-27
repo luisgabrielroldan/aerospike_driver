@@ -71,7 +71,8 @@ The main public entry point is `Aerospike`. The current surface includes:
   batch helper functions and `Aerospike.Batch`
 - Scans and secondary-index queries through `Aerospike.Scan`,
   `Aerospike.Query`, `Aerospike.Filter`, `scan_stream/3`, `scan_all/3`,
-  `query_stream/3`, `query_all/3`, `query_page/3`, and count helpers
+  `scan_page/3`, `query_stream/3`, `query_all/3`, `query_page/3`, and count
+  helpers
 - Server-side expressions through `Aerospike.Exp`, including command filters,
   expression operations, expression-backed indexes, and XDR filters
 - UDF package lifecycle, record UDF execution, query aggregates, and background
@@ -130,7 +131,8 @@ Important current boundaries:
   timeouts but not the full per-entry policy matrix.
 - Scan and query streams are lazy at the `Enumerable` boundary, but the current
   runtime buffers each node's records before yielding that node downstream.
-- `query_all/3` and `query_page/3` require `query.max_records`.
+- `query_all/3` and `query_page/3` require `query.max_records`;
+  `scan_page/3` requires `scan.max_records`.
 - Query cursors resume partition progress; they are not snapshot tokens.
 - Expression-backed secondary indexes require Aerospike 8.1 or newer.
 - Enterprise security, transactions, TLS, auth, and XDR helpers require

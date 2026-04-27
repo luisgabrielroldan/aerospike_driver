@@ -24,7 +24,7 @@ defmodule Aerospike.Protocol.OperationTest do
 
     test "rejects unsupported values deterministically" do
       assert {:error, %Error{code: :invalid_argument, message: message}} =
-               Operation.write("config", %{nested: true})
+               Operation.write("config", MapSet.new([:nested]))
 
       assert message =~ "unsupported write particle"
     end

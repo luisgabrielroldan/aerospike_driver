@@ -1,5 +1,6 @@
 defmodule Aerospike.Command.WriteFamilyTest do
   use ExUnit.Case, async: true
+  import Bitwise
 
   alias Aerospike.Cluster.NodeSupervisor
   alias Aerospike.Cluster.PartitionMap
@@ -13,6 +14,8 @@ defmodule Aerospike.Command.WriteFamilyTest do
   alias Aerospike.Command.WriteOp
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.Message
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 
@@ -88,6 +91,47 @@ defmodule Aerospike.Command.WriteFamilyTest do
 
       assert {:error, :cluster_not_ready} = Put.execute(tender, key, %{count: 1})
     end
+
+    test "encodes record-exists write policies on the unary write header", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      cases = [
+        {:update, 0, 0},
+        {:update_only, 0, AsmMsg.info3_update_only()},
+        {:create_or_replace, 0, AsmMsg.info3_create_or_replace()},
+        {:replace_only, 0, AsmMsg.info3_replace_only()},
+        {:create_only, AsmMsg.info2_create_only(), 0}
+      ]
+
+      for {exists, info2_flag, info3_flag} <- cases do
+        Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 3, 120)})
+
+        key = Key.new(@namespace, @set, "put-exists-#{exists}")
+
+        assert {:ok, _metadata} = Put.execute(tender, key, %{count: 7}, exists: exists)
+
+        msg = last_command_msg(ctx.fake)
+        assert (msg.info2 &&& info2_flag) == info2_flag
+        assert (msg.info3 &&& info3_flag) == info3_flag
+      end
+    end
+
+    test "encodes durable delete through the unary write header", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 3, 120)})
+
+      key = Key.new(@namespace, @set, "put-durable")
+
+      assert {:ok, _metadata} = Put.execute(tender, key, %{count: 7}, durable_delete: true)
+
+      msg = last_command_msg(ctx.fake)
+      assert (msg.info2 &&& AsmMsg.info2_durable_delete()) == AsmMsg.info2_durable_delete()
+    end
   end
 
   describe "exists" do
@@ -129,6 +173,22 @@ defmodule Aerospike.Command.WriteFamilyTest do
       key = Key.new(@namespace, @set, "delete-missing")
 
       assert {:ok, false} = Delete.execute(tender, key)
+    end
+
+    test "encodes durable delete on the unary delete header", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 3, 120)})
+
+      key = Key.new(@namespace, @set, "delete-durable")
+
+      assert {:ok, true} = Delete.execute(tender, key, durable_delete: true)
+
+      msg = last_command_msg(ctx.fake)
+      assert (msg.info2 &&& AsmMsg.info2_delete()) == AsmMsg.info2_delete()
+      assert (msg.info2 &&& AsmMsg.info2_durable_delete()) == AsmMsg.info2_durable_delete()
     end
   end
 
@@ -173,6 +233,87 @@ defmodule Aerospike.Command.WriteFamilyTest do
                WriteOp.execute(tender, key, :prepend, %{})
 
       assert message =~ "prepend requires at least one bin mutation"
+    end
+
+    test "encodes record-exists policies through write operation wrappers", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 5, 21)})
+
+      key = Key.new(@namespace, @set, "add-create-only")
+
+      assert {:ok, _metadata} =
+               WriteOp.execute(tender, key, :add, %{count: 3}, exists: :create_only)
+
+      msg = last_command_msg(ctx.fake)
+      assert (msg.info2 &&& AsmMsg.info2_create_only()) == AsmMsg.info2_create_only()
+    end
+
+    test "encodes durable delete through write operation wrappers", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 5, 21)})
+
+      key = Key.new(@namespace, @set, "append-durable")
+
+      assert {:ok, _metadata} =
+               WriteOp.execute(tender, key, :append, %{greeting: "!"}, durable_delete: true)
+
+      msg = last_command_msg(ctx.fake)
+      assert (msg.info2 &&& AsmMsg.info2_durable_delete()) == AsmMsg.info2_durable_delete()
+    end
+  end
+
+  describe "operate" do
+    test "encodes record-exists policies for write-bearing operate commands", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 5, 21)})
+
+      key = Key.new(@namespace, @set, "operate-replace-only")
+
+      assert {:ok, _record} =
+               Aerospike.operate(tender, key, [{:write, "count", 3}], exists: :replace_only)
+
+      msg = last_command_msg(ctx.fake)
+      assert (msg.info3 &&& AsmMsg.info3_replace_only()) == AsmMsg.info3_replace_only()
+    end
+
+    test "encodes durable delete for write-bearing operate commands", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 5, 21)})
+
+      key = Key.new(@namespace, @set, "operate-durable-delete")
+
+      assert {:ok, _record} = Aerospike.operate(tender, key, [:delete], durable_delete: true)
+
+      msg = last_command_msg(ctx.fake)
+      assert (msg.info2 &&& AsmMsg.info2_durable_delete()) == AsmMsg.info2_durable_delete()
+    end
+
+    test "does not encode durable delete for read-only operate commands", ctx do
+      script_bootstrap_node(ctx.fake, "A1", ReplicasFixture.all_master(@namespace, 1))
+      {:ok, tender} = start_tender(ctx, seeds: [{"10.0.0.1", 3000}])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", {:ok, scripted_reply_body(0, 5, 21)})
+
+      key = Key.new(@namespace, @set, "operate-durable-read")
+
+      assert {:ok, _record} =
+               Aerospike.operate(tender, key, [{:read, "count"}], durable_delete: true)
+
+      msg = last_command_msg(ctx.fake)
+      assert (msg.info2 &&& AsmMsg.info2_durable_delete()) == 0
     end
   end
 
@@ -249,6 +390,13 @@ defmodule Aerospike.Command.WriteFamilyTest do
 
   defp scripted_reply_body(result_code, generation \\ 0, ttl \\ 0) do
     <<22, 0, 0, 0, 0, result_code::8, generation::32-big, ttl::32-big, 0::32, 0::16, 0::16>>
+  end
+
+  defp last_command_msg(fake) do
+    request = Fake.last_command_request(fake, "A1")
+    assert {:ok, {_version, 3, body}} = request |> IO.iodata_to_binary() |> Message.decode()
+    assert {:ok, %AsmMsg{} = msg} = AsmMsg.decode(body)
+    msg
   end
 
   defp stop_quietly(pid) do

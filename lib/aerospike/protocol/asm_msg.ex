@@ -21,10 +21,14 @@ defmodule Aerospike.Protocol.AsmMsg do
   @info2_delete 0x02
   @info2_generation 0x04
   @info2_durable_delete 0x10
+  @info2_create_only 0x20
   @info2_respond_all_ops 0x80
 
   # Info3 flags
   @info3_last 0x01
+  @info3_update_only 0x08
+  @info3_create_or_replace 0x10
+  @info3_replace_only 0x20
   @info3_sc_read_type 0x40
 
   # Info4 flags
@@ -88,6 +92,10 @@ defmodule Aerospike.Protocol.AsmMsg do
   @spec info2_durable_delete() :: 0x10
   def info2_durable_delete, do: @info2_durable_delete
 
+  @doc "Returns the INFO2_CREATE_ONLY flag value."
+  @spec info2_create_only() :: 0x20
+  def info2_create_only, do: @info2_create_only
+
   @doc "Returns the INFO2_RESPOND_ALL_OPS flag value."
   @spec info2_respond_all_ops() :: 0x80
   def info2_respond_all_ops, do: @info2_respond_all_ops
@@ -95,6 +103,18 @@ defmodule Aerospike.Protocol.AsmMsg do
   @doc "Returns the INFO3_LAST flag value."
   @spec info3_last() :: 0x01
   def info3_last, do: @info3_last
+
+  @doc "Returns the INFO3_UPDATE_ONLY flag value."
+  @spec info3_update_only() :: 0x08
+  def info3_update_only, do: @info3_update_only
+
+  @doc "Returns the INFO3_CREATE_OR_REPLACE flag value."
+  @spec info3_create_or_replace() :: 0x10
+  def info3_create_or_replace, do: @info3_create_or_replace
+
+  @doc "Returns the INFO3_REPLACE_ONLY flag value."
+  @spec info3_replace_only() :: 0x20
+  def info3_replace_only, do: @info3_replace_only
 
   @doc "Returns the INFO3_SC_READ_TYPE flag value."
   @spec info3_sc_read_type() :: 0x40
@@ -271,6 +291,7 @@ defmodule Aerospike.Protocol.AsmMsg do
     %__MODULE__{
       info1: info1_from_opts(opts),
       info2: info2_from_opts(opts),
+      info3: info3_from_opts(opts),
       generation: generation_from_opts(opts),
       expiration: Keyword.get(opts, :ttl, 0),
       timeout: Keyword.get(opts, :timeout, 0),
@@ -320,7 +341,16 @@ defmodule Aerospike.Protocol.AsmMsg do
     |> maybe_flag(Keyword.get(opts, :write, false), @info2_write)
     |> maybe_flag(Keyword.get(opts, :delete, false), @info2_delete)
     |> maybe_flag(generation_flag?(Keyword.get(opts, :generation)), @info2_generation)
+    |> maybe_flag(Keyword.get(opts, :durable_delete, false), @info2_durable_delete)
+    |> maybe_flag(Keyword.get(opts, :exists) == :create_only, @info2_create_only)
     |> maybe_flag(Keyword.get(opts, :respond_all_ops, false), @info2_respond_all_ops)
+  end
+
+  defp info3_from_opts(opts) do
+    0
+    |> maybe_flag(Keyword.get(opts, :exists) == :update_only, @info3_update_only)
+    |> maybe_flag(Keyword.get(opts, :exists) == :create_or_replace, @info3_create_or_replace)
+    |> maybe_flag(Keyword.get(opts, :exists) == :replace_only, @info3_replace_only)
   end
 
   defp generation_flag?(generation) when is_integer(generation) and generation > 0, do: true

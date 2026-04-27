@@ -11,6 +11,7 @@ defmodule Aerospike.Policy do
   @expression_index_types [:numeric, :string, :geo2dsphere]
   @index_collection_types [:list, :mapkeys, :mapvalues]
   @expression_index_opts [:collection, :name, :pool_checkout_timeout, :type]
+  @record_exists_actions [:update, :update_only, :create_or_replace, :replace_only, :create_only]
 
   defmodule ClusterDefaults do
     @moduledoc false
@@ -37,15 +38,20 @@ defmodule Aerospike.Policy do
   defmodule UnaryWrite do
     @moduledoc false
 
-    @enforce_keys [:timeout, :retry, :ttl, :generation, :filter]
-    defstruct [:timeout, :retry, :ttl, :generation, :filter]
+    @type record_exists_action ::
+            :update | :update_only | :create_or_replace | :replace_only | :create_only
+
+    @enforce_keys [:timeout, :retry, :ttl, :generation, :filter, :exists, :durable_delete]
+    defstruct [:timeout, :retry, :ttl, :generation, :filter, :exists, :durable_delete]
 
     @type t :: %__MODULE__{
             timeout: non_neg_integer(),
             retry: RetryPolicy.t(),
             ttl: non_neg_integer(),
             generation: non_neg_integer(),
-            filter: Exp.t() | nil
+            filter: Exp.t() | nil,
+            exists: record_exists_action(),
+            durable_delete: boolean()
           }
   end
 
@@ -177,14 +183,18 @@ defmodule Aerospike.Policy do
     with {:ok, timeout} <- fetch_non_neg_integer(opts, :timeout, @default_timeout),
          {:ok, ttl} <- fetch_non_neg_integer(opts, :ttl, 0),
          {:ok, generation} <- fetch_non_neg_integer(opts, :generation, 0),
-         {:ok, filter} <- fetch_filter(opts) do
+         {:ok, filter} <- fetch_filter(opts),
+         {:ok, exists} <- fetch_record_exists_action(opts),
+         {:ok, durable_delete} <- fetch_boolean(opts, :durable_delete, false) do
       {:ok,
        %UnaryWrite{
          timeout: timeout,
          retry: RetryPolicy.merge(base_retry, opts),
          ttl: ttl,
          generation: generation,
-         filter: filter
+         filter: filter,
+         exists: exists,
+         durable_delete: durable_delete
        }}
     end
   end
@@ -352,6 +362,16 @@ defmodule Aerospike.Policy do
     end
   end
 
+  defp fetch_boolean(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_boolean(value) ->
+        {:ok, value}
+
+      value ->
+        invalid_argument("#{key} must be a boolean, got: #{inspect(value)}")
+    end
+  end
+
   defp fetch_task_timeout(opts) do
     case Keyword.get(opts, :task_timeout, :infinity) do
       :infinity ->
@@ -430,6 +450,18 @@ defmodule Aerospike.Policy do
         invalid_argument(
           ":filter must be nil or a %Aerospike.Exp{} with non-empty wire bytes, got: #{inspect(value)}"
         )
+    end
+  end
+
+  defp fetch_record_exists_action(opts) do
+    case fetch_optional_member(
+           opts,
+           :exists,
+           @record_exists_actions,
+           "record-exists write policy"
+         ) do
+      {:ok, nil} -> {:ok, :update}
+      other -> other
     end
   end
 

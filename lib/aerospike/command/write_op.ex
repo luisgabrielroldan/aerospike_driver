@@ -22,6 +22,8 @@ defmodule Aerospike.Command.WriteOp do
           | {:ttl, non_neg_integer()}
           | {:generation, non_neg_integer()}
           | {:filter, Aerospike.Exp.t() | nil}
+          | {:durable_delete, boolean()}
+          | {:exists, :update | :update_only | :create_or_replace | :replace_only | :create_only}
 
   @type result ::
           {:ok, Record.metadata()}
@@ -68,7 +70,9 @@ defmodule Aerospike.Command.WriteOp do
        operations: operations,
        ttl: policy.ttl,
        generation: policy.generation,
-       filter: policy.filter
+       filter: policy.filter,
+       exists: policy.exists,
+       durable_delete: policy.durable_delete
      }}
   end
 
@@ -118,14 +122,18 @@ defmodule Aerospike.Command.WriteOp do
          operations: operations,
          ttl: ttl,
          generation: generation,
-         filter: filter
+         filter: filter,
+         exists: exists,
+         durable_delete: durable_delete
        }) do
     key
     |> AsmMsg.key_command(operations,
       write: true,
       send_key: true,
       ttl: ttl,
-      generation: generation
+      generation: generation,
+      exists: exists,
+      durable_delete: durable_delete
     )
     |> AsmMsg.maybe_add_filter_exp(filter)
     |> TxnSupport.maybe_add_mrt_fields(conn, key, opts, true)

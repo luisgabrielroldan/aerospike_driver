@@ -228,6 +228,48 @@ defmodule Aerospike.Protocol.BatchTest do
                ])
     end
 
+    test "encodes projected read entries with read operations" do
+      key = Key.new("test", "users", "k-read")
+      name_op = Operation.read("name")
+      count_op = Operation.read("count")
+
+      request = %NodeRequest{
+        node_name: "A1",
+        entries: [
+          %Entry{
+            index: 0,
+            key: key,
+            kind: :read,
+            dispatch: {:read, :master, 0},
+            payload: %{operations: [name_op, count_op]}
+          }
+        ],
+        payload: nil
+      }
+
+      encoded = Batch.encode_request(request, timeout: 250)
+
+      assert {:ok, {2, 3, body}} = Message.decode(IO.iodata_to_binary(encoded))
+      assert {:ok, msg} = AsmMsg.decode(body)
+      assert msg.info1 == AsmMsg.info1_batch()
+      assert msg.timeout == 250
+      assert [%Field{type: type, data: data}] = msg.fields
+      assert type == Field.type_batch_index()
+
+      assert data ==
+               IO.iodata_to_binary([
+                 <<1::32-big, 0::8>>,
+                 mixed_row(0, key, [
+                   <<0x0A::8, AsmMsg.info1_read()::8, 0::8, 0::8, 0::32-big>>,
+                   <<2::16-big, 2::16-big>>,
+                   Field.encode(Field.namespace("test")),
+                   Field.encode(Field.set("users")),
+                   Operation.encode(name_op),
+                   Operation.encode(count_op)
+                 ])
+               ])
+    end
+
     test "encodes delete entries with empty payload" do
       key = Key.new("test", "users", "k-delete")
 

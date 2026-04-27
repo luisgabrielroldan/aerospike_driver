@@ -76,6 +76,42 @@ defmodule Aerospike.Command.ScanOpsTest do
     assert record.bins["payload"] == "A1-only"
   end
 
+  test "scan page helpers expose node targeting and cursor resume", ctx do
+    script_two_node_cluster(ctx.fake)
+    {:ok, tender} = start_tender(ctx)
+    :ok = Tender.tend_now(tender)
+
+    scan =
+      Scan.new(@namespace, "scan_ops")
+      |> Scan.partition_filter(PartitionFilter.by_id(0))
+      |> Scan.max_records(1)
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("scan-page-1"), partition_done_frame("scan-page-1"), last_frame()]}
+    )
+
+    Fake.script_stream(
+      ctx.fake,
+      "A1",
+      {:ok, [frame("scan-page-2"), partition_done_frame("scan-page-2"), last_frame()]}
+    )
+
+    assert {:ok, page1} = Aerospike.scan_page(tender, scan, node: "A1")
+    assert [%{bins: %{"payload" => "scan-page-1"}}] = page1.records
+    assert page1.done? == false
+    assert %Cursor{} = page1.cursor
+
+    encoded_cursor = Cursor.encode(page1.cursor)
+
+    assert {:ok, page2} =
+             Aerospike.scan_page(tender, scan, node: "A1", cursor: encoded_cursor)
+
+    assert [%{bins: %{"payload" => "scan-page-2"}}] = page2.records
+    assert %Cursor{} = page2.cursor
+  end
+
   test "bare scan aliases remain compatible with the explicit helpers", ctx do
     script_two_node_cluster(ctx.fake)
     {:ok, tender} = start_tender(ctx)
@@ -249,6 +285,8 @@ defmodule Aerospike.Command.ScanOpsTest do
     {:ok, tender} = start_tender(ctx)
     :ok = Tender.tend_now(tender)
 
+    scan = Scan.new(@namespace, "scan_ops")
+
     query =
       Query.new(@namespace, "scan_ops")
       |> Query.where(Filter.range("payload", 0, 9))
@@ -259,6 +297,9 @@ defmodule Aerospike.Command.ScanOpsTest do
 
     assert {:error, %Aerospike.Error{code: :invalid_node}} =
              Aerospike.query_page(tender, query, node: "missing")
+
+    assert {:error, %Aerospike.Error{code: :invalid_node}} =
+             Aerospike.scan_page(tender, Scan.max_records(scan, 1), node: "missing")
 
     assert {:error, %Aerospike.Error{code: :invalid_node}} =
              Aerospike.query_execute(tender, query, [], node: "missing")
@@ -307,6 +348,9 @@ defmodule Aerospike.Command.ScanOpsTest do
 
     assert {:error, %Aerospike.Error{code: :parameter_error}} =
              ScanOps.count_node(tender, "A1", scan, node: "B1")
+
+    assert {:error, %Aerospike.Error{code: :parameter_error}} =
+             ScanOps.scan_page_node(tender, "A1", Scan.max_records(scan, 1), node: "B1")
 
     assert {:error, %Aerospike.Error{code: :parameter_error}} =
              ScanOps.query_page_node(tender, "A1", query, node: "B1")
@@ -411,6 +455,11 @@ defmodule Aerospike.Command.ScanOpsTest do
              ScanOps.query_page(tender, query, cursor: 123)
 
     assert message =~ "invalid cursor"
+
+    assert {:error, %Aerospike.Error{code: :parameter_error, message: scan_message}} =
+             ScanOps.scan_page(tender, Scan.max_records(scan, 1), cursor: 123)
+
+    assert scan_message =~ "invalid cursor"
 
     assert {:error, %Aerospike.Error{code: :parse_error}} =
              ScanOps.query_page(tender, query, cursor: "not-base64")

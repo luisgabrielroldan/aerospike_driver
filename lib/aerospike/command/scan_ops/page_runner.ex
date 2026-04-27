@@ -27,7 +27,7 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
            tables: Router.tables()
          }
 
-  @spec page(GenServer.server(), Query.t(), keyword()) ::
+  @spec page(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Error.t()}
   def page(tender, scannable, opts) when is_list(opts) do
     {cursor, opts2} = Keyword.pop(opts, :cursor)
@@ -37,7 +37,7 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
     end
   end
 
-  @spec page_node(GenServer.server(), String.t(), Query.t(), keyword()) ::
+  @spec page_node(GenServer.server(), String.t(), Scan.t() | Query.t(), keyword()) ::
           {:ok, Page.t()} | {:error, Error.t()}
   def page_node(tender, node_name, scannable, opts)
       when is_binary(node_name) and is_list(opts) do
@@ -474,6 +474,10 @@ defmodule Aerospike.Command.ScanOps.PageRunner do
 
   defp attach_cursor_partition_filter(%Query{} = query, %Cursor{partitions: partitions}) do
     %{query | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
+  end
+
+  defp attach_cursor_partition_filter(%Scan{} = scan, %Cursor{partitions: partitions}) do
+    %{scan | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
   end
 
   defp namespace(%Scan{namespace: namespace}), do: namespace

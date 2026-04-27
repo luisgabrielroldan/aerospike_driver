@@ -27,8 +27,14 @@ Enum.each(results, fn
 end)
 ```
 
-`batch_get/4` currently supports `bins: :all`. Use `batch_get_header/3` when
-only metadata is needed:
+Pass `:all` to read complete records, or pass a non-empty list of string or
+atom bin names to project only those bins:
+
+```elixir
+{:ok, projected} = Aerospike.batch_get(:aerospike, keys, ["name", :score])
+```
+
+Use `batch_get_header/3` when only metadata is needed:
 
 ```elixir
 {:ok, headers} = Aerospike.batch_get_header(:aerospike, keys)

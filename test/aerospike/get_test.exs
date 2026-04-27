@@ -1,12 +1,11 @@
 defmodule Aerospike.Command.GetTest do
   @moduledoc """
   Unit tests for `Aerospike.Command.Get.execute/4` that cover decisions the
-  command path makes *before* it touches the transport.
+  command path makes before and during unary dispatch.
 
-  Transport-level paths (encode, decode, error classification) are
-  covered by integration tests and the per-module protocol tests; this
-  file asserts only that `Aerospike.Command.Get` refuses to check out a pool
-  worker when the breaker refuses.
+  Transport-level decode and error classification are covered by integration
+  tests and per-module protocol tests. This file keeps focused coverage for
+  pre-dispatch validation, breaker behavior, and request construction.
   """
 
   use ExUnit.Case, async: true
@@ -20,6 +19,9 @@ defmodule Aerospike.Command.GetTest do
   alias Aerospike.Command.Get
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Protocol.AsmMsg
+  alias Aerospike.Protocol.AsmMsg.Operation
+  alias Aerospike.Protocol.Message
   alias Aerospike.Test.ReplicasFixture
   alias Aerospike.Transport.Fake
 
@@ -121,19 +123,65 @@ defmodule Aerospike.Command.GetTest do
     end
   end
 
-  describe "unsupported GET shapes" do
-    test "Get.execute/4 rejects named-bin requests in the current driver" do
+  describe "named-bin GETs" do
+    test "Get.execute/4 encodes one read operation per requested bin", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, tender} = start_tender(ctx, [])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", scripted_key_not_found_body())
+
       key = Key.new("test", "spike", "any")
 
-      assert {:error, %Error{code: :invalid_argument}} =
-               Get.execute(:unused_tender, key, ["bin_a"])
+      assert {:error, %Error{code: :key_not_found}} =
+               Get.execute(tender, key, ["bin_a", :bin_b])
+
+      assert %AsmMsg{info1: info1, operations: operations} = last_command_msg(ctx.fake, "A1")
+      assert info1 == AsmMsg.info1_read()
+
+      assert [
+               %Operation{op_type: read, bin_name: "bin_a", data: <<>>},
+               %Operation{op_type: read, bin_name: "bin_b", data: <<>>}
+             ] = operations
+
+      assert read == Operation.op_read()
     end
 
-    test "Aerospike.get/4 preserves the same named-bin rejection surface" do
+    test "Aerospike.get/4 accepts named-bin requests through the public facade", ctx do
+      script_bootstrap_node(ctx.fake, "A1", 1, ReplicasFixture.all_master("test", 1))
+
+      {:ok, tender} = start_tender(ctx, [])
+      :ok = Tender.tend_now(tender)
+
+      Fake.script_command(ctx.fake, "A1", scripted_key_not_found_body())
+
       key = Key.new("test", "spike", "any")
 
-      assert {:error, %Error{code: :invalid_argument}} =
-               Aerospike.get(:unused_cluster, key, ["bin_a"])
+      assert {:error, %Error{code: :key_not_found}} =
+               Aerospike.get(tender, key, [:bin_a])
+
+      assert %AsmMsg{operations: [%Operation{bin_name: "bin_a"}]} =
+               last_command_msg(ctx.fake, "A1")
+    end
+
+    test "Get.execute/4 rejects invalid named-bin lists before dispatch" do
+      key = Key.new("test", "spike", "any")
+
+      assert {:error, %Error{code: :invalid_argument, message: empty_message}} =
+               Get.execute(:unused_tender, key, [])
+
+      assert empty_message =~ "at least one named bin"
+
+      assert {:error, %Error{code: :invalid_argument, message: blank_message}} =
+               Get.execute(:unused_tender, key, [""])
+
+      assert blank_message =~ "non-empty strings or atoms"
+
+      assert {:error, %Error{code: :invalid_argument, message: type_message}} =
+               Get.execute(:unused_tender, key, ["bin_a", 1])
+
+      assert type_message =~ "non-empty strings or atoms"
     end
   end
 
@@ -293,6 +341,14 @@ defmodule Aerospike.Command.GetTest do
 
   defp scripted_ok_body(generation, ttl) do
     {:ok, <<22, 0x21, 0, 0, 0, 0::8, generation::32, ttl::32, 0::32, 0::16, 0::16>>}
+  end
+
+  defp last_command_msg(fake, node) do
+    request = Fake.last_command_request(fake, node)
+    assert {:ok, {_version, type, body}} = request |> IO.iodata_to_binary() |> Message.decode()
+    assert type == Message.type_as_msg()
+    assert {:ok, msg} = AsmMsg.decode(body)
+    msg
   end
 
   defp header do

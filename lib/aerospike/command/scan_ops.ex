@@ -46,6 +46,28 @@ defmodule Aerospike.Command.ScanOps do
     end
   end
 
+  @spec scan_page(GenServer.server(), Scan.t(), keyword()) ::
+          {:ok, Page.t()} | {:error, Error.t()}
+  def scan_page(tender, %Scan{} = scan, opts \\ []) when is_list(opts) do
+    with {:ok, node_name, opts2} <- normalize_node_opt(opts) do
+      {cursor, opts3} = Keyword.pop(opts2, :cursor)
+
+      with {:ok, scan2} <- apply_optional_cursor(scan, cursor),
+           :ok <- require_max_records(scan2) do
+        scan_page_with_node(tender, scan2, node_name, opts3)
+      end
+    end
+  end
+
+  @spec scan_page_node(GenServer.server(), String.t(), Scan.t(), keyword()) ::
+          {:ok, Page.t()} | {:error, Error.t()}
+  def scan_page_node(tender, node_name, %Scan{} = scan, opts \\ [])
+      when is_binary(node_name) and is_list(opts) do
+    with {:ok, opts2} <- put_target_node_opt(opts, node_name) do
+      scan_page(tender, scan, opts2)
+    end
+  end
+
   @spec count(GenServer.server(), Scan.t() | Query.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, Error.t()}
   def count(tender, scannable, opts \\ []) when is_list(opts) do
@@ -211,6 +233,11 @@ defmodule Aerospike.Command.ScanOps do
   defp query_all_with_node(tender, query, node_name, opts),
     do: PageRunner.all_node(tender, node_name, query, opts)
 
+  defp scan_page_with_node(tender, scan, nil, opts), do: PageRunner.page(tender, scan, opts)
+
+  defp scan_page_with_node(tender, scan, node_name, opts),
+    do: PageRunner.page_node(tender, node_name, scan, opts)
+
   defp query_page_with_node(tender, query, nil, opts), do: PageRunner.page(tender, query, opts)
 
   defp query_page_with_node(tender, query, node_name, opts),
@@ -269,6 +296,7 @@ defmodule Aerospike.Command.ScanOps do
   end
 
   defp require_max_records(%Query{max_records: n}) when is_integer(n) and n > 0, do: :ok
+  defp require_max_records(%Scan{max_records: n}) when is_integer(n) and n > 0, do: :ok
   defp require_max_records(_), do: {:error, Error.from_result_code(:max_records_required)}
 
   defp apply_optional_cursor(scannable, nil), do: {:ok, scannable}
@@ -290,6 +318,10 @@ defmodule Aerospike.Command.ScanOps do
 
   defp attach_cursor_partition_filter(%Query{} = query, %Cursor{partitions: partitions}) do
     %{query | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
+  end
+
+  defp attach_cursor_partition_filter(%Scan{} = scan, %Cursor{partitions: partitions}) do
+    %{scan | partition_filter: %{PartitionFilter.all() | partitions: partitions}}
   end
 
   @doc false
