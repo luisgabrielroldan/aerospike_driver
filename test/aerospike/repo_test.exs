@@ -29,17 +29,12 @@ defmodule Aerospike.RepoTest do
       {:batch_operate, 3},
       {:scan_stream, 3},
       {:scan_stream!, 3},
-      {:stream!, 3},
       {:scan_all, 3},
       {:scan_all!, 3},
-      {:all, 3},
-      {:all!, 3},
       {:scan_page, 3},
       {:scan_page!, 3},
       {:scan_count, 3},
       {:scan_count!, 3},
-      {:count, 3},
-      {:count!, 3},
       {:query_stream, 3},
       {:query_stream!, 3},
       {:query_all, 3},
@@ -137,6 +132,18 @@ defmodule Aerospike.RepoTest do
   @repo_only_functions [{:conn, 0}, {:config, 0}]
   @admin_only_functions [{:conn, 0}]
   @non_conn_functions [:child_spec, :key, :key_digest, :start_link]
+  @deprecated_alias_functions [
+    {:stream!, 2},
+    {:stream!, 3},
+    {:all, 2},
+    {:all, 3},
+    {:all!, 2},
+    {:all!, 3},
+    {:count, 2},
+    {:count, 3},
+    {:count!, 2},
+    {:count!, 3}
+  ]
 
   setup do
     Application.delete_env(:aerospike_driver, DefaultRepo)
@@ -263,7 +270,7 @@ defmodule Aerospike.RepoTest do
     test "generated modules expose the current Aerospike facade minus the bound cluster argument" do
       expected =
         Aerospike.__info__(:functions)
-        |> Enum.reject(&(&1 in @meta_functions))
+        |> Enum.reject(&(&1 in @meta_functions or &1 in @deprecated_alias_functions))
         |> Enum.map(fn
           {name, arity} when name in @non_conn_functions -> {name, arity}
           {name, arity} -> {name, arity - 1}
