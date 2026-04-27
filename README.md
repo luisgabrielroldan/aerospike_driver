@@ -13,7 +13,7 @@ Add `aerospike_driver` to your dependencies:
 ```elixir
 def deps do
   [
-    {:aerospike_driver, "~> 0.1.0"}
+    {:aerospike_driver, "~> 0.3.0"}
   ]
 end
 ```
@@ -142,6 +142,7 @@ Important current boundaries:
   key for routing and forwards the payload unchanged.
 
 See the module docs and guides for command-specific options and return shapes.
+See the [CHANGELOG](CHANGELOG.md) for release history.
 
 ## Local Development
 

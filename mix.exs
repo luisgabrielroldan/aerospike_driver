@@ -7,7 +7,7 @@ defmodule Aerospike.MixProject do
     "--default" => "default",
     "--full" => "full"
   }
-  @version "0.1.0"
+  @version "0.3.0"
   @source_url "https://github.com/luisgabrielroldan/aerospike_driver"
   @description "Aerospike driver for Elixir with an OTP-native cluster runtime"
   @ce_integration_files [
@@ -72,9 +72,10 @@ defmodule Aerospike.MixProject do
       maintainers: ["Gabriel Roldan"],
       licenses: ["Apache-2.0"],
       links: %{
-        "GitHub" => @source_url
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
-      files: ~w(lib priv guides .formatter.exs mix.exs mix.lock README.md)
+      files: ~w(lib guides .formatter.exs CHANGELOG.md LICENSE mix.exs mix.lock README.md)
     ]
   end
 
@@ -86,6 +87,7 @@ defmodule Aerospike.MixProject do
       source_ref: "v#{@version}",
       extras: [
         {"README.md", [title: "Overview"]},
+        {"CHANGELOG.md", [title: "Changelog"]},
         {"guides/getting-started.md", [title: "Getting Started"]},
         {"guides/record-operations.md", [title: "Record Operations"]},
         {"guides/batch-operations.md", [title: "Batch Operations"]},
