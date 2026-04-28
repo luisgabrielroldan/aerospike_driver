@@ -106,8 +106,8 @@ defmodule Aerospike.Transport.Tcp do
 
   import Bitwise
 
-  alias Aerospike.Error
   alias Aerospike.Cluster.NodeTransport
+  alias Aerospike.Error
   alias Aerospike.Protocol.Info
   alias Aerospike.Protocol.Login
   alias Aerospike.Protocol.Message

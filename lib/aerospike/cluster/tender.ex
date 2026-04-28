@@ -1136,23 +1136,23 @@ defmodule Aerospike.Cluster.Tender do
   defp login_and_register_peer(state, name, host, port, conn) do
     case ClusterNode.login(state.transport, conn, auth_opts(state)) do
       {:ok, session} ->
-        with {:ok, features} <-
-               ClusterNode.fetch_peer_features(state.transport, conn, name, auth_opts(state)) do
-          peer_node = %ClusterNode{
-            name: name,
-            host: host,
-            port: port,
-            conn: conn,
-            session: session,
-            features: features,
-            generation_seen: nil,
-            applied_gen: nil,
-            cluster_stable: nil,
-            peers_generation_seen: nil
-          }
+        case ClusterNode.fetch_peer_features(state.transport, conn, name, auth_opts(state)) do
+          {:ok, features} ->
+            peer_node = %ClusterNode{
+              name: name,
+              host: host,
+              port: port,
+              conn: conn,
+              session: session,
+              features: features,
+              generation_seen: nil,
+              applied_gen: nil,
+              cluster_stable: nil,
+              peers_generation_seen: nil
+            }
 
-          register_new_node(state, peer_node, :peer_discovery)
-        else
+            register_new_node(state, peer_node, :peer_discovery)
+
           {:error, %Error{} = err} ->
             Logger.warning(
               "Aerospike.Cluster.Tender: peer #{name} at #{host}:#{port} validation failed: #{err.message}"

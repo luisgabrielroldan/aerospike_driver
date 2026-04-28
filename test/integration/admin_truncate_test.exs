@@ -126,12 +126,8 @@ defmodule Aerospike.Integration.AdminTruncateTest do
           :ok ->
             true
 
-          {:error, %Error{message: message}} = error ->
-            if String.contains?(message, "would truncate in the future") do
-              false
-            else
-              flunk("truncate failed unexpectedly: #{inspect(error)}")
-            end
+          {:error, %Error{} = error} ->
+            retry_future_truncate_error!(error)
         end
       end,
       truncate_wait_timeout_ms(),
@@ -147,16 +143,20 @@ defmodule Aerospike.Integration.AdminTruncateTest do
           :ok ->
             true
 
-          {:error, %Error{message: message}} = error ->
-            if String.contains?(message, "would truncate in the future") do
-              false
-            else
-              flunk("truncate failed unexpectedly: #{inspect(error)}")
-            end
+          {:error, %Error{} = error} ->
+            retry_future_truncate_error!(error)
         end
       end,
       truncate_wait_timeout_ms(),
       50
     )
+  end
+
+  defp retry_future_truncate_error!(%Error{message: message} = error) do
+    if String.contains?(message, "would truncate in the future") do
+      false
+    else
+      flunk("truncate failed unexpectedly: #{inspect(error)}")
+    end
   end
 end

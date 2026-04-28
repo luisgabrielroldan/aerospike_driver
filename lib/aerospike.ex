@@ -142,6 +142,7 @@ defmodule Aerospike do
   alias Aerospike.Protocol.OperateFlags
   alias Aerospike.Query
   alias Aerospike.RegisterTask
+  alias Aerospike.RetryPolicy
   alias Aerospike.Role
   alias Aerospike.Runtime.TxnRoll
   alias Aerospike.RuntimeMetrics
