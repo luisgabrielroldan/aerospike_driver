@@ -97,6 +97,7 @@ iex> Demo.Examples.Batch.run()
 | `BatchOperate` | Heterogeneous batch: reads, writes, deletes, atomic operate |
 | `BatchHelpers` | Direct batch helpers: read operations, deletes, and UDF calls |
 | `BatchUdf` | Batch UDF execution with `Batch.udf/5` in `batch_operate` |
+| `PolicyOptions` | Keyword policy options across record, batch, and scan calls |
 | `ListMap` | List/Map CDT round-trip: strings, complex types, combined structures |
 | `ListOps` | List CDT operations: append, insert, pop, remove, sort, trim, rank, increment |
 | `MapOps` | Map CDT operations: put, get_by_key, increment, remove, get_by_rank_range |
@@ -107,7 +108,7 @@ iex> Demo.Examples.Batch.run()
 | `ScanParallel` | Lazy streaming scan with `stream!/2`, pipelines, early termination |
 | `ScanPaginate` | Paginated scan with `page/3` and cursor serialization |
 | `CountSetObjects` | Count records in a set using scan-based `count/2` |
-| `Expressions` | Server-side filter expressions: filter on get/scan, `Op.Exp.read`, `Op.Exp.write` |
+| `Expressions` | Server-side filter expressions: filter on get/scan, CDT expression helpers, `Op.Exp.read`, `Op.Exp.write` |
 | `SecondaryIndex` | Index lifecycle: `create_index`, `IndexTask` polling, `Filter.equal` query, `drop_index` |
 | `QueryAggregate` | Secondary-index query with range filter, expression filter, client-side aggregation |
 | `QueryAggregateResult` | File-backed Lua stream UDF aggregate with local finalization |

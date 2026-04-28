@@ -26,6 +26,7 @@ defmodule Demo do
     Demo.Examples.Batch,
     Demo.Examples.BatchOperate,
     Demo.Examples.BatchHelpers,
+    Demo.Examples.PolicyOptions,
     Demo.Examples.ListMap,
     Demo.Examples.ListOps,
     Demo.Examples.MapOps,

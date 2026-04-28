@@ -2,7 +2,7 @@ defmodule Demo.Examples.Expressions do
   @moduledoc """
   Demonstrates server-side filter expressions using `Aerospike.Exp`.
 
-  Shows four expression use-cases:
+  Shows five expression use-cases:
 
   1. **Filter on get** — `filter:` expr on a single-record read filters the
      record out server-side instead of returning it.
@@ -12,11 +12,14 @@ defmodule Demo.Examples.Expressions do
      result in the response record's bins without a separate read round-trip.
   4. **Op.Exp.write** — evaluate an expression server-side and persist the
      result to a bin in the same atomic operate command.
+  5. **CDT helper filter** — use a list expression helper in a server-side
+     filter expression.
   """
 
   require Logger
 
   alias Aerospike.Exp
+  alias Aerospike.Exp.List, as: ListExp
   alias Aerospike.Op
   alias Aerospike.Scan
 
@@ -28,6 +31,7 @@ defmodule Demo.Examples.Expressions do
     write_records()
     filter_on_get()
     filter_on_scan()
+    cdt_helper_filter_on_scan()
     exp_read_op()
     exp_write_op()
     cleanup()
@@ -37,10 +41,12 @@ defmodule Demo.Examples.Expressions do
     Logger.info("  Writing records: alice(age=25), bob(age=40), carol(age=15), dave(age=35)")
 
     records = [
-      {"alice", %{"age" => 25, "score" => 80}},
-      {"bob", %{"age" => 40, "score" => 90}},
-      {"carol", %{"age" => 15, "score" => 70}},
-      {"dave", %{"age" => 35, "score" => 85}}
+      {"alice",
+       %{"age" => 25, "name" => "alice", "score" => 80, "tags" => ["elixir", "demo", "cdt"]}},
+      {"bob", %{"age" => 40, "name" => "bob", "score" => 90, "tags" => ["policy", "batch"]}},
+      {"carol", %{"age" => 15, "name" => "carol", "score" => 70, "tags" => ["young"]}},
+      {"dave",
+       %{"age" => 35, "name" => "dave", "score" => 85, "tags" => ["scan", "expr", "list", "cdt"]}}
     ]
 
     for {name, bins} <- records do
@@ -91,6 +97,28 @@ defmodule Demo.Examples.Expressions do
     Logger.info(
       "    #{length(records)} records returned with age>=35 (expected: bob=40, dave=35)"
     )
+  end
+
+  defp cdt_helper_filter_on_scan do
+    Logger.info("  CDT expression helper on scan (list size >= 3)...")
+
+    scan =
+      Scan.new(@namespace, @set)
+      |> Scan.filter(Exp.gte(ListExp.size(Exp.list_bin("tags")), Exp.val(3)))
+      |> Scan.max_records(20)
+
+    {:ok, records} = @repo.all(scan)
+
+    names =
+      records
+      |> Enum.map(& &1.bins["name"])
+      |> Enum.sort()
+
+    unless names == ["alice", "dave"] do
+      raise "Expected alice and dave from tags-size filter, got #{inspect(names)}"
+    end
+
+    Logger.info("    #{Enum.join(names, ", ")} matched tags-size filter")
   end
 
   defp exp_read_op do
