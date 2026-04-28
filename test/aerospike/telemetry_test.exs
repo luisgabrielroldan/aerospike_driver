@@ -26,7 +26,6 @@ defmodule Aerospike.TelemetryTest do
     {:retry_attempt, [:aerospike, :retry, :attempt], "[:aerospike, :retry, :attempt]"}
   ]
 
-  @telemetry_doc Path.expand("../../../spike-docs/telemetry.md", __DIR__)
   @telemetry_guide Path.expand("../../guides/telemetry-and-runtime-metrics.md", __DIR__)
   @doc_emitters [
     "Aerospike.Runtime.PoolCheckout",
@@ -72,15 +71,15 @@ defmodule Aerospike.TelemetryTest do
       assert Telemetry.handler_events() == expected_handler_events
     end
 
-    test "telemetry doc headings match the supported taxonomy" do
-      assert documented_event_headings() == expected_doc_headings()
+    test "telemetry guide event names match the supported taxonomy" do
+      assert documented_event_names() == expected_doc_headings()
     end
 
-    test "telemetry doc still names the current emitters" do
-      doc = File.read!(@telemetry_doc)
+    test "telemetry guide still names the current emitters" do
+      guide = File.read!(@telemetry_guide)
 
       for emitter <- @doc_emitters do
-        assert doc =~ emitter
+        assert guide =~ emitter
       end
     end
 
@@ -177,18 +176,13 @@ defmodule Aerospike.TelemetryTest do
     Enum.map(@span_events ++ @instant_events, &doc_heading/1)
   end
 
-  defp documented_event_headings do
-    @telemetry_doc
+  defp documented_event_names do
+    @telemetry_guide
     |> File.read!()
-    |> String.split("\n## ", trim: true)
-    |> Enum.drop(1)
-    |> Enum.map(fn section ->
-      section
-      |> String.split("\n", parts: 2)
-      |> hd()
-      |> String.trim()
-      |> String.trim_leading("`")
-      |> String.trim_trailing("`")
+    |> then(fn guide ->
+      ~r/^\s+`(\[:aerospike[^\n`]+?\])`/m
+      |> Regex.scan(guide)
+      |> Enum.map(fn [_match, event_name] -> event_name end)
     end)
   end
 

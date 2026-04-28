@@ -100,6 +100,10 @@ a real next dispatch. The first attempt does not emit a retry event.
 Batch retries emit only after reroute resolution succeeds. If reroute
 resolution fails, there is no next dispatch and no retry event.
 
+The current emitter modules are `Aerospike.Runtime.PoolCheckout`,
+`Aerospike.Transport.Tcp`, `Aerospike.Cluster.Tender`, and
+`Aerospike.Telemetry.emit_retry_attempt/4`.
+
 ## Runtime Metrics
 
 Runtime metrics are separate from `:telemetry` handlers. They are disabled by

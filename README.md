@@ -206,7 +206,7 @@ make coverage PROFILE=unit
 make validate
 ```
 
-Live integration profiles use the compose stacks in the workspace:
+Live integration profiles use this repository's `docker-compose.yml`:
 
 ```bash
 make deps PROFILE=ce

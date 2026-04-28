@@ -90,7 +90,7 @@ covering the 390-minute US equity session in about 32 seconds.
 
 ## Prerequisites
 
-Run Aerospike locally (from the workspace root):
+Run Aerospike locally from the driver repository root:
 
 ```bash
 docker compose up -d

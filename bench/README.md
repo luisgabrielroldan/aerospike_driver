@@ -1,8 +1,6 @@
 # Benchmark Suite Guide
 
-This benchmark suite ports the useful, current benchmarks from `../aerospike_driver_old/bench/`
-into the current driver repo so performance work can happen against the implementation that is
-actually being built.
+This benchmark suite tracks performance for the current driver implementation.
 
 ## Current Scope
 
