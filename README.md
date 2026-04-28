@@ -10,10 +10,6 @@ supervised cluster runtime, partition-aware routing, pooled TCP/TLS
 connections, and a public API for records, batch commands, scans, queries,
 CDTs, expressions, UDFs, security administration, and transactions.
 
-The library is still pre-1.0, so the README calls out current boundaries rather
-than presenting the package as complete parity with every official Aerospike
-client.
-
 ## Installation
 
 Add `aerospike_driver` to your dependencies:
