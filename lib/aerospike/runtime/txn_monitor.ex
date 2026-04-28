@@ -7,6 +7,7 @@ defmodule Aerospike.Runtime.TxnMonitor do
   alias Aerospike.Command.UnarySupport
   alias Aerospike.Error
   alias Aerospike.Key
+  alias Aerospike.Op.List, as: ListOp
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
@@ -20,7 +21,13 @@ defmodule Aerospike.Runtime.TxnMonitor do
 
   @monitor_set "<ERO~MRT"
   @list_append_op 1
-  @keyds_list_policy %{order: 1, flags: 13}
+  @keyds_list_policy %{
+    order: ListOp.order_ordered(),
+    flags:
+      ListOp.write_add_unique()
+      |> Bitwise.bor(ListOp.write_no_fail())
+      |> Bitwise.bor(ListOp.write_partial())
+  }
 
   @doc false
   @spec monitor_key(Txn.t(), String.t()) :: Key.t()

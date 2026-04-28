@@ -11,13 +11,33 @@ defmodule Aerospike.Error do
   @enforce_keys [:code, :message]
   defexception [:code, :message, node: nil, in_doubt: false]
 
-  @typedoc "Aerospike client or server error."
+  @typedoc """
+  Aerospike client or server error.
+
+  `:code` is the normalized result-code atom used by the public API.
+  `:node` is set when the failing operation can attribute the error to one
+  cluster node. `:in_doubt` is `true` when a write-style operation may have
+  reached the server before the client observed the failure.
+  """
   @type t :: %__MODULE__{
           code: atom(),
           message: String.t(),
           node: String.t() | nil,
           in_doubt: boolean()
         }
+
+  @typedoc "Option accepted when constructing an `Aerospike.Error`."
+  @type option ::
+          {:code, atom()}
+          | {:message, String.t()}
+          | {:node, String.t() | nil}
+          | {:in_doubt, boolean()}
+
+  @typedoc "Keyword options accepted when constructing an `Aerospike.Error`."
+  @type opts :: [option()]
+
+  @typedoc "Input accepted by `exception/1`."
+  @type exception_input :: opts() | map() | String.t() | atom()
 
   @doc """
   Builds an exception struct from keyword, map, string, or atom input.
@@ -26,7 +46,7 @@ defmodule Aerospike.Error do
   `:in_doubt`. String input becomes a client error message, and atom input is
   treated as an Aerospike result code.
   """
-  @spec exception(keyword() | map() | String.t() | atom()) :: t()
+  @spec exception(exception_input()) :: t()
   def exception(message) when is_binary(message) do
     %__MODULE__{code: :client_error, message: message}
   end
@@ -77,7 +97,7 @@ defmodule Aerospike.Error do
       true
 
   """
-  @spec from_result_code(atom(), keyword()) :: t()
+  @spec from_result_code(atom(), opts()) :: t()
   def from_result_code(code, opts \\ []) when is_atom(code) do
     default_msg = ResultCode.message(code)
 
@@ -94,13 +114,9 @@ defmodule Aerospike.Error do
   # signal — retry against a different replica (and trigger a tend) — not a
   # node-health signal.
   #
-  # Today only `:partition_unavailable` (wire code 11) qualifies. The Go
-  # and Java reference clients branch on this exact code: Go's
-  # `multi_command.go` treats `PARTITION_UNAVAILABLE` as a re-route cue
-  # distinct from generic server errors, and Java's `PartitionTracker`
-  # flips a partition's `retry` flag on the same code. If the Aerospike
-  # server grows another "not-mine" result code in the future, widen this
-  # list after auditing the reference clients.
+  # Today only `:partition_unavailable` (wire code 11) qualifies. If the
+  # Aerospike server grows another "not-mine" result code in the future,
+  # widen this list after validating the retry semantics end to end.
   @rebalance_codes [:partition_unavailable]
 
   @doc """

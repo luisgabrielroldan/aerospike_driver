@@ -36,7 +36,12 @@ defmodule Aerospike.Key do
   @enforce_keys [:namespace, :digest]
   defstruct namespace: nil, set: "", user_key: nil, digest: nil
 
-  @typedoc "Record key with namespace, set, optional user key, and digest."
+  @typedoc """
+  Record key with namespace, set, optional user key, and digest.
+
+  The digest is always a 20-byte Aerospike digest. `user_key` is `nil` for
+  digest-only keys created with `from_digest/3`.
+  """
   @type t :: %__MODULE__{
           namespace: String.t(),
           set: String.t(),
@@ -44,7 +49,12 @@ defmodule Aerospike.Key do
           digest: <<_::160>>
         }
 
-  @typedoc "Tuple key form: `{namespace, set, user_key}`."
+  @typedoc """
+  Tuple key form accepted by public command helpers.
+
+  The tuple is expanded with `new/3`, so it supports the same string and int64
+  user-key values and computes the digest locally.
+  """
   @type key_tuple :: {String.t(), String.t(), String.t() | integer()}
 
   @typedoc """

@@ -34,7 +34,14 @@ defmodule Aerospike.PartitionFilter do
           optional(:bval) => integer() | nil
         }
 
-  @typedoc "Partition selection and resume state for scans and queries."
+  @typedoc """
+  Partition selection and resume state for scans and queries.
+
+  `begin` and `count` select the partition range for new work. `digest` is an
+  optional digest resume point. `partitions` carries per-partition resume
+  entries produced during pagination. `done?` and `retry?` are runtime state
+  flags used by the scan/query executor.
+  """
   @type t :: %__MODULE__{
           begin: non_neg_integer(),
           count: pos_integer(),
@@ -54,6 +61,8 @@ defmodule Aerospike.PartitionFilter do
 
   @doc """
   One partition by id.
+
+  Valid ids are `0..4095`.
   """
   @spec by_id(non_neg_integer()) :: t()
   def by_id(partition_id) when is_integer(partition_id) do
@@ -63,6 +72,8 @@ defmodule Aerospike.PartitionFilter do
 
   @doc """
   A contiguous partition range.
+
+  `begin_part + count` must not exceed `partition_count/0`.
   """
   @spec by_range(non_neg_integer(), pos_integer()) :: t()
   def by_range(begin_part, count) when is_integer(begin_part) and is_integer(count) do
@@ -82,6 +93,9 @@ defmodule Aerospike.PartitionFilter do
 
   @doc """
   Resume from a specific record digest.
+
+  The digest must be exactly 20 bytes. This selects the full partition space
+  with an initial digest resume point.
   """
   @spec by_digest(<<_::160>>) :: t()
   def by_digest(digest) when is_binary(digest) do

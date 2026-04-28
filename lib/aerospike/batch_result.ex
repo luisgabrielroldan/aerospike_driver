@@ -21,10 +21,16 @@ defmodule Aerospike.BatchResult do
   @enforce_keys [:key, :status]
   defstruct [:key, :status, :record, :error, in_doubt: false]
 
-  @typedoc "Per-key batch status."
+  @typedoc "Per-key batch status, preserving caller order across partial outcomes."
   @type status :: :ok | :error
 
-  @typedoc "Per-key batch error returned for failed entries."
+  @typedoc """
+  Per-key batch error returned for failed entries.
+
+  Command paths normally return `%Aerospike.Error{}`; atom reasons are kept in
+  the type because lower-level routing failures can surface before an error
+  struct is available.
+  """
   @type error_reason :: Error.t() | atom()
 
   @typedoc """
@@ -45,6 +51,9 @@ defmodule Aerospike.BatchResult do
 
   @doc """
   Converts command-layer batch results into public batch result structs.
+
+  The returned list preserves the command result order, which matches the
+  caller's key or entry order for public batch helpers.
   """
   @spec from_command_results([term()]) :: [t()]
   def from_command_results(results) when is_list(results) do

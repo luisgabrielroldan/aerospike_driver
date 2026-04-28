@@ -23,11 +23,23 @@ defmodule Aerospike.Txn do
   @enforce_keys [:id, :timeout]
   defstruct [:id, :timeout]
 
-  @typedoc "Multi-record transaction handle."
+  @typedoc """
+  Multi-record transaction handle.
+
+  `id` is the signed 64-bit transaction identifier sent to the server.
+  `timeout` is the multi-record transaction timeout in milliseconds, where `0`
+  asks the server to use its configured default duration.
+  """
   @type t :: %__MODULE__{
           id: integer(),
           timeout: non_neg_integer()
         }
+
+  @typedoc "Option accepted by `new/1`."
+  @type option :: {:timeout, non_neg_integer()}
+
+  @typedoc "Keyword options accepted by `new/1`."
+  @type opts :: [option()]
 
   @doc """
   Creates a new transaction handle with a random signed int64 ID.
@@ -45,7 +57,7 @@ defmodule Aerospike.Txn do
     * `:timeout` — transaction timeout in milliseconds. `0` asks the server to
       use its configured multi-record transaction duration.
   """
-  @spec new(keyword()) :: t()
+  @spec new(opts()) :: t()
   def new(opts) when is_list(opts) do
     timeout = Keyword.get(opts, :timeout, 0)
     %__MODULE__{id: random_id(), timeout: timeout}

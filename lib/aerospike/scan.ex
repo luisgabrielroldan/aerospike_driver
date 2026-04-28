@@ -19,6 +19,9 @@ defmodule Aerospike.Scan do
   alias Aerospike.Exp
   alias Aerospike.PartitionFilter
 
+  @typedoc "Bin names accepted by `select/2`."
+  @type bin_names :: [String.t()]
+
   @enforce_keys [:namespace]
   defstruct [
     :namespace,
@@ -40,7 +43,7 @@ defmodule Aerospike.Scan do
   @type t :: %__MODULE__{
           namespace: String.t(),
           set: String.t() | nil,
-          bin_names: [String.t()],
+          bin_names: bin_names(),
           filters: [Exp.t()],
           max_records: pos_integer() | nil,
           records_per_second: non_neg_integer(),
@@ -50,6 +53,9 @@ defmodule Aerospike.Scan do
 
   @doc """
   Starts a namespace-wide scan.
+
+  The namespace must be a non-empty string. Use `new/2` to restrict the scan
+  to a set.
   """
   @spec new(String.t()) :: t()
   def new(namespace) when is_binary(namespace) do
@@ -59,6 +65,8 @@ defmodule Aerospike.Scan do
 
   @doc """
   Starts a scan limited to one set.
+
+  Both namespace and set must be non-empty strings.
   """
   @spec new(String.t(), String.t()) :: t()
   def new(namespace, set) when is_binary(namespace) and is_binary(set) do
@@ -69,8 +77,11 @@ defmodule Aerospike.Scan do
 
   @doc """
   Restricts returned bin names.
+
+  Passing an empty list keeps the server default of returning all bins unless
+  `no_bins/2` or execution opts request otherwise.
   """
-  @spec select(t(), [String.t()]) :: t()
+  @spec select(t(), bin_names()) :: t()
   def select(%__MODULE__{} = scan, bin_names) when is_list(bin_names) do
     validate_bin_names!(bin_names)
     %{scan | bin_names: bin_names}
@@ -89,6 +100,9 @@ defmodule Aerospike.Scan do
 
   @doc """
   Sets the maximum number of records to return.
+
+  Pagination helpers require `max_records` on the scan struct; the returned
+  page may contain fewer records when partition progress completes first.
   """
   @spec max_records(t(), pos_integer()) :: t()
   def max_records(%__MODULE__{} = scan, n) when is_integer(n) and n > 0 do
@@ -97,6 +111,8 @@ defmodule Aerospike.Scan do
 
   @doc """
   Sets the records-per-second throttle.
+
+  `0` disables scan-level throttling.
   """
   @spec records_per_second(t(), non_neg_integer()) :: t()
   def records_per_second(%__MODULE__{} = scan, n) when is_integer(n) and n >= 0 do
@@ -105,6 +121,9 @@ defmodule Aerospike.Scan do
 
   @doc """
   Attaches a partition filter for partial scans or advanced resume.
+
+  The filter is usually built with `Aerospike.PartitionFilter.all/0`,
+  `by_id/1`, `by_range/2`, or restored from a page cursor.
   """
   @spec partition_filter(t(), PartitionFilter.t()) :: t()
   def partition_filter(%__MODULE__{} = scan, %PartitionFilter{} = partition_filter) do
@@ -113,6 +132,8 @@ defmodule Aerospike.Scan do
 
   @doc """
   When `true`, the server omits bin payloads.
+
+  This is useful for count-like scans or key/header-only workflows.
   """
   @spec no_bins(t(), boolean()) :: t()
   def no_bins(%__MODULE__{} = scan, flag) when is_boolean(flag) do

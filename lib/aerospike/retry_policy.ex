@@ -86,10 +86,19 @@ defmodule Aerospike.RetryPolicy do
   @typedoc "Replica selection policy used when retrying read commands."
   @type replica_policy :: :master | :sequence
 
-  @typedoc "High-level outcome bucket used by retry and pool-failure logic."
+  @typedoc """
+  High-level outcome bucket used by retry and pool-failure logic.
+
+  Buckets are intentionally disjoint so the retry driver can decide whether
+  to retry, refresh cluster state, close a socket, or return the error as-is.
+  """
   @type bucket :: :ok | :rebalance | :transport | :routing_refusal | :server_fatal
 
-  @typedoc "Telemetry retry label derived from a command outcome."
+  @typedoc """
+  Telemetry retry label derived from a command outcome.
+
+  `nil` means the outcome is not retryable.
+  """
   @type retry_classification :: :rebalance | :transport | :circuit_open | nil
 
   @typedoc "Complete retry classification for one command outcome."
@@ -119,6 +128,27 @@ defmodule Aerospike.RetryPolicy do
           replica_policy: replica_policy()
         }
 
+  @typedoc """
+  Retry option accepted by `from_opts/1` and `merge/2`.
+
+    * `:max_retries` — retries after the initial attempt. `0` disables
+      retry.
+    * `:sleep_between_retries_ms` — fixed delay between attempts.
+    * `:replica_policy` — `:master` or `:sequence`.
+    * any other atom key — accepted and ignored.
+
+  Unknown keys are ignored so retry options can be merged from broader
+  command/startup option lists.
+  """
+  @type option ::
+          {:max_retries, non_neg_integer()}
+          | {:sleep_between_retries_ms, non_neg_integer()}
+          | {:replica_policy, replica_policy()}
+          | {atom(), term()}
+
+  @typedoc "Keyword list of retry options."
+  @type options :: [option()]
+
   @doc "Returns the default retry policy. Used by the Tender at init."
   @spec defaults() :: t()
   def defaults do
@@ -138,7 +168,7 @@ defmodule Aerospike.RetryPolicy do
   so the retry policy can live alongside future policy knobs without a
   config migration.
   """
-  @spec from_opts(keyword()) :: t()
+  @spec from_opts(options()) :: t()
   def from_opts(opts) when is_list(opts) do
     base = defaults()
 
@@ -193,7 +223,7 @@ defmodule Aerospike.RetryPolicy do
   Overlays per-command `opts` on top of `base`. Only the three retry
   fields are recognised; other keys are ignored.
   """
-  @spec merge(t(), keyword()) :: t()
+  @spec merge(t(), options()) :: t()
   def merge(%{} = base, opts) when is_list(opts) do
     %{
       max_retries: fetch_non_neg_int(opts, :max_retries, base.max_retries),

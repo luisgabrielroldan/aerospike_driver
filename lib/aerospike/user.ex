@@ -8,10 +8,21 @@ defmodule Aerospike.User do
 
   defstruct [:name, roles: [], read_info: [], write_info: [], connections_in_use: 0]
 
-  @typedoc "Opaque ordered statistics vector returned by the server."
+  @typedoc """
+  Opaque ordered statistics vector returned by the server.
+
+  The client preserves the server order rather than naming individual counters
+  because available counters vary by server version and configuration.
+  """
   @type info_counters :: [non_neg_integer()]
 
-  @typedoc "Security user metadata returned by user queries."
+  @typedoc """
+  Security user metadata returned by user queries.
+
+  `roles` contains role names assigned to the user. `read_info`,
+  `write_info`, and `connections_in_use` are server-reported security
+  statistics when present in the info response.
+  """
   @type t :: %__MODULE__{
           name: String.t(),
           roles: [String.t()],

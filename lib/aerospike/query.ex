@@ -25,6 +25,9 @@ defmodule Aerospike.Query do
   alias Aerospike.Filter
   alias Aerospike.PartitionFilter
 
+  @typedoc "Bin names accepted by `select/2`."
+  @type bin_names :: [String.t()]
+
   @enforce_keys [:namespace, :set]
   defstruct [
     :namespace,
@@ -48,7 +51,7 @@ defmodule Aerospike.Query do
           namespace: String.t(),
           set: String.t(),
           index_filter: Filter.t() | nil,
-          bin_names: [String.t()],
+          bin_names: bin_names(),
           filters: [Exp.t()],
           max_records: pos_integer() | nil,
           records_per_second: non_neg_integer(),
@@ -58,6 +61,8 @@ defmodule Aerospike.Query do
 
   @doc """
   Starts a query for a namespace and set.
+
+  Both namespace and set must be non-empty strings.
   """
   @spec new(String.t(), String.t()) :: t()
   def new(namespace, set) when is_binary(namespace) and is_binary(set) do
@@ -68,6 +73,9 @@ defmodule Aerospike.Query do
 
   @doc """
   Sets the secondary-index predicate.
+
+  A query can carry one secondary-index predicate. Calling `where/2` again
+  replaces the prior predicate.
   """
   @spec where(t(), Filter.t()) :: t()
   def where(%__MODULE__{} = query, %Filter{} = index_filter) do
@@ -76,8 +84,11 @@ defmodule Aerospike.Query do
 
   @doc """
   Restricts returned bin names.
+
+  Passing an empty list keeps the server default of returning all bins unless
+  `no_bins/2` or execution opts request otherwise.
   """
-  @spec select(t(), [String.t()]) :: t()
+  @spec select(t(), bin_names()) :: t()
   def select(%__MODULE__{} = query, bin_names) when is_list(bin_names) do
     validate_bin_names!(bin_names)
     %{query | bin_names: bin_names}
@@ -96,6 +107,10 @@ defmodule Aerospike.Query do
 
   @doc """
   Sets the maximum number of records to return.
+
+  `query_all/3` and `query_page/3` require this value on the query struct.
+  The final result or page may contain fewer records when partition progress
+  completes first.
   """
   @spec max_records(t(), pos_integer()) :: t()
   def max_records(%__MODULE__{} = query, n) when is_integer(n) and n > 0 do
@@ -104,6 +119,8 @@ defmodule Aerospike.Query do
 
   @doc """
   Sets the records-per-second throttle.
+
+  `0` disables query-level throttling.
   """
   @spec records_per_second(t(), non_neg_integer()) :: t()
   def records_per_second(%__MODULE__{} = query, n) when is_integer(n) and n >= 0 do
@@ -112,6 +129,9 @@ defmodule Aerospike.Query do
 
   @doc """
   Attaches a partition filter for partial queries or advanced resume.
+
+  The filter is usually built with `Aerospike.PartitionFilter.all/0`,
+  `by_id/1`, `by_range/2`, or restored from a page cursor.
   """
   @spec partition_filter(t(), PartitionFilter.t()) :: t()
   def partition_filter(%__MODULE__{} = query, %PartitionFilter{} = partition_filter) do
@@ -120,6 +140,8 @@ defmodule Aerospike.Query do
 
   @doc """
   When `true`, the server omits bin payloads.
+
+  This is useful for count-like queries or key/header-only workflows.
   """
   @spec no_bins(t(), boolean()) :: t()
   def no_bins(%__MODULE__{} = query, flag) when is_boolean(flag) do

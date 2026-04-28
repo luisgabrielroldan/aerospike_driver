@@ -14,7 +14,12 @@ defmodule Aerospike.Role do
   @typedoc "Maximum operations per second for a role. `0` means unlimited."
   @type quota :: non_neg_integer()
 
-  @typedoc "Security role metadata returned by role queries."
+  @typedoc """
+  Security role metadata returned by role queries.
+
+  Quotas are operations-per-second limits reported by the server. A quota of
+  `0` means unlimited.
+  """
   @type t :: %__MODULE__{
           name: String.t(),
           privileges: [Privilege.t()],

@@ -24,6 +24,15 @@ defmodule Aerospike.Op.Exp do
   """
   @opaque t :: Aerospike.Op.t()
 
+  @typedoc """
+  Options accepted by expression operate builders.
+
+  Supported key:
+
+  * `:flags` - raw server expression read/write flags integer. Defaults to `0`.
+  """
+  @type opts :: [flags: non_neg_integer()]
+
   @doc """
   Reads the result of a server-side expression into `bin_name`.
 
@@ -33,7 +42,7 @@ defmodule Aerospike.Op.Exp do
 
       Aerospike.Op.Exp.read("projected", Aerospike.Exp.int_bin("count"))
   """
-  @spec read(String.t() | atom(), Exp.t(), keyword()) :: t()
+  @spec read(String.t() | atom(), Exp.t(), opts()) :: t()
   def read(bin_name, %Exp{} = expression, opts \\ []) do
     case Operation.exp_read(
            normalize_bin_name(bin_name),
@@ -55,7 +64,7 @@ defmodule Aerospike.Op.Exp do
 
       Aerospike.Op.Exp.write("computed", Aerospike.Exp.int(99))
   """
-  @spec write(String.t() | atom(), Exp.t(), keyword()) :: t()
+  @spec write(String.t() | atom(), Exp.t(), opts()) :: t()
   def write(bin_name, %Exp{} = expression, opts \\ []) do
     case Operation.exp_modify(
            normalize_bin_name(bin_name),

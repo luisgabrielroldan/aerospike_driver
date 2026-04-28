@@ -182,35 +182,93 @@ defmodule Aerospike do
   @typedoc "Security privilege metadata used by role administration APIs."
   @type privilege :: Privilege.t()
 
-  @typedoc "Non-negative timeout value in milliseconds."
+  @typedoc """
+  Non-negative timeout value in milliseconds.
+
+  `:timeout` is the total client-side budget for a command. `:socket_timeout`
+  is the per-attempt idle socket deadline; `0` asks the command path to use the
+  remaining total budget.
+  """
   @type timeout_ms :: non_neg_integer()
 
-  @typedoc "Record TTL accepted by write commands."
+  @typedoc """
+  Record TTL accepted by write commands.
+
+    * non-negative integer - explicit TTL in seconds
+    * `:default` - use the namespace default TTL
+    * `:never_expire` - ask the server to keep the record indefinitely
+    * `:dont_update` - preserve the existing record TTL
+  """
   @type ttl :: non_neg_integer() | :default | :never_expire | :dont_update
 
-  @typedoc "AP namespace read consistency."
+  @typedoc """
+  AP namespace read consistency.
+
+  `:one` reads from one available replica. `:all` asks the server to consult
+  all relevant replicas for the read.
+  """
   @type read_mode_ap :: :one | :all
 
-  @typedoc "Strong-consistency namespace read consistency."
+  @typedoc """
+  Strong-consistency namespace read consistency.
+
+  The default is `:session`. `:linearize` requests linearized reads.
+  `:allow_replica` and `:allow_unavailable` relax consistency for availability
+  when the server namespace configuration allows it.
+  """
   @type read_mode_sc :: :session | :linearize | :allow_replica | :allow_unavailable
 
-  @typedoc "Record existence behavior for write commands."
+  @typedoc """
+  Record existence behavior for write commands.
+
+    * `:update` - create or update bins (default)
+    * `:update_only` - update an existing record only
+    * `:create_or_replace` - create a new record or replace the existing record
+    * `:replace_only` - replace an existing record only
+    * `:create_only` - create only when the key is absent
+  """
   @type record_exists_action ::
           :update | :update_only | :create_or_replace | :replace_only | :create_only
 
-  @typedoc "Generation check behavior for write commands."
+  @typedoc """
+  Generation check behavior for write commands.
+
+  `:none` disables generation checks. `:expect_equal` requires the server
+  record generation to equal `:generation`. `:expect_gt` requires it to be
+  greater than `:generation`. When `:generation` is positive and
+  `:generation_policy` is omitted, the driver defaults to `:expect_equal`.
+  """
   @type generation_policy :: :none | :expect_equal | :expect_gt
 
-  @typedoc "Commit acknowledgement level for write commands."
+  @typedoc """
+  Commit acknowledgement level for write commands.
+
+  `:all` waits for the server's configured replica commit level. `:master`
+  accepts acknowledgement from the master partition owner.
+  """
   @type commit_level :: :all | :master
 
-  @typedoc "Retry option accepted by single-record, scan, and query command families."
+  @typedoc """
+  Retry option accepted by single-record, scan, and query command families.
+
+    * `:max_retries` - retries after the first attempt
+    * `:sleep_between_retries_ms` - fixed delay between retry attempts
+    * `:replica_policy` - read retry routing policy, `:master` or `:sequence`
+
+  Retry defaults are configured at cluster start and can be overridden per
+  command where this type appears.
+  """
   @type retry_opt ::
           {:max_retries, non_neg_integer()}
           | {:sleep_between_retries_ms, non_neg_integer()}
           | {:replica_policy, RetryPolicy.replica_policy()}
 
-  @typedoc "Read option accepted by `get/4`, `get_header/3`, and `exists/3`."
+  @typedoc """
+  Read option accepted by `get/4`, `get_header/3`, and `exists/3`.
+
+  Read helpers accept timeout/retry opts, consistency opts, `:send_key`,
+  `:use_compression`, and a server-side expression `:filter`.
+  """
   @type read_opt ::
           {:timeout, timeout_ms()}
           | {:socket_timeout, timeout_ms()}
@@ -225,7 +283,14 @@ defmodule Aerospike do
   @typedoc "Keyword options accepted by read helpers."
   @type read_opts :: [read_opt()]
 
-  @typedoc "Write option accepted by single-record write, delete, UDF, and operate helpers."
+  @typedoc """
+  Write option accepted by single-record write, delete, UDF, and operate helpers.
+
+  Write helpers accept timeout/retry opts, record TTL and generation policy,
+  existence policy, commit level, durable delete, `:respond_per_op`, `:send_key`,
+  read-touch metadata opts used by mixed operations, per-command compression,
+  a server-side expression `:filter`, and an optional transaction handle.
+  """
   @type write_opt ::
           {:timeout, timeout_ms()}
           | {:socket_timeout, timeout_ms()}
@@ -248,7 +313,14 @@ defmodule Aerospike do
   @typedoc "Keyword options accepted by single-record write, delete, UDF, and operate helpers."
   @type write_opts :: [write_opt()]
 
-  @typedoc "Parent batch dispatch option."
+  @typedoc """
+  Parent batch dispatch option.
+
+  Parent options describe the batch request as a whole: deadline, node
+  concurrency, partial-result handling, response shape, and inline execution
+  hints. Per-record read/write policy belongs on `batch_record_read_opt/0` and
+  `batch_record_write_opt/0`.
+  """
   @type batch_parent_opt ::
           {:timeout, timeout_ms()}
           | {:socket_timeout, timeout_ms()}
@@ -261,7 +333,12 @@ defmodule Aerospike do
   @typedoc "Parent batch options accepted by `batch_operate/3`."
   @type batch_parent_opts :: [batch_parent_opt()]
 
-  @typedoc "Batch read option accepted by per-entry batch reads."
+  @typedoc """
+  Batch read option accepted by per-entry batch reads.
+
+  These options are encoded with one batch read entry. Parent dispatch options
+  are only accepted by homogeneous batch read helpers and `batch_operate/3`.
+  """
   @type batch_record_read_opt ::
           {:filter, Exp.t() | nil}
           | {:read_mode_ap, read_mode_ap()}
@@ -277,7 +354,13 @@ defmodule Aerospike do
   @typedoc "Keyword options accepted by batch read helpers."
   @type batch_read_opts :: [batch_read_opt()]
 
-  @typedoc "Batch write option accepted by per-entry batch writes."
+  @typedoc """
+  Batch write option accepted by per-entry batch writes.
+
+  These options are encoded with one batch write/delete/UDF entry. Parent
+  dispatch options are only accepted by homogeneous batch write helpers and
+  `batch_operate/3`.
+  """
   @type batch_record_write_opt ::
           {:ttl, ttl()}
           | {:generation, non_neg_integer()}
@@ -304,7 +387,14 @@ defmodule Aerospike do
   @typedoc "Node-targeting option accepted by scan/query helpers that support single-node execution."
   @type node_opt :: {:node, String.t()}
 
-  @typedoc "Runtime option accepted by all scan and query helpers."
+  @typedoc """
+  Runtime option accepted by all scan and query helpers.
+
+  These options tune client runtime behavior and server scan/query fields:
+  command deadlines, retries, task timeout, pool checkout timeout, fan-out
+  concurrency, throttling, bin-data inclusion, expected duration, task id, and
+  cursor resume state.
+  """
   @type scan_query_runtime_opt ::
           {:timeout, timeout_ms()}
           | {:socket_timeout, timeout_ms()}
@@ -318,25 +408,46 @@ defmodule Aerospike do
           | {:task_id, pos_integer()}
           | {:cursor, Aerospike.Cursor.t()}
 
-  @typedoc "Runtime option accepted by scan/query helpers that may target one node."
+  @typedoc """
+  Runtime option accepted by scan/query helpers that may target one node.
+
+  `:node` must be an active node name returned by `node_names/1` or `nodes/1`.
+  Final aggregate reduction does not accept `:node` because it must consume all
+  server partials required to produce one local result.
+  """
   @type scan_query_opt :: scan_query_runtime_opt() | node_opt()
 
   @typedoc "Keyword options accepted by scan and query helpers."
   @type scan_query_opts :: [scan_query_opt()]
 
-  @typedoc "Additional local-source option for finalized aggregate queries."
+  @typedoc """
+  Additional local-source option for finalized aggregate queries.
+
+  Exactly one of these is required by `query_aggregate_result/6`: inline Lua
+  source via `:source`, or a readable local file path via `:source_path`.
+  """
   @type aggregate_result_opt :: {:source, String.t()} | {:source_path, Path.t()}
 
   @typedoc "Keyword options accepted by `query_aggregate_result/6` and `query_aggregate_result!/6`."
   @type aggregate_result_opts :: [scan_query_runtime_opt() | aggregate_result_opt()]
 
-  @typedoc "Option accepted by one-node info/admin helpers."
+  @typedoc """
+  Option accepted by one-node info/admin helpers.
+
+  `:pool_checkout_timeout` bounds checkout from the selected node pool before
+  the one-node info/admin command is sent.
+  """
   @type admin_opt :: {:pool_checkout_timeout, timeout_ms()}
 
   @typedoc "Keyword options accepted by one-node info/admin helpers."
   @type admin_opts :: [admin_opt()]
 
-  @typedoc "Option accepted by security-admin helpers."
+  @typedoc """
+  Option accepted by security-admin helpers.
+
+  `:timeout` bounds the admin protocol operation. `:pool_checkout_timeout`
+  bounds checkout from the selected node pool before the command is sent.
+  """
   @type security_admin_opt :: {:timeout, timeout_ms()} | {:pool_checkout_timeout, timeout_ms()}
 
   @typedoc "Keyword options accepted by security-admin helpers."
@@ -348,18 +459,31 @@ defmodule Aerospike do
   @typedoc "Secondary-index particle/source type."
   @type index_type :: :numeric | :string | :geo2dsphere
 
-  @typedoc "Option accepted by `create_index/4`."
+  @typedoc """
+  Option accepted by `create_index/4`.
+
+  `:bin`, `:name`, and `:type` are required. `:collection` creates a collection
+  index over list values, map keys, or map values. `:ctx` targets a nested CDT
+  path built with `Aerospike.Ctx`.
+  """
   @type create_index_opt ::
           {:bin, String.t()}
           | {:name, String.t()}
           | {:type, index_type()}
           | {:collection, index_collection()}
+          | {:ctx, [Aerospike.Ctx.step()]}
           | admin_opt()
 
   @typedoc "Keyword options accepted by `create_index/4`."
   @type create_index_opts :: [create_index_opt()]
 
-  @typedoc "Option accepted by `create_expression_index/5`."
+  @typedoc """
+  Option accepted by `create_expression_index/5`.
+
+  `:name` and `:type` are required. Expression indexes use the provided
+  `%Aerospike.Exp{}` as their source and therefore do not accept `:bin` or
+  nested CDT `:ctx`.
+  """
   @type create_expression_index_opt ::
           {:name, String.t()}
           | {:type, index_type()}
@@ -369,7 +493,12 @@ defmodule Aerospike do
   @typedoc "Keyword options accepted by `create_expression_index/5`."
   @type create_expression_index_opts :: [create_expression_index_opt()]
 
-  @typedoc "Option accepted by `truncate/3` and `truncate/4`."
+  @typedoc """
+  Option accepted by `truncate/3` and `truncate/4`.
+
+  `:before` limits truncation to records last updated before the given
+  timestamp. `:pool_checkout_timeout` bounds checkout for the admin request.
+  """
   @type truncate_opt :: {:before, DateTime.t()} | admin_opt()
 
   @typedoc "Keyword options accepted by truncate helpers."
@@ -381,7 +510,12 @@ defmodule Aerospike do
   @typedoc "Keyword options accepted by `enable_metrics/2`."
   @type metrics_opts :: [metrics_opt()]
 
-  @typedoc "Option accepted by `warm_up/2`."
+  @typedoc """
+  Option accepted by `warm_up/2`.
+
+  `:count` is the number of worker checkout probes per active node. `0` means
+  up to the configured pool size. `:pool_checkout_timeout` bounds each probe.
+  """
   @type warm_up_opt :: {:count, non_neg_integer()} | {:pool_checkout_timeout, timeout_ms()}
 
   @typedoc "Keyword options accepted by `warm_up/2`."
@@ -1195,6 +1329,7 @@ defmodule Aerospike do
   Optional options:
 
     * `:collection` — one of `:list`, `:mapkeys`, or `:mapvalues`.
+    * `:ctx` — non-empty nested CDT path built with `Aerospike.Ctx`.
     * `:pool_checkout_timeout` — non-negative pool checkout timeout in
       milliseconds.
 

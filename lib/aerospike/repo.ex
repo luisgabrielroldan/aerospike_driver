@@ -35,7 +35,24 @@ defmodule Aerospike.Repo do
   mapping, changeset validation, query translation, or object reflection.
   """
 
+  @typedoc "Application-owned Repo module generated with `use Aerospike.Repo`."
   @type t :: module()
+
+  @typedoc "Option accepted by `use Aerospike.Repo`."
+  @type option ::
+          {:otp_app, atom()}
+          | {:adapter, module()}
+          | {:name, atom()}
+
+  @typedoc """
+  Options accepted by `use Aerospike.Repo`.
+
+  `:otp_app` is required and names the application environment used by
+  `config/0`. `:adapter` defaults to `Aerospike` and is mainly useful for
+  tests. `:name` defaults to the generated Repo module and becomes the cluster
+  identity injected into delegated calls.
+  """
+  @type opts :: [option()]
 
   @repo_delegates [
     {:get, [:key, {:bins, :all}, {:opts, []}]},
@@ -133,34 +150,78 @@ defmodule Aerospike.Repo do
     admin_wrappers = wrapper_defs(adapter, @admin_delegates)
 
     quote do
+      @doc """
+      Returns the cluster name injected into generated Repo calls.
+      """
+      @spec conn() :: atom()
       def conn, do: unquote(conn)
 
+      @doc """
+      Returns the runtime configuration for this Repo.
+
+      Configuration is read from the `:otp_app` passed to `use Aerospike.Repo`
+      under the generated Repo module key. Runtime options passed to
+      `child_spec/1` or `start_link/1` are merged over these values. The
+      configured cluster `:name` defaults to `conn/0`.
+      """
+      @spec config() :: keyword()
       def config do
         unquote(otp_app)
         |> Application.get_env(__MODULE__, [])
         |> Keyword.put_new(:name, conn())
       end
 
+      @doc """
+      Builds a child spec for supervising this Repo's Aerospike cluster.
+
+      `opts` are cluster supervisor options merged over `config/0`.
+      """
+      @spec child_spec(keyword()) :: Supervisor.child_spec()
       def child_spec(opts) when is_list(opts) do
         unquote(adapter).child_spec(Keyword.merge(config(), opts))
       end
 
+      @doc """
+      Starts this Repo's Aerospike cluster.
+
+      `opts` are cluster supervisor options merged over `config/0`.
+      """
+      @spec start_link(keyword()) :: Supervisor.on_start()
       def start_link(opts) when is_list(opts) do
         unquote(adapter).start_link(Keyword.merge(config(), opts))
       end
 
+      @doc """
+      Stops this Repo's Aerospike cluster using the adapter default timeout.
+      """
+      @spec close() :: :ok
       def close do
         unquote(adapter).close(conn())
       end
 
+      @doc """
+      Stops this Repo's Aerospike cluster with an explicit timeout in milliseconds.
+      """
+      @spec close(non_neg_integer()) :: :ok
       def close(timeout) when is_integer(timeout) and timeout >= 0 do
         unquote(adapter).close(conn(), timeout)
       end
 
+      @doc """
+      Builds an `Aerospike.Key` for this Repo.
+
+      This is a convenience delegate to `Aerospike.key/3`; it does not attach
+      the Repo name to the key.
+      """
+      @spec key(String.t(), String.t(), String.t() | integer()) :: Aerospike.Key.t()
       def key(namespace, set, user_key) do
         unquote(adapter).key(namespace, set, user_key)
       end
 
+      @doc """
+      Builds an `Aerospike.Key` from an existing 20-byte digest.
+      """
+      @spec key_digest(String.t(), String.t(), <<_::160>>) :: Aerospike.Key.t()
       def key_digest(namespace, set, digest) do
         unquote(adapter).key_digest(namespace, set, digest)
       end
@@ -186,8 +247,15 @@ defmodule Aerospike.Repo do
   defp build_wrapper(adapter, fun_name, args) do
     arg_defs = Enum.map(args, &arg_definition/1)
     arg_values = Enum.map(args, &arg_value/1)
+    spec_args = Enum.map(args, fn _arg -> quote(do: term()) end)
+    facade_arity = length(args) + 1
+
+    doc =
+      "Delegates to the configured adapter's `#{fun_name}/#{facade_arity}` with `conn/0` as the first argument."
 
     quote do
+      @doc unquote(doc)
+      @spec unquote(fun_name)(unquote_splicing(spec_args)) :: term()
       def unquote(fun_name)(unquote_splicing(arg_defs)) do
         unquote(adapter).unquote(fun_name)(conn(), unquote_splicing(arg_values))
       end

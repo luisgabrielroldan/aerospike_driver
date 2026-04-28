@@ -17,21 +17,35 @@ defmodule Aerospike.Op.BitTest do
     assert payload(op) == expected_payload
   end
 
+  test "write flag and overflow helpers expose server policy values" do
+    assert Bit.write_default() == 0
+    assert Bit.write_create_only() == 1
+    assert Bit.write_update_only() == 2
+    assert Bit.write_no_fail() == 4
+    assert Bit.write_partial() == 8
+
+    assert Bit.overflow_fail() == 0
+    assert Bit.overflow_saturate() == 2
+    assert Bit.overflow_wrap() == 4
+  end
+
   test "modify builders encode reference op codes and payloads" do
     cases = [
       {Bit.resize("bits", 16), [0, 16, 0, 0]},
-      {Bit.resize("bits", 16, 4, flags: 2), [0, 16, 2, 4]},
-      {Bit.insert("bits", 1, <<0x0F>>, flags: 2), [1, 1, <<4, 0x0F>>, 2]},
+      {Bit.resize("bits", 16, 4, flags: Bit.write_update_only()), [0, 16, 2, 4]},
+      {Bit.insert("bits", 1, <<0x0F>>, flags: Bit.write_update_only()), [1, 1, <<4, 0x0F>>, 2]},
       {Bit.remove("bits", 1, 2, flags: 3), [2, 1, 2, 3]},
-      {Bit.set("bits", 0, 8, <<0xF0>>, flags: 4), [3, 0, 8, <<4, 0xF0>>, 4]},
+      {Bit.set("bits", 0, 8, <<0xF0>>, flags: Bit.write_no_fail()), [3, 0, 8, <<4, 0xF0>>, 4]},
       {Bit.bw_or("bits", 0, 8, <<0x0F>>, flags: 5), [4, 0, 8, <<4, 0x0F>>, 5]},
       {Bit.bw_xor("bits", 0, 8, <<0xFF>>, flags: 6), [5, 0, 8, <<4, 0xFF>>, 6]},
       {Bit.bw_and("bits", 0, 8, <<0xF0>>, flags: 7), [6, 0, 8, <<4, 0xF0>>, 7]},
-      {Bit.bw_not("bits", 0, 8, flags: 8), [7, 0, 8, 8]},
+      {Bit.bw_not("bits", 0, 8, flags: Bit.write_partial()), [7, 0, 8, 8]},
       {Bit.lshift("bits", 0, 8, 2, flags: 9), [8, 0, 8, 2, 9]},
       {Bit.rshift("bits", 0, 8, 3, flags: 10), [9, 0, 8, 3, 10]},
-      {Bit.add("bits", 0, 8, 1, flags: 11, overflow_action: 2), [10, 0, 8, 1, 11, 2]},
-      {Bit.subtract("bits", 0, 8, 1, flags: 12, overflow_action: 4), [11, 0, 8, 1, 12, 4]},
+      {Bit.add("bits", 0, 8, 1, flags: 11, overflow_action: Bit.overflow_saturate()),
+       [10, 0, 8, 1, 11, 2]},
+      {Bit.subtract("bits", 0, 8, 1, flags: 12, overflow_action: Bit.overflow_wrap()),
+       [11, 0, 8, 1, 12, 4]},
       {Bit.set_int("bits", 0, 8, 42, flags: 13), [12, 0, 8, 42, 13]}
     ]
 
@@ -43,13 +57,18 @@ defmodule Aerospike.Op.BitTest do
   test "signed arithmetic combines the signed flag with overflow_action" do
     assert payload(Bit.add("bits", 0, 8, 1, signed: true)) == [10, 0, 8, 1, 0, 1]
 
-    assert payload(Bit.subtract("bits", 0, 8, 1, signed: true, overflow_action: 4)) == [
+    assert payload(
+             Bit.subtract("bits", 0, 8, 1,
+               signed: true,
+               overflow_action: Bit.overflow_wrap()
+             )
+           ) == [
              11,
              0,
              8,
              1,
              0,
-             bor(4, 1)
+             bor(Bit.overflow_wrap(), 1)
            ]
   end
 

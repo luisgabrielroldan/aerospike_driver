@@ -9,7 +9,12 @@ defmodule Aerospike.Privilege do
   @enforce_keys [:code]
   defstruct [:code, :raw_code, :namespace, :set]
 
-  @typedoc "Known Aerospike privilege identifiers."
+  @typedoc """
+  Known Aerospike privilege identifiers.
+
+  `:unknown` preserves privilege entries whose numeric code is not recognized
+  by this client version.
+  """
   @type code ::
           :user_admin
           | :sys_admin
@@ -26,7 +31,12 @@ defmodule Aerospike.Privilege do
           | :write_masked
           | :unknown
 
-  @typedoc "Privilege metadata returned by role queries."
+  @typedoc """
+  Privilege metadata returned by role queries.
+
+  Global privileges use `nil` for `namespace` and `set`. Namespace-scoped
+  privileges set `namespace` and leave `set` as `nil`.
+  """
   @type t :: %__MODULE__{
           code: code(),
           raw_code: non_neg_integer() | nil,

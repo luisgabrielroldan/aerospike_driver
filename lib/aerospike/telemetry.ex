@@ -100,6 +100,23 @@ defmodule Aerospike.Telemetry do
   @retry_attempt [:aerospike, :retry, :attempt]
   @span_suffixes [:start, :stop, :exception]
 
+  @typedoc "Telemetry event name used with `:telemetry.attach/4`."
+  @type event_name :: [atom()]
+
+  @typedoc """
+  Telemetry span prefix used with `:telemetry.span/3`.
+
+  Concrete span events are produced by appending `:start`, `:stop`, or
+  `:exception` to this prefix.
+  """
+  @type span_prefix :: [atom()]
+
+  @typedoc "Concrete telemetry span event name after a suffix has been appended."
+  @type span_event_name :: [atom()]
+
+  @typedoc "Retry classification reported by `emit_retry_attempt/4`."
+  @type retry_classification :: :rebalance | :transport | :circuit_open | atom()
+
   @doc """
   Event prefix for the pool-checkout span.
 
@@ -107,7 +124,7 @@ defmodule Aerospike.Telemetry do
   dispatches the concrete `:start`, `:stop`, and `:exception` names
   directly so it can keep the same metadata on every suffix.
   """
-  @spec pool_checkout_span() :: [:aerospike | :pool | :checkout, ...]
+  @spec pool_checkout_span() :: span_prefix()
   def pool_checkout_span, do: @pool_checkout_span
 
   @doc """
@@ -117,7 +134,7 @@ defmodule Aerospike.Telemetry do
   iterations emit a new span per attempt; `:attempt` in metadata
   distinguishes them.
   """
-  @spec command_send_span() :: [:aerospike | :command | :send, ...]
+  @spec command_send_span() :: span_prefix()
   def command_send_span, do: @command_send_span
 
   @doc """
@@ -126,7 +143,7 @@ defmodule Aerospike.Telemetry do
   Paired with the command-send span. Measurements include `:bytes`
   on `:stop` so handlers can track payload size alongside latency.
   """
-  @spec command_recv_span() :: [:aerospike | :command | :recv, ...]
+  @spec command_recv_span() :: span_prefix()
   def command_recv_span, do: @command_recv_span
 
   @doc """
@@ -136,7 +153,7 @@ defmodule Aerospike.Telemetry do
   Metadata `:commands` carries the list of info keys, or `[:login]`
   for auth handshakes.
   """
-  @spec info_rpc_span() :: [:aerospike | :info | :rpc, ...]
+  @spec info_rpc_span() :: span_prefix()
   def info_rpc_span, do: @info_rpc_span
 
   @doc """
@@ -145,7 +162,7 @@ defmodule Aerospike.Telemetry do
   Wraps one tend-cycle invocation. The partition map refresh is a nested span;
   both fire during a normal cycle.
   """
-  @spec tend_cycle_span() :: [:aerospike | :tender | :tend_cycle, ...]
+  @spec tend_cycle_span() :: span_prefix()
   def tend_cycle_span, do: @tend_cycle_span
 
   @doc """
@@ -155,8 +172,7 @@ defmodule Aerospike.Telemetry do
   operators can separate fetching partition-generation from decoding
   the full replicas payload.
   """
-  @spec partition_map_refresh_span() ::
-          [:aerospike | :tender | :partition_map_refresh, ...]
+  @spec partition_map_refresh_span() :: span_prefix()
   def partition_map_refresh_span, do: @partition_map_refresh_span
 
   @doc """
@@ -165,7 +181,7 @@ defmodule Aerospike.Telemetry do
   Instant event dispatched via `:telemetry.execute/3`. Metadata carries
   `:from`, `:to`, `:reason`, and `:node_name`.
   """
-  @spec node_transition() :: [:aerospike | :node | :transition, ...]
+  @spec node_transition() :: event_name()
   def node_transition, do: @node_transition
 
   @doc """
@@ -174,7 +190,7 @@ defmodule Aerospike.Telemetry do
   Instant event dispatched via `:telemetry.execute/3`. Metadata carries
   the retry classification, attempt index, and node name.
   """
-  @spec retry_attempt() :: [:aerospike | :retry | :attempt, ...]
+  @spec retry_attempt() :: event_name()
   def retry_attempt, do: @retry_attempt
 
   @doc """
@@ -182,8 +198,25 @@ defmodule Aerospike.Telemetry do
 
   Unary and batch executors share this helper so the retry metadata stays
   aligned across execution paths.
+
+  Measurements:
+
+    * `:remaining_budget_ms` — non-negative retry budget remaining after this
+      attempt decision
+
+  Metadata:
+
+    * `:classification` — retry reason, usually `:rebalance`, `:transport`, or
+      `:circuit_open`
+    * `:attempt` — zero-based attempt index
+    * `:node_name` — node associated with the retry, or `nil`
   """
-  @spec emit_retry_attempt(String.t() | nil, non_neg_integer(), atom(), integer()) :: :ok
+  @spec emit_retry_attempt(
+          String.t() | nil,
+          non_neg_integer(),
+          retry_classification(),
+          integer()
+        ) :: :ok
   def emit_retry_attempt(node_name, attempt, classification, remaining_budget_ms)
       when is_integer(attempt) and attempt >= 0 and is_integer(remaining_budget_ms) do
     :telemetry.execute(
@@ -204,7 +237,7 @@ defmodule Aerospike.Telemetry do
   `:start`/`:stop`/`:exception` event names without hard-coding them in
   multiple places.
   """
-  @spec span_prefixes() :: [[atom()]]
+  @spec span_prefixes() :: [span_prefix()]
   def span_prefixes do
     [
       pool_checkout_span(),
@@ -219,7 +252,7 @@ defmodule Aerospike.Telemetry do
   @doc """
   Returns every instant-event name in the supported telemetry taxonomy.
   """
-  @spec instant_event_names() :: [[atom()]]
+  @spec instant_event_names() :: [event_name()]
   def instant_event_names do
     [
       node_transition(),
@@ -233,7 +266,7 @@ defmodule Aerospike.Telemetry do
   Span prefixes are expanded to the standard `:start`, `:stop`, and
   `:exception` event names, then instant events are appended.
   """
-  @spec handler_events() :: [[atom()]]
+  @spec handler_events() :: [span_event_name() | event_name()]
   def handler_events do
     Enum.flat_map(span_prefixes(), &span_event_names/1) ++ instant_event_names()
   end

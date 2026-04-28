@@ -14,6 +14,58 @@ defmodule Aerospike.Op.List do
   """
   @opaque t :: Aerospike.Op.t()
 
+  @typedoc """
+  List order attribute integer.
+
+  Use `order_unordered/0` or `order_ordered/0` to build this value. Some
+  server operations also accept this value OR-ed with persist-index flags.
+  """
+  @type order :: non_neg_integer()
+
+  @typedoc """
+  List write policy flags integer.
+
+  Use `write_default/0`, `write_add_unique/0`, `write_insert_bounded/0`,
+  `write_no_fail/0`, and `write_partial/0`, combined with `Bitwise.bor/2`
+  when more than one flag is needed.
+  """
+  @type write_flags :: non_neg_integer()
+
+  @typedoc """
+  List selector return type integer.
+
+  Use the `return_*` helpers in this module. `return_inverted/0` may be OR-ed
+  into another return type to invert a selector.
+  """
+  @type return_type :: non_neg_integer()
+
+  @typedoc """
+  List write policy map accepted in `opts[:policy]`.
+
+  Append, insert, and set operations expect both `:order` and `:flags`;
+  increment only reads `:flags`.
+  """
+  @type policy :: %{optional(:order) => order(), required(:flags) => write_flags()}
+
+  @typedoc """
+  Common list operation options.
+
+  Supported keys:
+
+  * `:ctx` - nested CDT context path from `Aerospike.Ctx`.
+  * `:return_type` - selector return type from the `return_*` helpers.
+  * `:policy` - list write policy map for write operations that document it.
+  * `:persist_index` - persist the index for top-level ordered lists.
+  * `:pad` - allow nested list creation past the current boundary.
+  """
+  @type opts :: [
+          ctx: Aerospike.Ctx.t(),
+          return_type: return_type(),
+          policy: policy(),
+          persist_index: boolean(),
+          pad: boolean()
+        ]
+
   @set_type 0
   @append 1
   @append_items 2
@@ -118,7 +170,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Sets the list order and write flags for a list bin.
   """
-  @spec set_type(String.t(), integer(), integer(), keyword()) :: t()
+  @spec set_type(String.t(), integer(), integer(), opts()) :: t()
   def set_type(bin_name, order, flags, opts \\ [])
       when is_binary(bin_name) and is_integer(order) and is_integer(flags) do
     CDT.list_modify_op(bin_name, @set_type, [order, flags], ctx(opts))
@@ -130,7 +182,7 @@ defmodule Aerospike.Op.List do
   When `ctx:` is omitted, this sets the top-level bin list order. For nested
   lists, pass `pad: true` to allow create indexes beyond the current boundary.
   """
-  @spec create(String.t(), integer(), keyword()) :: t()
+  @spec create(String.t(), integer(), opts()) :: t()
   def create(bin_name, order, opts \\ [])
       when is_binary(bin_name) and is_integer(order) do
     case ctx(opts) do
@@ -155,7 +207,7 @@ defmodule Aerospike.Op.List do
 
   Pass `persist_index: true` to persist an index for a top-level ordered list.
   """
-  @spec set_order(String.t(), integer(), keyword()) :: t()
+  @spec set_order(String.t(), integer(), opts()) :: t()
   def set_order(bin_name, order, opts \\ [])
       when is_binary(bin_name) and is_integer(order) do
     CDT.list_modify_op(bin_name, @set_type, [order_attr(order, opts)], ctx(opts))
@@ -167,7 +219,7 @@ defmodule Aerospike.Op.List do
   Pass `policy: %{order: order, flags: flags}` to include list order and write
   flags in the operation payload.
   """
-  @spec append(String.t(), term(), keyword()) :: t()
+  @spec append(String.t(), term(), opts()) :: t()
   def append(bin_name, value, opts \\ []) when is_binary(bin_name) do
     CDT.list_modify_op(bin_name, @append, [value | list_policy(opts)], ctx(opts))
   end
@@ -178,7 +230,7 @@ defmodule Aerospike.Op.List do
   Pass `policy: %{order: order, flags: flags}` to include list order and write
   flags in the operation payload.
   """
-  @spec append_items(String.t(), list(), keyword()) :: t()
+  @spec append_items(String.t(), list(), opts()) :: t()
   def append_items(bin_name, values, opts \\ []) when is_binary(bin_name) and is_list(values) do
     CDT.list_modify_op(bin_name, @append_items, [values | list_policy(opts)], ctx(opts))
   end
@@ -186,7 +238,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Inserts a value at `index`.
   """
-  @spec insert(String.t(), integer(), term(), keyword()) :: t()
+  @spec insert(String.t(), integer(), term(), opts()) :: t()
   def insert(bin_name, index, value, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @insert, [index, value | list_policy(opts)], ctx(opts))
@@ -195,7 +247,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Inserts multiple values at `index`.
   """
-  @spec insert_items(String.t(), integer(), list(), keyword()) :: t()
+  @spec insert_items(String.t(), integer(), list(), opts()) :: t()
   def insert_items(bin_name, index, values, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_list(values) do
     CDT.list_modify_op(bin_name, @insert_items, [index, values | list_policy(opts)], ctx(opts))
@@ -204,7 +256,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes and returns the value at `index`.
   """
-  @spec pop(String.t(), integer(), keyword()) :: t()
+  @spec pop(String.t(), integer(), opts()) :: t()
   def pop(bin_name, index, opts \\ []) when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @pop, [index], ctx(opts))
   end
@@ -212,7 +264,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes and returns `count` values starting at `index`.
   """
-  @spec pop_range(String.t(), integer(), integer(), keyword()) :: t()
+  @spec pop_range(String.t(), integer(), integer(), opts()) :: t()
   def pop_range(bin_name, index, count, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_integer(count) do
     CDT.list_modify_op(bin_name, @pop_range, [index, count], ctx(opts))
@@ -221,7 +273,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes and returns values from `index` through the end of the list.
   """
-  @spec pop_range_from(String.t(), integer(), keyword()) :: t()
+  @spec pop_range_from(String.t(), integer(), opts()) :: t()
   def pop_range_from(bin_name, index, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @pop_range, [index], ctx(opts))
@@ -230,7 +282,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes the value at `index` and returns the removed count.
   """
-  @spec remove(String.t(), integer(), keyword()) :: t()
+  @spec remove(String.t(), integer(), opts()) :: t()
   def remove(bin_name, index, opts \\ []) when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @remove, [index], ctx(opts))
   end
@@ -238,7 +290,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes `count` values starting at `index` and returns the removed count.
   """
-  @spec remove_range(String.t(), integer(), integer(), keyword()) :: t()
+  @spec remove_range(String.t(), integer(), integer(), opts()) :: t()
   def remove_range(bin_name, index, count, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_integer(count) do
     CDT.list_modify_op(bin_name, @remove_range, [index, count], ctx(opts))
@@ -247,7 +299,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes values from `index` through the end and returns the removed count.
   """
-  @spec remove_range_from(String.t(), integer(), keyword()) :: t()
+  @spec remove_range_from(String.t(), integer(), opts()) :: t()
   def remove_range_from(bin_name, index, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @remove_range, [index], ctx(opts))
@@ -259,7 +311,7 @@ defmodule Aerospike.Op.List do
   Pass `policy: %{order: order, flags: flags}` to include list order and write
   flags in the operation payload.
   """
-  @spec set(String.t(), integer(), term(), keyword()) :: t()
+  @spec set(String.t(), integer(), term(), opts()) :: t()
   def set(bin_name, index, value, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @set, [index, value | list_policy(opts)], ctx(opts))
@@ -268,7 +320,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Keeps `count` values starting at `index` and removes all others.
   """
-  @spec trim(String.t(), integer(), integer(), keyword()) :: t()
+  @spec trim(String.t(), integer(), integer(), opts()) :: t()
   def trim(bin_name, index, count, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_integer(count) do
     CDT.list_modify_op(bin_name, @trim, [index, count], ctx(opts))
@@ -277,7 +329,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes all values from the list.
   """
-  @spec clear(String.t(), keyword()) :: t()
+  @spec clear(String.t(), opts()) :: t()
   def clear(bin_name, opts \\ []) when is_binary(bin_name) do
     CDT.list_modify_op(bin_name, @clear, [], ctx(opts))
   end
@@ -288,7 +340,7 @@ defmodule Aerospike.Op.List do
   Pass `policy: %{flags: flags}` to include write flags in the operation
   payload.
   """
-  @spec increment(String.t(), integer(), term(), keyword()) :: t()
+  @spec increment(String.t(), integer(), term(), opts()) :: t()
   def increment(bin_name, index, value, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @increment, [index, value | increment_policy(opts)], ctx(opts))
@@ -297,7 +349,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Sorts the list with `sort_flags`.
   """
-  @spec sort(String.t(), integer(), keyword()) :: t()
+  @spec sort(String.t(), integer(), opts()) :: t()
   def sort(bin_name, sort_flags \\ 0, opts \\ [])
       when is_binary(bin_name) and is_integer(sort_flags) do
     CDT.list_modify_op(bin_name, @sort, [sort_flags], ctx(opts))
@@ -306,7 +358,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns the number of values in the list.
   """
-  @spec size(String.t(), keyword()) :: t()
+  @spec size(String.t(), opts()) :: t()
   def size(bin_name, opts \\ []) when is_binary(bin_name) do
     CDT.list_read_op(bin_name, @size, [], ctx(opts))
   end
@@ -314,7 +366,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns the value at `index`.
   """
-  @spec get(String.t(), integer(), keyword()) :: t()
+  @spec get(String.t(), integer(), opts()) :: t()
   def get(bin_name, index, opts \\ []) when is_binary(bin_name) and is_integer(index) do
     CDT.list_read_op(bin_name, @get, [index], ctx(opts))
   end
@@ -322,7 +374,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns `count` values starting at `index`.
   """
-  @spec get_range(String.t(), integer(), integer(), keyword()) :: t()
+  @spec get_range(String.t(), integer(), integer(), opts()) :: t()
   def get_range(bin_name, index, count, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_integer(count) do
     CDT.list_read_op(bin_name, @get_range, [index, count], ctx(opts))
@@ -331,7 +383,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns values from `index` through the end of the list.
   """
-  @spec get_range_from(String.t(), integer(), keyword()) :: t()
+  @spec get_range_from(String.t(), integer(), opts()) :: t()
   def get_range_from(bin_name, index, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_read_op(bin_name, @get_range, [index], ctx(opts))
@@ -340,7 +392,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes the value at `index`, returning data selected by `return_type:`.
   """
-  @spec remove_by_index(String.t(), integer(), keyword()) :: t()
+  @spec remove_by_index(String.t(), integer(), opts()) :: t()
   def remove_by_index(bin_name, index, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @remove_by_index, [rt(opts), index], ctx(opts))
@@ -349,7 +401,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes values from `index` through the end, returning selected data.
   """
-  @spec remove_by_index_range_from(String.t(), integer(), keyword()) :: t()
+  @spec remove_by_index_range_from(String.t(), integer(), opts()) :: t()
   def remove_by_index_range_from(bin_name, index, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_modify_op(bin_name, @remove_by_index_range, [rt(opts), index], ctx(opts))
@@ -358,7 +410,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes `count` values from `index`, returning selected data.
   """
-  @spec remove_by_index_range(String.t(), integer(), integer(), keyword()) :: t()
+  @spec remove_by_index_range(String.t(), integer(), integer(), opts()) :: t()
   def remove_by_index_range(bin_name, index, count, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_integer(count) do
     CDT.list_modify_op(bin_name, @remove_by_index_range, [rt(opts), index, count], ctx(opts))
@@ -367,7 +419,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes the value at `rank`, returning data selected by `return_type:`.
   """
-  @spec remove_by_rank(String.t(), integer(), keyword()) :: t()
+  @spec remove_by_rank(String.t(), integer(), opts()) :: t()
   def remove_by_rank(bin_name, rank, opts \\ []) when is_binary(bin_name) and is_integer(rank) do
     CDT.list_modify_op(bin_name, @remove_by_rank, [rt(opts), rank], ctx(opts))
   end
@@ -375,7 +427,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes values from `rank` through the highest rank, returning selected data.
   """
-  @spec remove_by_rank_range_from(String.t(), integer(), keyword()) :: t()
+  @spec remove_by_rank_range_from(String.t(), integer(), opts()) :: t()
   def remove_by_rank_range_from(bin_name, rank, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) do
     CDT.list_modify_op(bin_name, @remove_by_rank_range, [rt(opts), rank], ctx(opts))
@@ -384,7 +436,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes `count` values from `rank`, returning selected data.
   """
-  @spec remove_by_rank_range(String.t(), integer(), integer(), keyword()) :: t()
+  @spec remove_by_rank_range(String.t(), integer(), integer(), opts()) :: t()
   def remove_by_rank_range(bin_name, rank, count, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) and is_integer(count) do
     CDT.list_modify_op(bin_name, @remove_by_rank_range, [rt(opts), rank, count], ctx(opts))
@@ -393,7 +445,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes values equal to `value`, returning data selected by `return_type:`.
   """
-  @spec remove_by_value(String.t(), term(), keyword()) :: t()
+  @spec remove_by_value(String.t(), term(), opts()) :: t()
   def remove_by_value(bin_name, value, opts \\ []) when is_binary(bin_name) do
     CDT.list_modify_op(bin_name, @remove_by_value, [rt(opts), value], ctx(opts))
   end
@@ -401,7 +453,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes values matching any entry in `values`, returning selected data.
   """
-  @spec remove_by_value_list(String.t(), list(), keyword()) :: t()
+  @spec remove_by_value_list(String.t(), list(), opts()) :: t()
   def remove_by_value_list(bin_name, values, opts \\ [])
       when is_binary(bin_name) and is_list(values) do
     CDT.list_modify_op(bin_name, @remove_by_value_list, [rt(opts), values], ctx(opts))
@@ -412,7 +464,7 @@ defmodule Aerospike.Op.List do
 
   Pass `nil` for an open range boundary.
   """
-  @spec remove_by_value_range(String.t(), term(), term(), keyword()) :: t()
+  @spec remove_by_value_range(String.t(), term(), term(), opts()) :: t()
   def remove_by_value_range(bin_name, begin_value, end_value, opts \\ [])
       when is_binary(bin_name) do
     CDT.list_modify_op(
@@ -426,7 +478,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes values nearest to `value` and greater by relative `rank`.
   """
-  @spec remove_by_value_rel_rank_range(String.t(), term(), integer(), keyword()) :: t()
+  @spec remove_by_value_rel_rank_range(String.t(), term(), integer(), opts()) :: t()
   def remove_by_value_rel_rank_range(bin_name, value, rank, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) do
     CDT.list_modify_op(
@@ -440,7 +492,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Removes `count` values nearest to `value` and greater by relative `rank`.
   """
-  @spec remove_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), keyword()) ::
+  @spec remove_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), opts()) ::
           t()
   def remove_by_value_rel_rank_range_count(bin_name, value, rank, count, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) and is_integer(count) do
@@ -455,7 +507,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns the value at `index`, selected by `return_type:`.
   """
-  @spec get_by_index(String.t(), integer(), keyword()) :: t()
+  @spec get_by_index(String.t(), integer(), opts()) :: t()
   def get_by_index(bin_name, index, opts \\ []) when is_binary(bin_name) and is_integer(index) do
     CDT.list_read_op(bin_name, @get_by_index, [rt(opts), index], ctx(opts))
   end
@@ -463,7 +515,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns values from `index` through the end, selected by `return_type:`.
   """
-  @spec get_by_index_range_from(String.t(), integer(), keyword()) :: t()
+  @spec get_by_index_range_from(String.t(), integer(), opts()) :: t()
   def get_by_index_range_from(bin_name, index, opts \\ [])
       when is_binary(bin_name) and is_integer(index) do
     CDT.list_read_op(bin_name, @get_by_index_range, [rt(opts), index], ctx(opts))
@@ -472,7 +524,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns `count` values from `index`, selected by `return_type:`.
   """
-  @spec get_by_index_range(String.t(), integer(), integer(), keyword()) :: t()
+  @spec get_by_index_range(String.t(), integer(), integer(), opts()) :: t()
   def get_by_index_range(bin_name, index, count, opts \\ [])
       when is_binary(bin_name) and is_integer(index) and is_integer(count) do
     CDT.list_read_op(bin_name, @get_by_index_range, [rt(opts), index, count], ctx(opts))
@@ -481,7 +533,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns the value at `rank`, selected by `return_type:`.
   """
-  @spec get_by_rank(String.t(), integer(), keyword()) :: t()
+  @spec get_by_rank(String.t(), integer(), opts()) :: t()
   def get_by_rank(bin_name, rank, opts \\ []) when is_binary(bin_name) and is_integer(rank) do
     CDT.list_read_op(bin_name, @get_by_rank, [rt(opts), rank], ctx(opts))
   end
@@ -489,7 +541,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns values from `rank` through the highest rank, selected by `return_type:`.
   """
-  @spec get_by_rank_range_from(String.t(), integer(), keyword()) :: t()
+  @spec get_by_rank_range_from(String.t(), integer(), opts()) :: t()
   def get_by_rank_range_from(bin_name, rank, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) do
     CDT.list_read_op(bin_name, @get_by_rank_range, [rt(opts), rank], ctx(opts))
@@ -498,7 +550,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns `count` values from `rank`, selected by `return_type:`.
   """
-  @spec get_by_rank_range(String.t(), integer(), integer(), keyword()) :: t()
+  @spec get_by_rank_range(String.t(), integer(), integer(), opts()) :: t()
   def get_by_rank_range(bin_name, rank, count, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) and is_integer(count) do
     CDT.list_read_op(bin_name, @get_by_rank_range, [rt(opts), rank, count], ctx(opts))
@@ -507,7 +559,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns values equal to `value`, selected by `return_type:`.
   """
-  @spec get_by_value(String.t(), term(), keyword()) :: t()
+  @spec get_by_value(String.t(), term(), opts()) :: t()
   def get_by_value(bin_name, value, opts \\ []) when is_binary(bin_name) do
     CDT.list_read_op(bin_name, @get_by_value, [rt(opts), value], ctx(opts))
   end
@@ -515,7 +567,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns values matching any entry in `values`, selected by `return_type:`.
   """
-  @spec get_by_value_list(String.t(), list(), keyword()) :: t()
+  @spec get_by_value_list(String.t(), list(), opts()) :: t()
   def get_by_value_list(bin_name, values, opts \\ [])
       when is_binary(bin_name) and is_list(values) do
     CDT.list_read_op(bin_name, @get_by_value_list, [rt(opts), values], ctx(opts))
@@ -526,7 +578,7 @@ defmodule Aerospike.Op.List do
 
   Pass `nil` for an open range boundary.
   """
-  @spec get_by_value_range(String.t(), term(), term(), keyword()) :: t()
+  @spec get_by_value_range(String.t(), term(), term(), opts()) :: t()
   def get_by_value_range(bin_name, begin_value, end_value, opts \\ [])
       when is_binary(bin_name) do
     CDT.list_read_op(
@@ -540,7 +592,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns values nearest to `value` and greater by relative `rank`.
   """
-  @spec get_by_value_rel_rank_range(String.t(), term(), integer(), keyword()) :: t()
+  @spec get_by_value_rel_rank_range(String.t(), term(), integer(), opts()) :: t()
   def get_by_value_rel_rank_range(bin_name, value, rank, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) do
     CDT.list_read_op(
@@ -554,7 +606,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Returns `count` values nearest to `value` and greater by relative `rank`.
   """
-  @spec get_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), keyword()) ::
+  @spec get_by_value_rel_rank_range_count(String.t(), term(), integer(), integer(), opts()) ::
           t()
   def get_by_value_rel_rank_range_count(bin_name, value, rank, count, opts \\ [])
       when is_binary(bin_name) and is_integer(rank) and is_integer(count) do

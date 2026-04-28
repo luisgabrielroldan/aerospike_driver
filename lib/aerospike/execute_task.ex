@@ -8,8 +8,14 @@ defmodule Aerospike.ExecuteTask do
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error
 
-  @typedoc "Background query task kind."
+  @typedoc "Background query task kind used when polling server job state."
   @type kind :: :query_execute | :query_udf
+
+  @typedoc "Option accepted by `wait/2`."
+  @type wait_opt :: {:poll_interval, non_neg_integer()} | {:timeout, non_neg_integer()}
+
+  @typedoc "Keyword options accepted by `wait/2`."
+  @type wait_opts :: [wait_opt()]
 
   @default_checkout_timeout 5_000
   @default_poll_interval 1_000
@@ -18,7 +24,12 @@ defmodule Aerospike.ExecuteTask do
   @enforce_keys [:conn, :namespace, :set, :task_id, :kind]
   defstruct [:conn, :namespace, :set, :task_id, :kind, node_name: nil]
 
-  @typedoc "Handle returned by background query execution helpers."
+  @typedoc """
+  Handle returned by background query execution helpers.
+
+  `node_name` is set when the background job was started on one node. When it
+  is `nil`, `status/1` and `wait/2` poll every active node in the cluster.
+  """
   @type t :: %__MODULE__{
           conn: GenServer.server(),
           namespace: String.t(),
@@ -53,7 +64,7 @@ defmodule Aerospike.ExecuteTask do
     * `:timeout` — maximum milliseconds to wait. When omitted, polling
       continues until the operation completes or returns an error.
   """
-  @spec wait(t(), keyword()) :: :ok | {:error, Error.t()}
+  @spec wait(t(), wait_opts()) :: :ok | {:error, Error.t()}
   def wait(%__MODULE__{} = task, opts) do
     poll_interval = Keyword.get(opts, :poll_interval, @default_poll_interval)
     timeout_ms = Keyword.get(opts, :timeout, nil)

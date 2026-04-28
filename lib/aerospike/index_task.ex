@@ -9,7 +9,18 @@ defmodule Aerospike.IndexTask do
   @enforce_keys [:conn, :namespace, :index_name]
   defstruct [:conn, :namespace, :index_name]
 
-  @typedoc "Handle returned while a secondary index is being built."
+  @typedoc "Option accepted by `wait/2`."
+  @type wait_opt :: {:poll_interval, non_neg_integer()} | {:timeout, non_neg_integer()}
+
+  @typedoc "Keyword options accepted by `wait/2`."
+  @type wait_opts :: [wait_opt()]
+
+  @typedoc """
+  Handle returned while a secondary index is being built.
+
+  Use `status/1` for one poll or `wait/2` to block until the index is visible.
+  `wait/2` accepts `:poll_interval` and `:timeout` in milliseconds.
+  """
   @type t :: %__MODULE__{
           conn: GenServer.server(),
           namespace: String.t(),
@@ -17,6 +28,22 @@ defmodule Aerospike.IndexTask do
         }
 
   use Aerospike.Runtime.AsyncTask
+
+  @impl Aerospike.Runtime.AsyncTask
+  @doc """
+  Blocks until the secondary-index build completes or the timeout is exceeded.
+
+  Supported options:
+
+    * `:poll_interval` — milliseconds to sleep between status checks.
+      Defaults to `1_000`.
+    * `:timeout` — maximum milliseconds to wait. When omitted, polling
+      continues until the index is complete or returns an error.
+  """
+  @spec wait(t(), wait_opts()) :: :ok | {:error, Error.t()}
+  def wait(%__MODULE__{} = task, opts) do
+    AsyncTask.poll(__MODULE__, task, opts)
+  end
 
   @impl Aerospike.Runtime.AsyncTask
   @doc """

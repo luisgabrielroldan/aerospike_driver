@@ -74,7 +74,19 @@ defmodule Aerospike.Exp do
     index: 2
   }
 
+  @typedoc """
+  Aerospike expression result type tag.
+
+  Use this with typed bin, key, and loop-variable builders when the server must
+  know the expected expression value type.
+  """
   @type exp_type :: nil | :bool | :int | :string | :list | :map | :blob | :float | :geo | :hll
+
+  @typedoc """
+  Aerospike particle type name accepted by `particle_type/1`.
+
+  The returned integer can be compared with `bin_type/1`.
+  """
   @type particle_type ::
           :null
           | :integer
@@ -88,7 +100,18 @@ defmodule Aerospike.Exp do
           | :list
           | :ldt
           | :geojson
+
+  @typedoc """
+  Regular expression flag name accepted by `regex_flag/1` and `regex_flags/1`.
+  """
   @type regex_flag :: :none | :extended | :icase | :nosub | :newline
+
+  @typedoc """
+  Built-in loop-variable part used inside CDT filter expressions.
+
+  `:map_key` reads the current map key, `:value` reads the current list item or
+  map value, and `:index` reads the current collection index.
+  """
   @type loop_var_part :: :map_key | :value | :index
 
   @doc """

@@ -36,6 +36,9 @@ defmodule Aerospike.Record do
 
   @typedoc """
   Record header metadata returned by successful writes or header-only reads.
+
+  `generation` is the server-side record generation. `ttl` is the
+  server-reported expiration value from the record header.
   """
   @type metadata :: %{generation: non_neg_integer(), ttl: non_neg_integer()}
 

@@ -32,6 +32,13 @@ defmodule Aerospike.Op do
   @typedoc "Opaque wire operation."
   @opaque t :: Operation.t()
 
+  @typedoc """
+  Bin name accepted by primitive operate builders.
+
+  Atom bin names are converted to strings before the operation is encoded.
+  """
+  @type bin_name :: String.t() | atom()
+
   defp normalize_bin_name(bin_name) when is_atom(bin_name), do: Atom.to_string(bin_name)
   defp normalize_bin_name(bin_name), do: bin_name
 
@@ -41,7 +48,7 @@ defmodule Aerospike.Op do
   The value must be encodable by the Aerospike particle encoder. Atom bin names
   are converted to strings.
   """
-  @spec put(String.t() | atom(), term()) :: t()
+  @spec put(bin_name(), term()) :: t()
   def put(bin_name, value) do
     case Operation.write(normalize_bin_name(bin_name), value) do
       {:ok, op} -> op
@@ -54,7 +61,7 @@ defmodule Aerospike.Op do
 
   The returned operation projects the requested bin into the operate response.
   """
-  @spec get(String.t() | atom()) :: t()
+  @spec get(bin_name()) :: t()
   def get(bin_name) do
     Operation.read(normalize_bin_name(bin_name))
   end
@@ -82,7 +89,7 @@ defmodule Aerospike.Op do
   The server creates the bin when needed and returns an error if the existing
   value is not numeric.
   """
-  @spec add(String.t() | atom(), integer() | float()) :: t()
+  @spec add(bin_name(), integer() | float()) :: t()
   def add(bin_name, delta) do
     case Operation.add(normalize_bin_name(bin_name), delta) do
       {:ok, op} -> op
@@ -93,7 +100,7 @@ defmodule Aerospike.Op do
   @doc """
   Appends `suffix` to a string bin.
   """
-  @spec append(String.t() | atom(), String.t()) :: t()
+  @spec append(bin_name(), String.t()) :: t()
   def append(bin_name, suffix) do
     case Operation.append(normalize_bin_name(bin_name), suffix) do
       {:ok, op} -> op
@@ -104,7 +111,7 @@ defmodule Aerospike.Op do
   @doc """
   Prepends `prefix` to a string bin.
   """
-  @spec prepend(String.t() | atom(), String.t()) :: t()
+  @spec prepend(bin_name(), String.t()) :: t()
   def prepend(bin_name, prefix) do
     case Operation.prepend(normalize_bin_name(bin_name), prefix) do
       {:ok, op} -> op

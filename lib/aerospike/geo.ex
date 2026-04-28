@@ -18,7 +18,11 @@ defmodule Aerospike.Geo do
     @enforce_keys [:lng, :lat]
     defstruct [:lng, :lat]
 
-    @typedoc "GeoJSON point using longitude and latitude."
+    @typedoc """
+    GeoJSON point using longitude and latitude.
+
+    Coordinates are normalized to floats by `Aerospike.Geo.point/2`.
+    """
     @type t :: %__MODULE__{
             lng: float(),
             lat: float()
@@ -36,10 +40,14 @@ defmodule Aerospike.Geo do
     @typedoc "Longitude/latitude coordinate pair."
     @type coordinate_pair :: {float(), float()}
 
-    @typedoc "One polygon ring."
+    @typedoc "One polygon ring represented as longitude/latitude pairs."
     @type ring :: [coordinate_pair()]
 
-    @typedoc "GeoJSON polygon with one or more rings."
+    @typedoc """
+    GeoJSON polygon with one or more rings.
+
+    Coordinates are normalized to floats by `Aerospike.Geo.polygon/1`.
+    """
     @type t :: %__MODULE__{
             coordinates: [ring()]
           }
@@ -53,7 +61,11 @@ defmodule Aerospike.Geo do
     @enforce_keys [:lng, :lat, :radius]
     defstruct [:lng, :lat, :radius]
 
-    @typedoc "Aerospike AeroCircle value."
+    @typedoc """
+    Aerospike AeroCircle value.
+
+    `radius` is expressed in meters, matching Aerospike's GeoJSON extension.
+    """
     @type t :: %__MODULE__{
             lng: float(),
             lat: float(),
@@ -61,8 +73,11 @@ defmodule Aerospike.Geo do
           }
   end
 
-  @typedoc "Supported typed geospatial values."
+  @typedoc "Supported typed geospatial values accepted by geo bins and filters."
   @type t :: Point.t() | Polygon.t() | Circle.t()
+
+  @typedoc "Fallback for unsupported or malformed GeoJSON strings."
+  @type raw_geojson :: {:geojson, String.t()}
 
   @doc """
   Builds a point from longitude and latitude.
@@ -118,7 +133,7 @@ defmodule Aerospike.Geo do
   Unknown geometry types, unsupported coordinate shapes, and invalid JSON return
   `{:geojson, json}` with the original string.
   """
-  @spec from_json(String.t()) :: t() | {:geojson, String.t()}
+  @spec from_json(String.t()) :: t() | raw_geojson()
   def from_json(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, decoded} -> from_decoded_geojson(decoded, json)

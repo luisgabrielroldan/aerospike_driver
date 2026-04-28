@@ -25,13 +25,30 @@ defmodule Aerospike.Filter do
   """
   @type index_type :: :default | :list | :mapkeys | :mapvalues | :geo_within | :geo_contains
 
-  @typedoc "Indexed scalar particle type."
+  @typedoc "Indexed scalar particle type inferred for integer and string predicates."
   @type particle_type :: :integer | :string
 
-  @typedoc "GeoJSON input accepted by geospatial query filters."
+  @typedoc "Scalar value accepted by equality and CDT membership filters."
+  @type scalar_value :: integer() | String.t()
+
+  @typedoc "Collection secondary-index kind accepted by `contains/3`."
+  @type collection_index_type :: :list | :mapkeys | :mapvalues
+
+  @typedoc """
+  GeoJSON input accepted by geospatial query filters.
+
+  Binary inputs are expected to be non-empty GeoJSON strings. Typed
+  `Aerospike.Geo` values are converted with `Aerospike.Geo.to_json/1`.
+  """
   @type geo_geometry :: String.t() | Geo.Point.t() | Geo.Polygon.t() | Geo.Circle.t()
 
-  @typedoc "Secondary-index query filter."
+  @typedoc """
+  Secondary-index query filter consumed by `Aerospike.Query.where/2`.
+
+  A query can carry one secondary-index filter. `index_name` is optional and is
+  set by `using_index/2`; `ctx` is optional nested-CDT context set by
+  `with_ctx/2`.
+  """
   @type t :: %__MODULE__{
           bin_name: String.t(),
           index_type: index_type(),
@@ -44,6 +61,10 @@ defmodule Aerospike.Filter do
 
   @doc """
   Numeric range on a bin, inclusive.
+
+  `begin_val` and `end_val` must fit in Aerospike's signed int64 range.
+  Raises `ArgumentError` when the bin name is empty, a value is out of range,
+  or the range is inverted.
   """
   @spec range(String.t(), integer(), integer()) :: t()
   def range(bin_name, begin_val, end_val)
@@ -67,8 +88,11 @@ defmodule Aerospike.Filter do
 
   @doc """
   Equality on a bin. The particle type is inferred from the value.
+
+  Supports integer and string values. Integer values must fit in Aerospike's
+  signed int64 range.
   """
-  @spec equal(String.t(), integer() | String.t()) :: t()
+  @spec equal(String.t(), scalar_value()) :: t()
   def equal(bin_name, value) when is_binary(bin_name) do
     validate_bin_name!(bin_name)
 
@@ -96,8 +120,11 @@ defmodule Aerospike.Filter do
 
   @doc """
   CDT membership filter for list or map indexes.
+
+  `index_type` must match the collection index created for the bin:
+  `:list`, `:mapkeys`, or `:mapvalues`.
   """
-  @spec contains(String.t(), :list | :mapkeys | :mapvalues, integer() | String.t()) :: t()
+  @spec contains(String.t(), collection_index_type(), scalar_value()) :: t()
   def contains(bin_name, index_type, value) when is_binary(bin_name) do
     validate_bin_name!(bin_name)
 
@@ -131,6 +158,9 @@ defmodule Aerospike.Filter do
 
   @doc """
   Geo region query for points within a GeoJSON region.
+
+  Use this with a `:geo2dsphere` index on point data. The region may be a
+  GeoJSON string or a typed `Aerospike.Geo` value.
   """
   @spec geo_within(String.t(), geo_geometry()) :: t()
   def geo_within(bin_name, %Geo.Point{} = region) when is_binary(bin_name) do
@@ -160,6 +190,9 @@ defmodule Aerospike.Filter do
 
   @doc """
   Geo point query for regions containing a GeoJSON point.
+
+  Use this with a `:geo2dsphere` index on region data. The point may be a
+  GeoJSON string or a typed `Aerospike.Geo` value.
   """
   @spec geo_contains(String.t(), geo_geometry()) :: t()
   def geo_contains(bin_name, %Geo.Point{} = point) when is_binary(bin_name) do
@@ -207,6 +240,9 @@ defmodule Aerospike.Filter do
 
   @doc """
   Targets a named secondary index.
+
+  Use this when the server has multiple compatible indexes and the query
+  should address one index explicitly.
   """
   @spec using_index(t(), String.t()) :: t()
   def using_index(%__MODULE__{} = filter, index_name) when is_binary(index_name) do
@@ -216,6 +252,9 @@ defmodule Aerospike.Filter do
 
   @doc """
   Attaches nested CDT context to the filter.
+
+  `ctx` must be a non-empty list of `Aerospike.Ctx` steps that points at the
+  nested collection value indexed by the server.
   """
   @spec with_ctx(t(), [Ctx.step()]) :: t()
   def with_ctx(%__MODULE__{} = filter, ctx) when is_list(ctx) do

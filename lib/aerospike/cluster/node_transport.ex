@@ -21,12 +21,20 @@ defmodule Aerospike.Cluster.NodeTransport do
   @typedoc "Opaque connection handle returned by `c:connect/3`."
   @type conn :: term()
 
+  @typedoc "Authentication mode used by transports that implement `c:login/2`."
+  @type auth_mode :: :internal | :external | :pki
+
   @typedoc """
-  Options accepted by `c:connect/3`. Implementations decide which keys they
-  support; the only key callers are expected to pass is `:timeout`
-  (milliseconds, default left to the implementation).
+  Connection option accepted by `c:connect/3`.
+
+  Implementations may support additional keys. The built-in TCP/TLS
+  transports document their concrete option sets in
+  `Aerospike.Transport.Tcp` and `Aerospike.Transport.Tls`.
   """
-  @type connect_opts :: keyword()
+  @type connect_option :: {atom(), term()}
+
+  @typedoc "Keyword list of connection options accepted by `c:connect/3`."
+  @type connect_opts :: [connect_option()]
 
   @doc """
   Opens a connection to `host:port`.
@@ -65,8 +73,16 @@ defmodule Aerospike.Cluster.NodeTransport do
       `false`.
     * `:message_type` — `:as_msg` (default) or `:admin`. `:admin` is the
       Aerospike admin-protocol reply type used by security commands.
+    * `:attempt` — zero-based retry attempt index attached to telemetry
+      metadata. Defaults to `0` when omitted.
   """
-  @type command_opts :: [use_compression: boolean(), message_type: :as_msg | :admin]
+  @type command_option ::
+          {:use_compression, boolean()}
+          | {:message_type, :as_msg | :admin}
+          | {:attempt, non_neg_integer()}
+
+  @typedoc "Keyword list accepted by `c:command/4` and `c:command_stream/4`."
+  @type command_opts :: [command_option()]
 
   @doc """
   Sends a pre-encoded request and returns the full reply bytes.
@@ -83,9 +99,7 @@ defmodule Aerospike.Cluster.NodeTransport do
   monotonic deadline manually. The caller remains responsible for the
   overall operation budget — the transport does not enforce it.
 
-  `opts` is a keyword list documented by `t:command_opts/0`. The only key
-  currently recognised is `:use_compression`; implementations must accept
-  (and may ignore) it.
+  `opts` is a keyword list documented by `t:command_opts/0`.
 
   Single request, single response — streaming and multi-frame replies
   (scan, query) are out of scope for this behaviour.
@@ -117,12 +131,18 @@ defmodule Aerospike.Cluster.NodeTransport do
               {:ok, binary()} | {:error, Aerospike.Error.t()}
 
   @typedoc """
-  Options accepted by `c:stream_open/4`. The stream seam currently does not
-  interpret any public keys, but callers pass a keyword list so later
-  implementations can share capability flags without changing the callback
-  shape.
+  Option accepted by `c:stream_open/4`.
+
+  The built-in TCP/TLS transports accept `:use_compression` and `:attempt`,
+  matching `t:command_opts/0`; implementations may ignore keys they do not
+  support.
   """
-  @type stream_opts :: keyword()
+  @type stream_option ::
+          {:use_compression, boolean()}
+          | {:attempt, non_neg_integer()}
+
+  @typedoc "Keyword list accepted by `c:stream_open/4`."
+  @type stream_opts :: [stream_option()]
 
   @typedoc "Opaque stream handle returned by `c:stream_open/4`."
   @type stream :: term()
@@ -171,6 +191,26 @@ defmodule Aerospike.Cluster.NodeTransport do
           | {:session, binary(), non_neg_integer() | nil}
           | :security_not_enabled
 
+  @typedoc """
+  Login option accepted by `c:login/2`.
+
+    * `:user` — username. Required for password login and session-token
+      authenticate, omitted for PKI login.
+    * `:password` — cleartext password for internal/external login.
+    * `:auth_mode` — `:internal`, `:external`, or `:pki`.
+    * `:session_token` — token used to run AUTHENTICATE instead of LOGIN.
+    * `:login_timeout_ms` — read deadline applied to the login reply.
+  """
+  @type login_option ::
+          {:user, String.t()}
+          | {:password, String.t()}
+          | {:auth_mode, auth_mode()}
+          | {:session_token, binary()}
+          | {:login_timeout_ms, pos_integer()}
+
+  @typedoc "Keyword list accepted by `c:login/2`."
+  @type login_opts :: [login_option()]
+
   @doc """
   Runs the admin-protocol login (or session-token authenticate) handshake
   on an already-connected socket and returns the parsed reply.
@@ -190,7 +230,7 @@ defmodule Aerospike.Cluster.NodeTransport do
     * `:login_timeout_ms` — read deadline applied to the login reply.
       Transport-specific default.
   """
-  @callback login(conn(), opts :: keyword()) ::
+  @callback login(conn(), opts :: login_opts()) ::
               {:ok, login_reply()} | {:error, Aerospike.Error.t()}
 
   @optional_callbacks login: 2, stream_open: 4, stream_read: 2, stream_close: 1

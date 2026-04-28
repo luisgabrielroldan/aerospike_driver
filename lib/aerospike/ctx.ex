@@ -12,7 +12,28 @@ defmodule Aerospike.Ctx do
 
   @typedoc "A single nested-CDT navigation step."
   @type step :: {non_neg_integer(), term()}
+
+  @typedoc """
+  Nested CDT context path.
+
+  Pass this list as `ctx:` to CDT operation builders that support nested
+  collection access.
+  """
+  @type t :: [step()]
+
+  @typedoc """
+  List order used when a context step creates a nested list.
+
+  `:unordered` creates a normal list. `:ordered` creates an ordered list.
+  """
   @type list_order :: :unordered | :ordered
+
+  @typedoc """
+  Map order used when a context step creates a nested map.
+
+  `:unordered` keeps no ordering, `:key_ordered` orders entries by key, and
+  `:key_value_ordered` orders by key and value.
+  """
   @type map_order :: :unordered | :key_ordered | :key_value_ordered
 
   @expression 0x04
@@ -88,11 +109,11 @@ defmodule Aerospike.Ctx do
   def map_value(value), do: {@map_value, value}
 
   @doc "Serializes a context path to MessagePack bytes."
-  @spec to_bytes([step()]) :: binary()
+  @spec to_bytes(t()) :: binary()
   def to_bytes(ctx) when is_list(ctx), do: CDT.encode_ctx(ctx)
 
   @doc "Deserializes MessagePack context bytes."
-  @spec from_bytes(binary()) :: [step()]
+  @spec from_bytes(binary()) :: t()
   def from_bytes(bytes) when is_binary(bytes) do
     bytes
     |> MessagePack.unpack!()
@@ -100,11 +121,11 @@ defmodule Aerospike.Ctx do
   end
 
   @doc "Serializes a context path to Base64-encoded MessagePack bytes."
-  @spec to_base64([step()]) :: String.t()
+  @spec to_base64(t()) :: String.t()
   def to_base64(ctx) when is_list(ctx), do: ctx |> to_bytes() |> Base.encode64()
 
   @doc "Deserializes a Base64-encoded context path."
-  @spec from_base64(String.t()) :: [step()]
+  @spec from_base64(String.t()) :: t()
   def from_base64(encoded) when is_binary(encoded) do
     encoded
     |> Base.decode64!()

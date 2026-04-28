@@ -15,13 +15,41 @@ defmodule Aerospike.RegisterTask do
   @enforce_keys [:conn, :package_name]
   defstruct [:conn, :package_name]
 
-  @typedoc "Handle returned while a UDF package propagates through the cluster."
+  @typedoc "Option accepted by `wait/2`."
+  @type wait_opt :: {:poll_interval, non_neg_integer()} | {:timeout, non_neg_integer()}
+
+  @typedoc "Keyword options accepted by `wait/2`."
+  @type wait_opts :: [wait_opt()]
+
+  @typedoc """
+  Handle returned while a UDF package propagates through the cluster.
+
+  Use `status/1` for one poll or `wait/2` to block until every active node
+  reports the package. `wait/2` accepts `:poll_interval` and `:timeout` in
+  milliseconds.
+  """
   @type t :: %__MODULE__{
           conn: Aerospike.cluster(),
           package_name: String.t()
         }
 
   use Aerospike.Runtime.AsyncTask
+
+  @impl Aerospike.Runtime.AsyncTask
+  @doc """
+  Blocks until the UDF package is visible on every active node.
+
+  Supported options:
+
+    * `:poll_interval` — milliseconds to sleep between status checks.
+      Defaults to `1_000`.
+    * `:timeout` — maximum milliseconds to wait. When omitted, polling
+      continues until registration completes or returns an error.
+  """
+  @spec wait(t(), wait_opts()) :: :ok | {:error, Error.t()}
+  def wait(%__MODULE__{} = task, opts) do
+    AsyncTask.poll(__MODULE__, task, opts)
+  end
 
   @impl Aerospike.Runtime.AsyncTask
   @doc """

@@ -139,6 +139,48 @@ defmodule Aerospike.Transport.Tcp do
   @typedoc "Opaque stream handle owned by a dedicated socket worker."
   @opaque stream :: pid()
 
+  @typedoc """
+  TCP connection option accepted by `connect/3`.
+
+  Timeout and socket tuning keys are applied during the TCP handshake.
+  Auth keys trigger the admin-protocol login/authenticate handshake after
+  connect. `:node_name` is an internal telemetry label injected by pool
+  startup.
+  """
+  @type connect_option ::
+          {:connect_timeout_ms, pos_integer()}
+          | {:info_timeout, pos_integer()}
+          | {:login_timeout_ms, pos_integer()}
+          | {:tcp_nodelay, boolean()}
+          | {:tcp_keepalive, boolean()}
+          | {:tcp_sndbuf, pos_integer() | nil}
+          | {:tcp_rcvbuf, pos_integer() | nil}
+          | {:node_name, String.t() | nil}
+          | {:auth_mode, NodeTransport.auth_mode()}
+          | {:user, String.t()}
+          | {:password, String.t()}
+          | {:session_token, binary()}
+
+  @typedoc "Keyword list accepted by `connect/3`."
+  @type connect_opts :: [connect_option()]
+
+  @typedoc """
+  Command option accepted by `command/4` and `command_stream/4`.
+
+  See `t:Aerospike.Cluster.NodeTransport.command_option/0` for the
+  transport behaviour contract.
+  """
+  @type command_option :: NodeTransport.command_option()
+
+  @typedoc "Keyword list accepted by `command/4` and `command_stream/4`."
+  @type command_opts :: [command_option()]
+
+  @typedoc "Keyword list accepted by `stream_open/4`."
+  @type stream_opts :: NodeTransport.stream_opts()
+
+  @typedoc "Keyword list accepted by `login/2`."
+  @type login_opts :: NodeTransport.login_opts()
+
   @enforce_keys [:socket, :info_timeout]
   defstruct [:socket, :info_timeout, socket_mod: :gen_tcp, node_name: nil]
 
@@ -147,10 +189,12 @@ defmodule Aerospike.Transport.Tcp do
 
   Options mirror the cluster `:connect_opts` accepted by
   `Aerospike.start_link/1`, including timeouts, TCP socket tuning, node name,
-  and optional auth credentials.
+  and optional auth credentials. See `t:connect_option/0` and the module
+  docs for supported keys.
   """
   @impl true
-  @spec connect(String.t(), :inet.port_number(), keyword()) :: {:ok, conn()} | {:error, Error.t()}
+  @spec connect(String.t(), :inet.port_number(), connect_opts()) ::
+          {:ok, conn()} | {:error, Error.t()}
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
     info_timeout = Keyword.get(opts, :info_timeout, connect_timeout_ms)
@@ -181,7 +225,7 @@ defmodule Aerospike.Transport.Tcp do
   # list in one place means dialyzer sees a single producer of `t:conn/0`
   # and callers cannot accidentally assemble a malformed handle. Not part
   # of the public `NodeTransport` contract.
-  @spec wrap_ssl_socket(:ssl.sslsocket(), keyword()) :: conn()
+  @spec wrap_ssl_socket(:ssl.sslsocket(), connect_opts()) :: conn()
   def wrap_ssl_socket(ssl_socket, opts) when is_list(opts) do
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
     info_timeout = Keyword.get(opts, :info_timeout, connect_timeout_ms)
@@ -206,7 +250,7 @@ defmodule Aerospike.Transport.Tcp do
   # socket. Splitting this out of `connect/3` lets the TLS transport reuse
   # the handshake logic without duplicating the `maybe_login/5` selection
   # cond. Not part of the public `NodeTransport` contract.
-  @spec maybe_login_after_handshake(conn(), keyword(), String.t(), :inet.port_number()) ::
+  @spec maybe_login_after_handshake(conn(), connect_opts(), String.t(), :inet.port_number()) ::
           {:ok, conn()} | {:error, Error.t()}
   def maybe_login_after_handshake(%__MODULE__{} = conn, opts, host, port) do
     timeout_ms = Keyword.get(opts, :login_timeout_ms, conn.info_timeout)
@@ -341,10 +385,11 @@ defmodule Aerospike.Transport.Tcp do
   Runs the admin-protocol login or authenticate handshake on an open socket.
 
   The Tender uses this callback to obtain and cache session tokens. Callers
-  own the socket and are expected to close it after an error.
+  own the socket and are expected to close it after an error. See
+  `t:Aerospike.Cluster.NodeTransport.login_opts/0` for supported keys.
   """
   @impl true
-  @spec login(conn(), keyword()) ::
+  @spec login(conn(), login_opts()) ::
           {:ok, NodeTransport.login_reply()} | {:error, Error.t()}
   def login(%__MODULE__{} = conn, opts) when is_list(opts) do
     timeout_ms = Keyword.get(opts, :login_timeout_ms, conn.info_timeout)
@@ -571,9 +616,12 @@ defmodule Aerospike.Transport.Tcp do
 
   @doc """
   Sends a streaming request and returns a stream handle for incremental reads.
+
+  Accepts `:use_compression` and `:attempt` in `opts`; unsupported keys
+  are ignored.
   """
   @impl true
-  @spec stream_open(conn(), iodata(), non_neg_integer(), keyword()) ::
+  @spec stream_open(conn(), iodata(), non_neg_integer(), stream_opts()) ::
           {:ok, stream()} | {:error, Error.t()}
   def stream_open(%__MODULE__{} = conn, request, deadline_ms, opts \\ [])
       when (is_binary(request) or is_list(request)) and is_integer(deadline_ms) and
@@ -638,9 +686,11 @@ defmodule Aerospike.Transport.Tcp do
 
   @doc """
   Sends one pre-encoded command frame and returns one decoded response body.
+
+  Accepts `:use_compression`, `:message_type`, and `:attempt` in `opts`.
   """
   @impl true
-  @spec command(conn(), iodata(), non_neg_integer(), keyword()) ::
+  @spec command(conn(), iodata(), non_neg_integer(), command_opts()) ::
           {:ok, binary()} | {:error, Error.t()}
   def command(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
       when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do
@@ -660,9 +710,11 @@ defmodule Aerospike.Transport.Tcp do
 
   @doc """
   Sends one pre-encoded command frame and reads a bounded multi-frame response.
+
+  Accepts the same options as `command/4`.
   """
   @impl true
-  @spec command_stream(conn(), iodata(), non_neg_integer(), keyword()) ::
+  @spec command_stream(conn(), iodata(), non_neg_integer(), command_opts()) ::
           {:ok, binary()} | {:error, Error.t()}
   def command_stream(%__MODULE__{node_name: node_name} = conn, request, deadline_ms, opts \\ [])
       when is_integer(deadline_ms) and deadline_ms >= 0 and is_list(opts) do

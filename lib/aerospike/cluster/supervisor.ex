@@ -34,7 +34,15 @@ defmodule Aerospike.Cluster.Supervisor do
   @typedoc "Cluster tend scheduling mode."
   @type tend_trigger :: :timer | :manual
 
-  @typedoc "Transport connection option forwarded to TCP/TLS transports."
+  @typedoc """
+  Transport connection option accepted inside startup `:connect_opts`.
+
+  TCP transports use the timeout and socket tuning keys. TLS transports
+  also use the `:tls_*` keys. Auth credentials are configured as top-level
+  startup options; the Tender forwards derived auth/session values to
+  transports internally. Other atom keys are forwarded to custom
+  transports and ignored by the built-in transports.
+  """
   @type connect_option ::
           {:connect_timeout_ms, pos_integer()}
           | {:info_timeout, pos_integer()}
@@ -49,6 +57,10 @@ defmodule Aerospike.Cluster.Supervisor do
           | {:tls_keyfile, Path.t() | nil}
           | {:tls_verify, :verify_peer | :verify_none}
           | {:tls_opts, keyword()}
+          | {atom(), term()}
+
+  @typedoc "Keyword list of transport connection options."
+  @type connect_options :: [connect_option()]
 
   @typedoc """
   Startup option accepted by `Aerospike.start_link/1` and
@@ -68,6 +80,41 @@ defmodule Aerospike.Cluster.Supervisor do
   the pool supervisor, not the transport, applies them. TCP and TLS tuning
   knobs live inside `:connect_opts` because the transport owns socket setup.
 
+  Pool and lifecycle keys:
+
+    * `:pool_size` — workers per node. Positive integer.
+    * `:min_connections_per_node` — warm connection target per node.
+      Non-negative integer.
+    * `:idle_timeout_ms` — idle worker eviction timeout in milliseconds.
+      Positive integer.
+    * `:max_idle_pings` — maximum idle workers dropped per verification
+      cycle. Positive integer.
+    * `:tend_interval_ms` — automatic tend period in milliseconds.
+      Positive integer.
+    * `:tend_trigger` — `:timer` or `:manual`.
+
+  Breaker and command-default keys:
+
+    * `:failure_threshold` — consecutive tend failures before node
+      demotion. Non-negative integer.
+    * `:circuit_open_threshold` — consecutive node failures before the
+      breaker refuses commands. Non-negative integer.
+    * `:max_concurrent_ops_per_node` — per-node in-flight plus queued
+      command cap. Positive integer.
+    * `:max_retries`, `:sleep_between_retries_ms`, `:replica_policy` —
+      default retry policy. See `t:Aerospike.RetryPolicy.option/0`.
+    * `:use_compression` — cluster-wide request compression opt-in.
+
+  Discovery and identity keys:
+
+    * `:use_services_alternate` — use alternate peer endpoints during
+      discovery.
+    * `:seed_only_cluster` — skip peer discovery and use only configured
+      seeds.
+    * `:cluster_name` — expected server cluster name.
+    * `:application_id` — client application identity sent to supporting
+      servers.
+
   `:user` and `:password` are cluster-wide session-login credentials. Both
   must be present together; neither present disables auth. PKI auth uses the
   TLS client certificate and must omit both.
@@ -77,7 +124,7 @@ defmodule Aerospike.Cluster.Supervisor do
           | {:transport, module()}
           | {:hosts, [String.t(), ...]}
           | {:namespaces, [String.t(), ...]}
-          | {:connect_opts, [connect_option()]}
+          | {:connect_opts, connect_options()}
           | {:pool_size, pos_integer()}
           | {:min_connections_per_node, non_neg_integer()}
           | {:idle_timeout_ms, pos_integer()}
@@ -100,10 +147,15 @@ defmodule Aerospike.Cluster.Supervisor do
           | {:password, String.t()}
           | {:login_timeout_ms, pos_integer()}
 
+  @typedoc "Keyword list of startup options."
+  @type options :: [option()]
+
   @doc """
   Returns the OTP child specification for one named Aerospike cluster.
+
+  Accepted options are documented by `t:option/0`.
   """
-  @spec child_spec([option()]) :: Supervisor.child_spec()
+  @spec child_spec(options()) :: Supervisor.child_spec()
   def child_spec(opts) when is_list(opts) do
     name = Keyword.fetch!(opts, :name)
 
@@ -121,8 +173,11 @@ defmodule Aerospike.Cluster.Supervisor do
 
   Returns the `Supervisor` pid on success. The supervisor registers
   itself under `sup_name/1` so callers can reach it by name.
+
+  Accepted options are documented by `t:option/0`. `:name`,
+  `:transport`, `:hosts`, and `:namespaces` are required.
   """
-  @spec start_link([option()]) :: Supervisor.on_start()
+  @spec start_link(options()) :: Supervisor.on_start()
   def start_link(opts) when is_list(opts) do
     validated = validate!(opts)
     name = Keyword.fetch!(validated, :name)
@@ -157,12 +212,7 @@ defmodule Aerospike.Cluster.Supervisor do
     Supervisor.start_link(children, strategy: :rest_for_one, name: sup_name(name))
   end
 
-  @doc """
-  Starts the partition-map writer child for `name`.
-
-  This function is public because it is referenced from the supervisor child
-  spec. Callers should start clusters through `start_link/1`.
-  """
+  @doc false
   # Resolves TableOwner tables at supervisor init time. TableOwner is already
   # up at this point, so `tables/1` is a synchronous call on a live process.
   @spec start_writer(atom()) :: GenServer.on_start()
@@ -172,12 +222,7 @@ defmodule Aerospike.Cluster.Supervisor do
     PartitionMapWriter.start_link(name: name, tables: tables)
   end
 
-  @doc """
-  Starts the tend-cycle worker child for `name`.
-
-  This function is public because it is referenced from the supervisor child
-  spec. Callers should start clusters through `start_link/1`.
-  """
+  @doc false
   # Resolves TableOwner tables at supervisor init time. TableOwner is already
   # up at this point, so `tables/1` is a synchronous call on a live process.
   @spec start_tender(atom(), keyword()) :: GenServer.on_start()

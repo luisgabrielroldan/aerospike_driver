@@ -27,6 +27,39 @@ defmodule Aerospike.Op.Bit do
   """
   @opaque t :: Aerospike.Op.t()
 
+  @typedoc """
+  Bit operation policy flags integer sent to the server.
+
+  Use the `write_*` helpers in this module and combine multiple flags with
+  `Bitwise.bor/2`.
+  """
+  @type flags :: non_neg_integer()
+
+  @typedoc """
+  Integer overflow action for bit add/subtract operations.
+
+  Use `overflow_fail/0`, `overflow_saturate/0`, or `overflow_wrap/0`.
+  `signed: true` ORs the server signed flag into this value before encoding.
+  """
+  @type overflow_action :: non_neg_integer()
+
+  @typedoc """
+  Common bit operation options.
+
+  Supported keys:
+
+  * `:ctx` - nested CDT context path from `Aerospike.Ctx`.
+  * `:flags` - bit-operation policy flags from the `write_*` helpers. Defaults to `0`.
+  * `:overflow_action` - overflow behavior for `add/5` and `subtract/5`.
+  * `:signed` - when true, ORs the signed flag into `:overflow_action`.
+  """
+  @type opts :: [
+          ctx: Aerospike.Ctx.t(),
+          flags: flags(),
+          overflow_action: overflow_action(),
+          signed: boolean()
+        ]
+
   @resize 0
   @insert 1
   @remove 2
@@ -48,10 +81,42 @@ defmodule Aerospike.Op.Bit do
 
   @signed_flag 1
 
+  @doc "Use default bit write behavior."
+  @spec write_default() :: 0
+  def write_default, do: 0
+
+  @doc "Only create the bit bin when it does not already exist."
+  @spec write_create_only() :: 1
+  def write_create_only, do: 1
+
+  @doc "Only update the bit bin when it already exists."
+  @spec write_update_only() :: 2
+  def write_update_only, do: 2
+
+  @doc "Do not fail the command when a bit operation is denied by write flags."
+  @spec write_no_fail() :: 4
+  def write_no_fail, do: 4
+
+  @doc "Commit other valid operations when this bit operation is denied by write flags."
+  @spec write_partial() :: 8
+  def write_partial, do: 8
+
+  @doc "Fail bit add/subtract on overflow or underflow."
+  @spec overflow_fail() :: 0
+  def overflow_fail, do: 0
+
+  @doc "Saturate bit add/subtract to min/max on overflow or underflow."
+  @spec overflow_saturate() :: 2
+  def overflow_saturate, do: 2
+
+  @doc "Wrap bit add/subtract on overflow or underflow."
+  @spec overflow_wrap() :: 4
+  def overflow_wrap, do: 4
+
   @doc """
   Resizes the bin to `byte_size` bytes using `resize_flags`.
   """
-  @spec resize(String.t(), integer(), integer(), keyword()) :: t()
+  @spec resize(String.t(), integer(), integer(), opts()) :: t()
   def resize(bin_name, byte_size, resize_flags \\ 0, opts \\ [])
       when is_binary(bin_name) and is_integer(byte_size) and is_integer(resize_flags) and
              is_list(opts) do
@@ -61,7 +126,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Inserts `bytes` at `byte_offset` in the bin.
   """
-  @spec insert(String.t(), integer(), binary(), keyword()) :: t()
+  @spec insert(String.t(), integer(), binary(), opts()) :: t()
   def insert(bin_name, byte_offset, bytes, opts \\ [])
       when is_binary(bin_name) and is_integer(byte_offset) and is_binary(bytes) and
              is_list(opts) do
@@ -71,7 +136,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Removes `byte_size` bytes starting at `byte_offset`.
   """
-  @spec remove(String.t(), integer(), integer(), keyword()) :: t()
+  @spec remove(String.t(), integer(), integer(), opts()) :: t()
   def remove(bin_name, byte_offset, byte_size, opts \\ [])
       when is_binary(bin_name) and is_integer(byte_offset) and is_integer(byte_size) and
              is_list(opts) do
@@ -81,7 +146,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Overwrites the bit region `[bit_offset, bit_offset + bit_size)` with bits from `value`.
   """
-  @spec set(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  @spec set(String.t(), integer(), integer(), binary(), opts()) :: t()
   def set(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_binary(value) and is_list(opts) do
@@ -96,7 +161,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Applies bitwise OR of `value` into `[bit_offset, bit_offset + bit_size)`.
   """
-  @spec bw_or(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  @spec bw_or(String.t(), integer(), integer(), binary(), opts()) :: t()
   def bw_or(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_binary(value) and is_list(opts) do
@@ -111,7 +176,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Applies bitwise XOR of `value` into `[bit_offset, bit_offset + bit_size)`.
   """
-  @spec bw_xor(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  @spec bw_xor(String.t(), integer(), integer(), binary(), opts()) :: t()
   def bw_xor(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_binary(value) and is_list(opts) do
@@ -126,7 +191,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Applies bitwise AND of `value` into `[bit_offset, bit_offset + bit_size)`.
   """
-  @spec bw_and(String.t(), integer(), integer(), binary(), keyword()) :: t()
+  @spec bw_and(String.t(), integer(), integer(), binary(), opts()) :: t()
   def bw_and(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_binary(value) and is_list(opts) do
@@ -141,7 +206,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Inverts `[bit_offset, bit_offset + bit_size)`.
   """
-  @spec bw_not(String.t(), integer(), integer(), keyword()) :: t()
+  @spec bw_not(String.t(), integer(), integer(), opts()) :: t()
   def bw_not(bin_name, bit_offset, bit_size, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_list(opts) do
@@ -151,7 +216,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Left shifts `[bit_offset, bit_offset + bit_size)` by `shift` bits.
   """
-  @spec lshift(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  @spec lshift(String.t(), integer(), integer(), integer(), opts()) :: t()
   def lshift(bin_name, bit_offset, bit_size, shift, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_integer(shift) and is_list(opts) do
@@ -161,7 +226,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Right shifts `[bit_offset, bit_offset + bit_size)` by `shift` bits.
   """
-  @spec rshift(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  @spec rshift(String.t(), integer(), integer(), integer(), opts()) :: t()
   def rshift(bin_name, bit_offset, bit_size, shift, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_integer(shift) and is_list(opts) do
@@ -171,9 +236,10 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Adds `value` to a sub-integer in the bitmap.
 
-  Use `signed: true` to OR the signed flag into `overflow_action:`.
+  Supports `flags:`, `overflow_action:`, and `signed:`. Use `signed: true` to
+  OR the signed flag into `overflow_action:`.
   """
-  @spec add(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  @spec add(String.t(), integer(), integer(), integer(), opts()) :: t()
   def add(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_integer(value) and is_list(opts) do
@@ -188,9 +254,10 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Subtracts `value` from a sub-integer in the bitmap.
 
-  Use `signed: true` to OR the signed flag into `overflow_action:`.
+  Supports `flags:`, `overflow_action:`, and `signed:`. Use `signed: true` to
+  OR the signed flag into `overflow_action:`.
   """
-  @spec subtract(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  @spec subtract(String.t(), integer(), integer(), integer(), opts()) :: t()
   def subtract(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_integer(value) and is_list(opts) do
@@ -205,7 +272,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Writes integer `value` into `[bit_offset, bit_offset + bit_size)`.
   """
-  @spec set_int(String.t(), integer(), integer(), integer(), keyword()) :: t()
+  @spec set_int(String.t(), integer(), integer(), integer(), opts()) :: t()
   def set_int(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_integer(value) and is_list(opts) do
@@ -215,7 +282,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Returns `bit_size` bits starting at `bit_offset` as a binary.
   """
-  @spec get(String.t(), integer(), integer(), keyword()) :: t()
+  @spec get(String.t(), integer(), integer(), opts()) :: t()
   def get(bin_name, bit_offset, bit_size, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_list(opts) do
@@ -225,7 +292,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Returns the count of bits set to `1` in `[bit_offset, bit_offset + bit_size)`.
   """
-  @spec count(String.t(), integer(), integer(), keyword()) :: t()
+  @spec count(String.t(), integer(), integer(), opts()) :: t()
   def count(bin_name, bit_offset, bit_size, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_list(opts) do
@@ -235,7 +302,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Returns the offset of the first bit matching `value` when scanning left to right.
   """
-  @spec lscan(String.t(), integer(), integer(), boolean(), keyword()) :: t()
+  @spec lscan(String.t(), integer(), integer(), boolean(), opts()) :: t()
   def lscan(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_boolean(value) and is_list(opts) do
@@ -245,7 +312,7 @@ defmodule Aerospike.Op.Bit do
   @doc """
   Returns the offset of the first bit matching `value` when scanning right to left.
   """
-  @spec rscan(String.t(), integer(), integer(), boolean(), keyword()) :: t()
+  @spec rscan(String.t(), integer(), integer(), boolean(), opts()) :: t()
   def rscan(bin_name, bit_offset, bit_size, value, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_boolean(value) and is_list(opts) do
@@ -257,7 +324,7 @@ defmodule Aerospike.Op.Bit do
 
   Pass `true` for `signed` to interpret the field as signed.
   """
-  @spec get_int(String.t(), integer(), integer(), boolean(), keyword()) :: t()
+  @spec get_int(String.t(), integer(), integer(), boolean(), opts()) :: t()
   def get_int(bin_name, bit_offset, bit_size, signed \\ false, opts \\ [])
       when is_binary(bin_name) and is_integer(bit_offset) and is_integer(bit_size) and
              is_boolean(signed) and is_list(opts) do

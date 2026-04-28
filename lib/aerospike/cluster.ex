@@ -17,10 +17,22 @@ defmodule Aerospike.Cluster do
   alias Aerospike.Key
   alias Aerospike.RetryPolicy
 
-  @typedoc "Cluster identity accepted by read-side helpers."
+  @typedoc """
+  Cluster identity accepted by read-side helpers.
+
+  Pass the cluster registration atom used at startup, or the pid of a
+  process registered under that atom. Unregistered pids raise
+  `ArgumentError`.
+  """
   @type cluster :: atom() | pid()
 
-  @typedoc "ETS table names published for one cluster runtime."
+  @typedoc """
+  ETS table names published for one cluster runtime.
+
+  These names are derived from the cluster identity and are used by the
+  read-side helpers to inspect partition ownership, node generation,
+  runtime metadata, and transaction tracking state.
+  """
   @type tables :: %{
           owners: atom(),
           node_gens: atom(),
@@ -28,14 +40,79 @@ defmodule Aerospike.Cluster do
           txn_tracking: atom()
         }
 
-  @typedoc "Replica selection policy used by read routing."
+  @typedoc """
+  Replica selection policy used by read routing.
+
+  `:master` always routes to the partition master. `:sequence` walks the
+  available replica list using the retry attempt index.
+  """
   @type replica_policy :: :master | :sequence
 
-  @typedoc "Result returned by cluster routing helpers."
+  @typedoc """
+  Result returned by cluster routing helpers.
+
+  Successful routes return the selected node name. `:cluster_not_ready`
+  means the namespace has no complete partition map yet; `:no_master`
+  means the map is present but the target partition has no eligible owner.
+  """
   @type route_result :: {:ok, String.t()} | {:error, :cluster_not_ready | :no_master}
 
-  @typedoc "Active node metadata returned by `nodes/1`."
+  @typedoc """
+  Active node metadata returned by `nodes/1`.
+
+  The host and port are the direct-connect endpoint captured from the
+  Tender's current node handle. Unknown handles are represented with an
+  empty host and port `0`.
+  """
   @type node_info :: %{name: String.t(), host: String.t(), port: :inet.port_number()}
+
+  @typedoc """
+  Warm-up option accepted by `warm_up/2`.
+
+    * `:count` — number of connections to check out per active node.
+      `0` or omitted means the configured pool size. Values above the
+      pool size are capped to the pool size.
+    * `:pool_checkout_timeout` — timeout in milliseconds for each
+      individual pool checkout. Defaults to `5_000`.
+  """
+  @type warm_up_option ::
+          {:count, non_neg_integer()}
+          | {:pool_checkout_timeout, non_neg_integer()}
+
+  @typedoc """
+  Per-node warm-up result returned inside `t:warm_up_result/0`.
+
+  `:status` is `:ok`, `:partial`, or `:error`. `:requested` is the capped
+  per-node target and `:warmed` is the number of successful checkouts.
+  `:error` is `nil` on full success or the checkout failure returned by
+  the pool.
+  """
+  @type warm_up_node_result :: %{
+          required(:host) => String.t(),
+          required(:port) => :inet.port_number() | 0,
+          required(:status) => :ok | :partial | :error,
+          required(:requested) => non_neg_integer(),
+          required(:warmed) => non_neg_integer(),
+          required(:error) => Error.t() | nil
+        }
+
+  @typedoc """
+  Aggregate warm-up report returned by `warm_up/2`.
+
+  The `:nodes` map is keyed by node name and contains one
+  `t:warm_up_node_result/0` per active node.
+  """
+  @type warm_up_result :: %{
+          status: :ok | :partial | :error,
+          requested_per_node: non_neg_integer(),
+          total_requested: non_neg_integer(),
+          total_warmed: non_neg_integer(),
+          nodes_total: non_neg_integer(),
+          nodes_ok: non_neg_integer(),
+          nodes_partial: non_neg_integer(),
+          nodes_error: non_neg_integer(),
+          nodes: %{String.t() => warm_up_node_result()}
+        }
 
   @doc """
   Returns the published ETS tables for `cluster`.
@@ -122,7 +199,7 @@ defmodule Aerospike.Cluster do
   `:count` defaults to the configured pool size for the cluster and is capped
   at that size. `:pool_checkout_timeout` controls each checkout attempt.
   """
-  @spec warm_up(cluster(), keyword()) :: {:ok, map()} | {:error, Error.t()}
+  @spec warm_up(cluster(), [warm_up_option()]) :: {:ok, warm_up_result()} | {:error, Error.t()}
   def warm_up(cluster, opts \\ []) when is_list(opts) do
     with true <- ready?(cluster) || {:error, Error.from_result_code(:cluster_not_ready)},
          {:ok, pool_size} <- configured_pool_size(cluster),

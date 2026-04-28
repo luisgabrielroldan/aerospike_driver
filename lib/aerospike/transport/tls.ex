@@ -81,14 +81,33 @@ defmodule Aerospike.Transport.Tls do
 
   @default_connect_timeout_ms 5_000
 
+  @typedoc """
+  TLS connection option accepted by `connect/3`.
+
+  Includes the plaintext TCP options documented by
+  `Aerospike.Transport.Tcp` plus TLS verification and certificate keys.
+  """
+  @type connect_option ::
+          Tcp.connect_option()
+          | {:tls_name, String.t() | nil}
+          | {:tls_cacertfile, Path.t() | nil}
+          | {:tls_certfile, Path.t() | nil}
+          | {:tls_keyfile, Path.t() | nil}
+          | {:tls_verify, :verify_peer | :verify_none}
+          | {:tls_opts, keyword()}
+
+  @typedoc "Keyword list accepted by `connect/3`."
+  @type connect_opts :: [connect_option()]
+
   @doc """
   Opens a TCP connection, upgrades it with TLS, and returns a transport handle.
 
   TLS-specific options are documented in the module docs. After the handshake,
-  command framing and optional auth use `Aerospike.Transport.Tcp`.
+  command framing and optional auth use `Aerospike.Transport.Tcp`. See
+  `t:connect_option/0` for supported keys.
   """
   @impl true
-  @spec connect(String.t(), :inet.port_number(), keyword()) ::
+  @spec connect(String.t(), :inet.port_number(), connect_opts()) ::
           {:ok, Tcp.conn()} | {:error, Error.t()}
   def connect(host, port, opts \\ []) when is_binary(host) and is_integer(port) do
     connect_timeout_ms = Keyword.get(opts, :connect_timeout_ms, @default_connect_timeout_ms)
@@ -121,25 +140,31 @@ defmodule Aerospike.Transport.Tls do
 
   @doc """
   Sends one pre-encoded command frame over TLS and returns one decoded response body.
+
+  Accepts `:use_compression`, `:message_type`, and `:attempt` in `opts`.
   """
   @impl true
-  @spec command(Tcp.conn(), iodata(), non_neg_integer(), keyword()) ::
+  @spec command(Tcp.conn(), iodata(), non_neg_integer(), Tcp.command_opts()) ::
           {:ok, binary()} | {:error, Error.t()}
   defdelegate command(conn, request, deadline_ms, opts), to: Tcp
 
   @doc """
   Sends one pre-encoded command frame over TLS and reads a bounded multi-frame response.
+
+  Accepts the same options as `command/4`.
   """
   @impl true
-  @spec command_stream(Tcp.conn(), iodata(), non_neg_integer(), keyword()) ::
+  @spec command_stream(Tcp.conn(), iodata(), non_neg_integer(), Tcp.command_opts()) ::
           {:ok, binary()} | {:error, Error.t()}
   defdelegate command_stream(conn, request, deadline_ms, opts), to: Tcp
 
   @doc """
   Sends a streaming TLS request and returns a stream handle for incremental reads.
+
+  Accepts `:use_compression` and `:attempt` in `opts`.
   """
   @impl true
-  @spec stream_open(Tcp.conn(), iodata(), non_neg_integer(), keyword()) ::
+  @spec stream_open(Tcp.conn(), iodata(), non_neg_integer(), Tcp.stream_opts()) ::
           {:ok, Tcp.stream()} | {:error, Error.t()}
   defdelegate stream_open(conn, request, deadline_ms, opts), to: Tcp
 
@@ -160,9 +185,11 @@ defmodule Aerospike.Transport.Tls do
 
   @doc """
   Runs the admin-protocol login or authenticate handshake over TLS.
+
+  See `t:Aerospike.Cluster.NodeTransport.login_opts/0` for supported keys.
   """
   @impl true
-  @spec login(Tcp.conn(), keyword()) ::
+  @spec login(Tcp.conn(), Aerospike.Cluster.NodeTransport.login_opts()) ::
           {:ok, Aerospike.Cluster.NodeTransport.login_reply()} | {:error, Error.t()}
   defdelegate login(conn, opts), to: Tcp
 

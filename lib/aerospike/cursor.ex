@@ -39,6 +39,11 @@ defmodule Aerospike.Cursor do
 
   @doc """
   Serializes a cursor to a URL-safe Base64 string.
+
+  The encoded value is suitable for storage in application state or query
+  parameters. It is driver-owned data; callers should treat it as opaque.
+
+  Raises `ArgumentError` if the cursor contains invalid partition entries.
   """
   @spec encode(t()) :: String.t()
   def encode(%__MODULE__{partitions: parts}) when is_list(parts) do
@@ -60,6 +65,9 @@ defmodule Aerospike.Cursor do
 
   @doc """
   Deserializes a cursor produced by `encode/1`.
+
+  Returns `{:error, %Aerospike.Error{code: :parse_error}}` when the string is
+  not valid cursor data.
   """
   @spec decode(String.t()) :: {:ok, t()} | {:error, Error.t()}
   def decode(encoded) when is_binary(encoded) do

@@ -12,6 +12,32 @@ defmodule Aerospike.Exp.Map do
   @typedoc "Opaque server-side expression."
   @type t :: Exp.t()
 
+  @typedoc """
+  Map selector return type integer.
+
+  Use the `return_*` helpers in this module. `return_inverted/0` may be OR-ed
+  into another return type to invert a selector.
+  """
+  @type return_type :: non_neg_integer()
+
+  @typedoc """
+  Map expression write policy accepted in `opts[:policy]`.
+
+  `:attr` is the map order attributes value. `:flags` is the map write flags
+  integer. Omitted keys default to `0`.
+  """
+  @type policy :: %{optional(:attr) => non_neg_integer(), optional(:flags) => non_neg_integer()}
+
+  @typedoc """
+  Common map expression options.
+
+  Supported keys:
+
+  * `:policy` - map write policy for put/increment expressions.
+  * `:return_type` - selector return type from the `return_*` helpers.
+  """
+  @type opts :: [policy: policy(), return_type: return_type()]
+
   @put 67
   @put_items 68
   @increment 73
@@ -44,87 +70,109 @@ defmodule Aerospike.Exp.Map do
 
   @inverted 0x10000
 
+  @doc "Return no result for a selector expression."
   @spec return_none() :: 0
   def return_none, do: MapOp.return_none()
 
+  @doc "Return selected item indexes."
   @spec return_index() :: 1
   def return_index, do: MapOp.return_index()
 
+  @doc "Return selected reverse indexes, counted from the map end."
   @spec return_reverse_index() :: 2
   def return_reverse_index, do: MapOp.return_reverse_index()
 
+  @doc "Return selected value ranks."
   @spec return_rank() :: 3
   def return_rank, do: MapOp.return_rank()
 
+  @doc "Return selected reverse ranks, counted from the highest value."
   @spec return_reverse_rank() :: 4
   def return_reverse_rank, do: MapOp.return_reverse_rank()
 
+  @doc "Return the selected item count."
   @spec return_count() :: 5
   def return_count, do: MapOp.return_count()
 
+  @doc "Return selected keys."
   @spec return_key() :: 6
   def return_key, do: MapOp.return_key()
 
+  @doc "Return selected values."
   @spec return_value() :: 7
   def return_value, do: MapOp.return_value()
 
+  @doc "Return selected key/value pairs."
   @spec return_key_value() :: 8
   def return_key_value, do: MapOp.return_key_value()
 
+  @doc "Return whether matching entries exist."
   @spec return_exists() :: 13
   def return_exists, do: MapOp.return_exists()
 
+  @doc "Return selected entries as an unordered map."
   @spec return_unordered_map() :: 16
   def return_unordered_map, do: 16
 
+  @doc "Return selected entries as an ordered map."
   @spec return_ordered_map() :: 17
   def return_ordered_map, do: 17
 
+  @doc "Invert the selector so it applies outside the matched range."
   @spec return_inverted() :: 0x10000
   def return_inverted, do: @inverted
 
-  @spec put(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Writes one key/value pair and returns the map size. Supports `policy:`."
+  @spec put(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def put(%Exp{} = bin, %Exp{} = key, %Exp{} = value, opts \\ []) do
     %{attr: attr, flags: flags} = map_policy(opts)
     modify(bin, @put, [key, value, attr | write_flags(flags)])
   end
 
-  @spec put_items(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Writes map expression `values` and returns the map size. Supports `policy:`."
+  @spec put_items(Exp.t(), Exp.t(), opts()) :: t()
   def put_items(%Exp{} = bin, %Exp{} = values, opts \\ []) do
     %{attr: attr, flags: flags} = map_policy(opts)
     modify(bin, @put_items, [values, attr | write_flags(flags)])
   end
 
-  @spec increment(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Increments the numeric value at `key` and returns the final value. Supports `policy:`."
+  @spec increment(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def increment(%Exp{} = bin, %Exp{} = key, %Exp{} = delta, opts \\ []) do
     %{attr: attr} = map_policy(opts)
     modify(bin, @increment, [key, delta, attr])
   end
 
+  @doc "Removes all entries from the map expression."
   @spec clear(Exp.t()) :: t()
   def clear(%Exp{} = bin), do: modify(bin, @clear, [])
 
-  @spec remove_by_key(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes the entry for `key`, returning data selected by `return_type:`."
+  @spec remove_by_key(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_key(%Exp{} = bin, %Exp{} = key, opts \\ []) do
     modify(bin, @remove_by_key, [key_rt(opts), key])
   end
 
-  @spec remove_by_key_list(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes entries matching any key in `keys`, returning selected data."
+  @spec remove_by_key_list(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_key_list(%Exp{} = bin, %Exp{} = keys, opts \\ []) do
     modify(bin, @remove_by_key_list, [key_rt(opts), keys])
   end
 
-  @spec remove_by_key_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, keyword()) :: t()
+  @doc "Removes entries with keys in `[begin_key, end_key)`, returning selected data."
+  @spec remove_by_key_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, opts()) :: t()
   def remove_by_key_range(%Exp{} = bin, begin_key, end_key, opts \\ []) do
     modify(bin, @remove_by_key_range, range_args(key_rt(opts), begin_key, end_key))
   end
 
-  @spec remove_by_key_rel_index_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes entries nearest to `key` and greater by relative `index`."
+  @spec remove_by_key_rel_index_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_key_rel_index_range(%Exp{} = bin, %Exp{} = key, %Exp{} = index, opts \\ []) do
     modify(bin, @remove_by_key_rel_index_range, [key_rt(opts), key, index])
   end
 
-  @spec remove_by_key_rel_index_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes `count` entries nearest to `key` and greater by relative `index`."
+  @spec remove_by_key_rel_index_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_key_rel_index_range_count(
         %Exp{} = bin,
         %Exp{} = key,
@@ -135,27 +183,32 @@ defmodule Aerospike.Exp.Map do
     modify(bin, @remove_by_key_rel_index_range, [key_rt(opts), key, index, count])
   end
 
-  @spec remove_by_value(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes entries equal to `value`, returning data selected by `return_type:`."
+  @spec remove_by_value(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_value(%Exp{} = bin, %Exp{} = value, opts \\ []) do
     modify(bin, @remove_by_value, [value_rt(opts), value])
   end
 
-  @spec remove_by_value_list(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes entries matching any value in `values`, returning selected data."
+  @spec remove_by_value_list(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_value_list(%Exp{} = bin, %Exp{} = values, opts \\ []) do
     modify(bin, @remove_by_value_list, [value_rt(opts), values])
   end
 
-  @spec remove_by_value_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, keyword()) :: t()
+  @doc "Removes entries with values in `[begin_value, end_value)`, returning selected data."
+  @spec remove_by_value_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, opts()) :: t()
   def remove_by_value_range(%Exp{} = bin, begin_value, end_value, opts \\ []) do
     modify(bin, @remove_by_value_range, range_args(value_rt(opts), begin_value, end_value))
   end
 
-  @spec remove_by_value_rel_rank_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes entries nearest to `value` and greater by relative `rank`."
+  @spec remove_by_value_rel_rank_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_value_rel_rank_range(%Exp{} = bin, %Exp{} = value, %Exp{} = rank, opts \\ []) do
     modify(bin, @remove_by_value_rel_rank_range, [value_rt(opts), value, rank])
   end
 
-  @spec remove_by_value_rel_rank_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), keyword()) ::
+  @doc "Removes `count` entries nearest to `value` and greater by relative `rank`."
+  @spec remove_by_value_rel_rank_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), opts()) ::
           t()
   def remove_by_value_rel_rank_range_count(
         %Exp{} = bin,
@@ -167,50 +220,60 @@ defmodule Aerospike.Exp.Map do
     modify(bin, @remove_by_value_rel_rank_range, [value_rt(opts), value, rank, count])
   end
 
-  @spec remove_by_index(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes the entry at `index`, returning data selected by `return_type:`."
+  @spec remove_by_index(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_index(%Exp{} = bin, %Exp{} = index, opts \\ []) do
     modify(bin, @remove_by_index, [key_rt(opts), index])
   end
 
-  @spec remove_by_index_range_from(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes entries from `index` through the end, returning selected data."
+  @spec remove_by_index_range_from(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_index_range_from(%Exp{} = bin, %Exp{} = index, opts \\ []) do
     modify(bin, @remove_by_index_range, [key_rt(opts), index])
   end
 
-  @spec remove_by_index_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes `count` entries from `index`, returning selected data."
+  @spec remove_by_index_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_index_range(%Exp{} = bin, %Exp{} = index, %Exp{} = count, opts \\ []) do
     modify(bin, @remove_by_index_range, [key_rt(opts), index, count])
   end
 
-  @spec remove_by_rank(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes the entry at `rank`, returning data selected by `return_type:`."
+  @spec remove_by_rank(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_rank(%Exp{} = bin, %Exp{} = rank, opts \\ []) do
     modify(bin, @remove_by_rank, [value_rt(opts), rank])
   end
 
-  @spec remove_by_rank_range_from(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes entries from `rank` through the highest rank, returning selected data."
+  @spec remove_by_rank_range_from(Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_rank_range_from(%Exp{} = bin, %Exp{} = rank, opts \\ []) do
     modify(bin, @remove_by_rank_range, [value_rt(opts), rank])
   end
 
-  @spec remove_by_rank_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Removes `count` entries from `rank`, returning selected data."
+  @spec remove_by_rank_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def remove_by_rank_range(%Exp{} = bin, %Exp{} = rank, %Exp{} = count, opts \\ []) do
     modify(bin, @remove_by_rank_range, [value_rt(opts), rank, count])
   end
 
+  @doc "Returns the number of entries in the map expression."
   @spec size(Exp.t()) :: t()
   def size(%Exp{} = bin), do: read(bin, :int, @size, [])
 
-  @spec get_by_key(Exp.t(), Exp.t(), Exp.exp_type(), keyword()) :: t()
+  @doc "Returns the entry for `key`, selected by `return_type:`."
+  @spec get_by_key(Exp.t(), Exp.t(), Exp.exp_type(), opts()) :: t()
   def get_by_key(%Exp{} = bin, %Exp{} = key, value_type, opts \\ []) do
     read(bin, single_return_type(opts, value_type), @get_by_key, [value_rt(opts), key])
   end
 
-  @spec get_by_key_list(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns entries matching any key in `keys`, selected by `return_type:`."
+  @spec get_by_key_list(Exp.t(), Exp.t(), opts()) :: t()
   def get_by_key_list(%Exp{} = bin, %Exp{} = keys, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_key_list, [key_value_rt(opts), keys])
   end
 
-  @spec get_by_key_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, keyword()) :: t()
+  @doc "Returns entries with keys in `[begin_key, end_key)`, selected by `return_type:`."
+  @spec get_by_key_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, opts()) :: t()
   def get_by_key_range(%Exp{} = bin, begin_key, end_key, opts \\ []) do
     read(
       bin,
@@ -220,12 +283,14 @@ defmodule Aerospike.Exp.Map do
     )
   end
 
-  @spec get_by_key_rel_index_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns entries nearest to `key` and greater by relative `index`."
+  @spec get_by_key_rel_index_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def get_by_key_rel_index_range(%Exp{} = bin, %Exp{} = key, %Exp{} = index, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_key_rel_index_range, [key_value_rt(opts), key, index])
   end
 
-  @spec get_by_key_rel_index_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns `count` entries nearest to `key` and greater by relative `index`."
+  @spec get_by_key_rel_index_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def get_by_key_rel_index_range_count(
         %Exp{} = bin,
         %Exp{} = key,
@@ -241,17 +306,20 @@ defmodule Aerospike.Exp.Map do
     ])
   end
 
-  @spec get_by_value(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns entries equal to `value`, selected by `return_type:`."
+  @spec get_by_value(Exp.t(), Exp.t(), opts()) :: t()
   def get_by_value(%Exp{} = bin, %Exp{} = value, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_value, [key_value_rt(opts), value])
   end
 
-  @spec get_by_value_list(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns entries matching any value in `values`, selected by `return_type:`."
+  @spec get_by_value_list(Exp.t(), Exp.t(), opts()) :: t()
   def get_by_value_list(%Exp{} = bin, %Exp{} = values, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_value_list, [key_value_rt(opts), values])
   end
 
-  @spec get_by_value_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, keyword()) :: t()
+  @doc "Returns entries with values in `[begin_value, end_value)`, selected by `return_type:`."
+  @spec get_by_value_range(Exp.t(), Exp.t() | nil, Exp.t() | nil, opts()) :: t()
   def get_by_value_range(%Exp{} = bin, begin_value, end_value, opts \\ []) do
     read(
       bin,
@@ -261,7 +329,8 @@ defmodule Aerospike.Exp.Map do
     )
   end
 
-  @spec get_by_value_rel_rank_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns entries nearest to `value` and greater by relative `rank`."
+  @spec get_by_value_rel_rank_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def get_by_value_rel_rank_range(%Exp{} = bin, %Exp{} = value, %Exp{} = rank, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_value_rel_rank_range, [
       key_value_rt(opts),
@@ -270,7 +339,8 @@ defmodule Aerospike.Exp.Map do
     ])
   end
 
-  @spec get_by_value_rel_rank_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), keyword()) ::
+  @doc "Returns `count` entries nearest to `value` and greater by relative `rank`."
+  @spec get_by_value_rel_rank_range_count(Exp.t(), Exp.t(), Exp.t(), Exp.t(), opts()) ::
           t()
   def get_by_value_rel_rank_range_count(
         %Exp{} = bin,
@@ -287,32 +357,38 @@ defmodule Aerospike.Exp.Map do
     )
   end
 
-  @spec get_by_index(Exp.t(), Exp.t(), Exp.exp_type(), keyword()) :: t()
+  @doc "Returns the entry at `index`, selected by `return_type:`."
+  @spec get_by_index(Exp.t(), Exp.t(), Exp.exp_type(), opts()) :: t()
   def get_by_index(%Exp{} = bin, %Exp{} = index, value_type, opts \\ []) do
     read(bin, single_return_type(opts, value_type), @get_by_index, [key_value_rt(opts), index])
   end
 
-  @spec get_by_index_range_from(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns entries from `index` through the end, selected by `return_type:`."
+  @spec get_by_index_range_from(Exp.t(), Exp.t(), opts()) :: t()
   def get_by_index_range_from(%Exp{} = bin, %Exp{} = index, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_index_range, [key_value_rt(opts), index])
   end
 
-  @spec get_by_index_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns `count` entries from `index`, selected by `return_type:`."
+  @spec get_by_index_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def get_by_index_range(%Exp{} = bin, %Exp{} = index, %Exp{} = count, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_index_range, [key_value_rt(opts), index, count])
   end
 
-  @spec get_by_rank(Exp.t(), Exp.t(), Exp.exp_type(), keyword()) :: t()
+  @doc "Returns the entry at `rank`, selected by `return_type:`."
+  @spec get_by_rank(Exp.t(), Exp.t(), Exp.exp_type(), opts()) :: t()
   def get_by_rank(%Exp{} = bin, %Exp{} = rank, value_type, opts \\ []) do
     read(bin, single_return_type(opts, value_type), @get_by_rank, [key_value_rt(opts), rank])
   end
 
-  @spec get_by_rank_range_from(Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns entries from `rank` through the highest rank, selected by `return_type:`."
+  @spec get_by_rank_range_from(Exp.t(), Exp.t(), opts()) :: t()
   def get_by_rank_range_from(%Exp{} = bin, %Exp{} = rank, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_rank_range, [key_value_rt(opts), rank])
   end
 
-  @spec get_by_rank_range(Exp.t(), Exp.t(), Exp.t(), keyword()) :: t()
+  @doc "Returns `count` entries from `rank`, selected by `return_type:`."
+  @spec get_by_rank_range(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def get_by_rank_range(%Exp{} = bin, %Exp{} = rank, %Exp{} = count, opts \\ []) do
     read(bin, map_return_type(opts), @get_by_rank_range, [key_value_rt(opts), rank, count])
   end
