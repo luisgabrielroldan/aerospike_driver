@@ -7,7 +7,7 @@ defmodule Aerospike.MixProject do
     "--default" => "default",
     "--full" => "full"
   }
-  @version "0.3.0"
+  @version "0.3.1"
   @source_url "https://github.com/luisgabrielroldan/aerospike_driver"
   @description "Aerospike driver for Elixir with an OTP-native cluster runtime"
 

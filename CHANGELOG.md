@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/luisgabrielroldan/aerospike_driver/compare/v0.3.0...v0.3.1) (2026-04-28)
+
+
+### Miscellaneous Chores
+
+* fix release version ([004b847](https://github.com/luisgabrielroldan/aerospike_driver/commit/004b847c82f0b02273c00e591f85ce9162af0c67))
+
 ## 0.3.0 (2026-04-28)
 
 
