@@ -1,5 +1,10 @@
 # Aerospike Driver
 
+[![Hex.pm](https://img.shields.io/hexpm/v/aerospike_driver.svg)](https://hex.pm/packages/aerospike_driver)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/aerospike_driver/)
+[![License](https://img.shields.io/hexpm/l/aerospike_driver.svg)](https://github.com/luisgabrielroldan/aerospike_driver/blob/main/LICENSE)
+[![Last Updated](https://img.shields.io/github/last-commit/luisgabrielroldan/aerospike_driver.svg)](https://github.com/luisgabrielroldan/aerospike_driver/commits/main)
+
 `aerospike_driver` is an OTP-native Aerospike client for Elixir. It provides a
 supervised cluster runtime, partition-aware routing, pooled TCP/TLS
 connections, and a public API for records, batch commands, scans, queries,
