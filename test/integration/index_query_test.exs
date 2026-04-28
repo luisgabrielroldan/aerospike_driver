@@ -13,6 +13,7 @@ defmodule Aerospike.Integration.IndexQueryTest do
   alias Aerospike.Test.IntegrationSupport
 
   @moduletag :integration
+  @moduletag :cluster
 
   @host "localhost"
   @port 3_000

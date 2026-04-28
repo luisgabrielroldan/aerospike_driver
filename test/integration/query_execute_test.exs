@@ -2,6 +2,7 @@ defmodule Aerospike.Integration.QueryExecuteTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :ce
 
   alias Aerospike.ExecuteTask
   alias Aerospike.Filter

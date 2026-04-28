@@ -31,7 +31,9 @@ defmodule Aerospike.RepositoryBoundaryTest do
   defp forbidden_references do
     for file <- tracked_files(),
         scanned_file?(file),
-        content = File.read!(Path.join(@repo_root, file)),
+        path = Path.join(@repo_root, file),
+        File.regular?(path),
+        content = File.read!(path),
         fragment <- @forbidden_fragments,
         String.contains?(content, fragment) do
       {file, fragment}

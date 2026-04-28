@@ -2,6 +2,7 @@ defmodule Aerospike.Integration.OperateCdtTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :ce
 
   alias Aerospike.Ctx
   alias Aerospike.Op.Bit, as: BitOp

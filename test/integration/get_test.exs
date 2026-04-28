@@ -2,6 +2,7 @@ defmodule Aerospike.Integration.GetTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :ce
 
   alias Aerospike.Cluster.Tender
   alias Aerospike.Error

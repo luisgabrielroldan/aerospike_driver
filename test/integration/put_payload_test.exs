@@ -2,6 +2,7 @@ defmodule Aerospike.Integration.PutPayloadTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :ce
 
   alias Aerospike.Error
   alias Aerospike.Key

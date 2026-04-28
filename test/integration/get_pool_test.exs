@@ -28,6 +28,7 @@ defmodule Aerospike.Integration.GetPoolTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :ce
 
   alias Aerospike.Cluster.NodePool
   alias Aerospike.Cluster.NodeSupervisor

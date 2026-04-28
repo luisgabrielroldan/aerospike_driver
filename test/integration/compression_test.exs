@@ -25,6 +25,7 @@ defmodule Aerospike.Integration.CompressionTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :ce
 
   import Bitwise
 

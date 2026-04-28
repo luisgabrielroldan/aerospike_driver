@@ -27,6 +27,7 @@ defmodule Aerospike.Integration.NodeKillTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :cluster
   @moduletag capture_log: true
 
   alias Aerospike.Cluster.Tender

@@ -2,6 +2,7 @@ defmodule Aerospike.Integration.StreamTransportTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :cluster
 
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.ScanResponse
