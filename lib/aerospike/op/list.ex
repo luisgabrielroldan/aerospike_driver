@@ -7,6 +7,7 @@ defmodule Aerospike.Op.List do
   ranks, counts, values, or existence flags.
   """
 
+  alias Aerospike.PolicyInteger
   alias Aerospike.Protocol.CDT
 
   @typedoc """
@@ -15,37 +16,65 @@ defmodule Aerospike.Op.List do
   @opaque t :: Aerospike.Op.t()
 
   @typedoc """
-  List order attribute integer.
-
-  Use `order_unordered/0` or `order_ordered/0` to build this value. Some
-  server operations also accept this value OR-ed with persist-index flags.
+  Raw compatibility value for server integer policy constants.
   """
-  @type order :: non_neg_integer()
+  @type raw_integer :: non_neg_integer() | {:raw, non_neg_integer()}
 
   @typedoc """
-  List write policy flags integer.
-
-  Use `write_default/0`, `write_add_unique/0`, `write_insert_bounded/0`,
-  `write_no_fail/0`, and `write_partial/0`, combined with `Bitwise.bor/2`
-  when more than one flag is needed.
+  List order attribute.
   """
-  @type write_flags :: non_neg_integer()
+  @type order :: :unordered | :ordered | raw_integer()
 
   @typedoc """
-  List selector return type integer.
-
-  Use the `return_*` helpers in this module. `return_inverted/0` may be OR-ed
-  into another return type to invert a selector.
+  List write policy flag or flags.
   """
-  @type return_type :: non_neg_integer()
+  @type write_flag :: :default | :add_unique | :insert_bounded | :no_fail | :partial
+  @type write_flags :: write_flag() | [write_flag()] | raw_integer()
 
   @typedoc """
-  List write policy map accepted in `opts[:policy]`.
+  List selector return type.
+  """
+  @type return_type ::
+          :none
+          | :index
+          | :reverse_index
+          | :rank
+          | :reverse_rank
+          | :count
+          | :value
+          | :exists
+          | :inverted
+          | [
+              :inverted
+              | :index
+              | :reverse_index
+              | :rank
+              | :reverse_rank
+              | :count
+              | :value
+              | :exists
+            ]
+          | raw_integer()
+
+  @typedoc """
+  List sort flag or flags.
+  """
+  @type sort_flags ::
+          :default
+          | :descending
+          | :drop_duplicates
+          | [:descending | :drop_duplicates]
+          | raw_integer()
+
+  @typedoc """
+  List write policy accepted in `opts[:policy]`.
 
   Append, insert, and set operations expect both `:order` and `:flags`;
   increment only reads `:flags`.
   """
-  @type policy :: %{optional(:order) => order(), required(:flags) => write_flags()}
+  @type policy ::
+          %{optional(:order) => order(), optional(:flags) => write_flags()}
+          | [{:order, order()} | {:flags, write_flags()}]
 
   @typedoc """
   Common list operation options.
@@ -53,7 +82,8 @@ defmodule Aerospike.Op.List do
   Supported keys:
 
   * `:ctx` - nested CDT context path from `Aerospike.Ctx`.
-  * `:return_type` - selector return type from the `return_*` helpers.
+  * `:return_type` - selector return type such as `:value`, `:count`, or
+    `[:value, :inverted]`.
   * `:policy` - list write policy map for write operations that document it.
   * `:persist_index` - persist the index for top-level ordered lists.
   * `:pad` - allow nested list creation past the current boundary.
@@ -101,7 +131,6 @@ defmodule Aerospike.Op.List do
   @remove_by_value_rel_rank_range 40
 
   @inverted 0x10000
-  @persist_index 0x10
 
   @doc "Create unordered lists by default."
   @spec order_unordered() :: 0
@@ -170,10 +199,14 @@ defmodule Aerospike.Op.List do
   @doc """
   Sets the list order and write flags for a list bin.
   """
-  @spec set_type(String.t(), integer(), integer(), opts()) :: t()
-  def set_type(bin_name, order, flags, opts \\ [])
-      when is_binary(bin_name) and is_integer(order) and is_integer(flags) do
-    CDT.list_modify_op(bin_name, @set_type, [order, flags], ctx(opts))
+  @spec set_type(String.t(), order(), write_flags(), opts()) :: t()
+  def set_type(bin_name, order, flags, opts \\ []) when is_binary(bin_name) do
+    CDT.list_modify_op(
+      bin_name,
+      @set_type,
+      [PolicyInteger.list_order(order), PolicyInteger.list_write_flags(flags)],
+      ctx(opts)
+    )
   end
 
   @doc """
@@ -182,23 +215,24 @@ defmodule Aerospike.Op.List do
   When `ctx:` is omitted, this sets the top-level bin list order. For nested
   lists, pass `pad: true` to allow create indexes beyond the current boundary.
   """
-  @spec create(String.t(), integer(), opts()) :: t()
-  def create(bin_name, order, opts \\ [])
-      when is_binary(bin_name) and is_integer(order) do
+  @spec create(String.t(), order(), opts()) :: t()
+  def create(bin_name, order, opts \\ []) when is_binary(bin_name) do
+    normalized_order = PolicyInteger.list_order(order)
+
     case ctx(opts) do
       steps when is_list(steps) and steps != [] ->
         CDT.list_create_op(
           bin_name,
-          list_order_flag(order, Keyword.get(opts, :pad, false)),
+          PolicyInteger.list_create_flag(order, Keyword.get(opts, :pad, false)),
           [
             @set_type,
-            order
+            normalized_order
           ],
           steps
         )
 
       _ ->
-        set_order(bin_name, order, opts)
+        set_order(bin_name, normalized_order, opts)
     end
   end
 
@@ -207,16 +241,15 @@ defmodule Aerospike.Op.List do
 
   Pass `persist_index: true` to persist an index for a top-level ordered list.
   """
-  @spec set_order(String.t(), integer(), opts()) :: t()
-  def set_order(bin_name, order, opts \\ [])
-      when is_binary(bin_name) and is_integer(order) do
+  @spec set_order(String.t(), order(), opts()) :: t()
+  def set_order(bin_name, order, opts \\ []) when is_binary(bin_name) do
     CDT.list_modify_op(bin_name, @set_type, [order_attr(order, opts)], ctx(opts))
   end
 
   @doc """
   Appends a value to a list bin.
 
-  Pass `policy: %{order: order, flags: flags}` to include list order and write
+  Pass `policy: [order: order, flags: flags]` to include list order and write
   flags in the operation payload.
   """
   @spec append(String.t(), term(), opts()) :: t()
@@ -227,7 +260,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Appends multiple values to a list bin.
 
-  Pass `policy: %{order: order, flags: flags}` to include list order and write
+  Pass `policy: [order: order, flags: flags]` to include list order and write
   flags in the operation payload.
   """
   @spec append_items(String.t(), list(), opts()) :: t()
@@ -308,7 +341,7 @@ defmodule Aerospike.Op.List do
   @doc """
   Sets the value at `index`.
 
-  Pass `policy: %{order: order, flags: flags}` to include list order and write
+  Pass `policy: [order: order, flags: flags]` to include list order and write
   flags in the operation payload.
   """
   @spec set(String.t(), integer(), term(), opts()) :: t()
@@ -349,10 +382,11 @@ defmodule Aerospike.Op.List do
   @doc """
   Sorts the list with `sort_flags`.
   """
-  @spec sort(String.t(), integer(), opts()) :: t()
-  def sort(bin_name, sort_flags \\ 0, opts \\ [])
-      when is_binary(bin_name) and is_integer(sort_flags) do
-    CDT.list_modify_op(bin_name, @sort, [sort_flags], ctx(opts))
+  @spec sort(String.t(), sort_flags() | opts(), opts()) :: t()
+  def sort(bin_name, sort_flags_or_opts \\ :default, opts \\ []) when is_binary(bin_name) do
+    {sort_flags, opts} = sort_args(sort_flags_or_opts, opts)
+
+    CDT.list_modify_op(bin_name, @sort, [PolicyInteger.list_sort_flags(sort_flags)], ctx(opts))
   end
 
   @doc """
@@ -619,30 +653,38 @@ defmodule Aerospike.Op.List do
   end
 
   defp ctx(opts), do: Keyword.get(opts, :ctx)
-  defp rt(opts), do: Keyword.get(opts, :return_type, return_value())
+
+  defp rt(opts),
+    do: opts |> Keyword.get(:return_type, return_value()) |> PolicyInteger.list_return_type()
 
   defp order_attr(order, opts) do
-    case Keyword.get(opts, :persist_index, false) do
-      true -> Bitwise.bor(order, @persist_index)
-      false -> order
-    end
+    PolicyInteger.list_order_attr(order, Keyword.get(opts, :persist_index, false))
   end
-
-  defp list_order_flag(1, _pad), do: 0xC0
-  defp list_order_flag(_order, true), do: 0x80
-  defp list_order_flag(_order, false), do: 0x40
 
   defp list_policy(opts) do
     case Keyword.get(opts, :policy) do
-      nil -> []
-      %{order: order, flags: flags} -> [order, flags]
+      nil ->
+        []
+
+      policy ->
+        %{order: order, flags: flags} = PolicyInteger.list_policy(policy)
+        [order, flags]
     end
   end
 
   defp increment_policy(opts) do
     case Keyword.get(opts, :policy) do
       nil -> []
-      %{flags: flags} -> [flags]
+      policy -> [PolicyInteger.list_policy(policy).flags]
     end
   end
+
+  defp sort_args(opts, []) when is_list(opts) do
+    case Keyword.keyword?(opts) do
+      true -> {Keyword.get(opts, :sort_flags, :default), opts}
+      false -> {opts, []}
+    end
+  end
+
+  defp sort_args(sort_flags, opts), do: {sort_flags, opts}
 end

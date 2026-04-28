@@ -7,6 +7,7 @@ defmodule Aerospike.Op.Map do
   values, key/value pairs, counts, ranks, indexes, or existence flags.
   """
 
+  alias Aerospike.PolicyInteger
   alias Aerospike.Protocol.CDT
 
   @typedoc """
@@ -15,38 +16,71 @@ defmodule Aerospike.Op.Map do
   @opaque t :: Aerospike.Op.t()
 
   @typedoc """
-  Map order attribute integer.
-
-  Use `order_unordered/0`, `order_key_ordered/0`, or
-  `order_key_value_ordered/0` to build this value. Some operations also accept
-  this value OR-ed with persist-index flags.
+  Raw compatibility value for server integer policy constants.
   """
-  @type order :: non_neg_integer()
+  @type raw_integer :: non_neg_integer() | {:raw, non_neg_integer()}
 
   @typedoc """
-  Map write policy flags integer.
-
-  Use `write_default/0`, `write_create_only/0`, `write_update_only/0`,
-  `write_no_fail/0`, and `write_partial/0`, combined with `Bitwise.bor/2`
-  when more than one flag is needed.
+  Map order attribute.
   """
-  @type write_flags :: non_neg_integer()
+  @type order ::
+          :unordered
+          | :key_ordered
+          | :key_value_ordered
+          | raw_integer()
 
   @typedoc """
-  Map selector return type integer.
-
-  Use the `return_*` helpers in this module. `return_inverted/0` may be OR-ed
-  into another return type to invert a selector.
+  Map write policy flag or flags.
   """
-  @type return_type :: non_neg_integer()
+  @type write_flag :: :default | :create_only | :update_only | :no_fail | :partial
+  @type write_flags :: write_flag() | [write_flag()] | raw_integer()
+
+  @typedoc """
+  Map selector return type.
+  """
+  @type return_type ::
+          :none
+          | :index
+          | :reverse_index
+          | :rank
+          | :reverse_rank
+          | :count
+          | :key
+          | :value
+          | :key_value
+          | :exists
+          | :unordered_map
+          | :ordered_map
+          | :inverted
+          | [
+              :inverted
+              | :index
+              | :reverse_index
+              | :rank
+              | :reverse_rank
+              | :count
+              | :key
+              | :value
+              | :key_value
+              | :exists
+              | :unordered_map
+              | :ordered_map
+            ]
+          | raw_integer()
 
   @typedoc """
   Map write policy accepted in `opts[:policy]`.
 
-  `:attr` is the map order attributes value. `:flags` is the map write flags
-  integer. Omitted keys default to `0`.
+  Prefer `:order` for the map order. `:attr` remains accepted for
+  compatibility. Omitted keys default to `0`.
   """
-  @type policy :: %{optional(:attr) => order(), optional(:flags) => write_flags()}
+  @type policy ::
+          %{
+            optional(:order) => order(),
+            optional(:attr) => order(),
+            optional(:flags) => write_flags()
+          }
+          | [{:order, order()} | {:attr, order()} | {:flags, write_flags()}]
 
   @typedoc """
   Common map operation options.
@@ -98,8 +132,6 @@ defmodule Aerospike.Op.Map do
   @get_by_value_rel_rank_range 110
 
   @inverted 0x10000
-  @persist_index 0x10
-
   @doc "Create unordered maps by default."
   @spec order_unordered() :: 0
   def order_unordered, do: 0
@@ -190,32 +222,41 @@ defmodule Aerospike.Op.Map do
   When `ctx:` is omitted, this sets the top-level bin map order. Nested map
   creation ignores `persist_index:` because server indexes are top-level only.
   """
-  @spec create(String.t(), integer(), opts()) :: t()
+  @spec create(String.t(), order(), opts()) :: t()
   def create(bin_name, order, opts \\ [])
-      when is_binary(bin_name) and is_integer(order) do
+      when is_binary(bin_name) do
+    normalized_order = PolicyInteger.map_order(order)
+
     case ctx(opts) do
       steps when is_list(steps) and steps != [] ->
-        CDT.map_create_op(bin_name, map_order_flag(order), [@set_policy, order], steps)
+        CDT.map_create_op(
+          bin_name,
+          PolicyInteger.map_create_flag(order),
+          [@set_policy, normalized_order],
+          steps
+        )
 
       _ ->
-        set_policy(bin_name, order_attr(order, opts), opts)
+        set_policy(bin_name, normalized_order, opts)
     end
   end
 
   @doc """
   Sets the map order attributes.
   """
-  @spec set_policy(String.t(), integer(), opts()) :: t()
+  @spec set_policy(String.t(), order(), opts()) :: t()
   def set_policy(bin_name, attributes, opts \\ [])
-      when is_binary(bin_name) and is_integer(attributes) do
+      when is_binary(bin_name) do
     steps = ctx(opts)
-    CDT.map_modify_op(bin_name, @set_policy, [policy_attr(attributes, steps)], steps)
+    attributes = attributes |> order_attr(opts) |> policy_attr(steps)
+
+    CDT.map_modify_op(bin_name, @set_policy, [attributes], steps)
   end
 
   @doc """
   Writes one key/value pair and returns the map size.
 
-  Pass `policy: %{attr: attr, flags: flags}` to include map order attributes
+  Pass `policy: [order: order, flags: flags]` to include map order attributes
   and write flags in the operation payload.
   """
   @spec put(String.t(), term(), term(), opts()) :: t()
@@ -227,7 +268,7 @@ defmodule Aerospike.Op.Map do
   @doc """
   Writes multiple key/value pairs and returns the map size.
 
-  Pass `policy: %{attr: attr, flags: flags}` to include map order attributes
+  Pass `policy: [order: order, flags: flags]` to include map order attributes
   and write flags in the operation payload.
   """
   @spec put_items(String.t(), map(), opts()) :: t()
@@ -624,30 +665,26 @@ defmodule Aerospike.Op.Map do
 
   defp ctx(opts), do: Keyword.get(opts, :ctx)
 
-  defp key_rt(opts), do: Keyword.get(opts, :return_type, return_key())
-  defp key_value_rt(opts), do: Keyword.get(opts, :return_type, return_key_value())
-  defp value_rt(opts), do: Keyword.get(opts, :return_type, return_value())
+  defp key_rt(opts),
+    do: opts |> Keyword.get(:return_type, :key) |> PolicyInteger.map_return_type()
+
+  defp key_value_rt(opts),
+    do: opts |> Keyword.get(:return_type, :key_value) |> PolicyInteger.map_return_type()
+
+  defp value_rt(opts),
+    do: opts |> Keyword.get(:return_type, :value) |> PolicyInteger.map_return_type()
 
   defp order_attr(order, opts) do
-    case Keyword.get(opts, :persist_index, false) do
-      true -> Bitwise.bor(order, @persist_index)
-      false -> order
-    end
+    PolicyInteger.map_order_attr(order, Keyword.get(opts, :persist_index, false))
   end
 
   defp policy_attr(attributes, steps) when is_list(steps) and steps != [] do
-    Bitwise.band(attributes, Bitwise.bnot(@persist_index))
+    PolicyInteger.strip_persist_index(attributes)
   end
 
   defp policy_attr(attributes, _steps), do: attributes
 
-  defp map_order_flag(0), do: 0x40
-  defp map_order_flag(1), do: 0x80
-  defp map_order_flag(3), do: 0xC0
-
-  defp map_policy(opts) do
-    Map.merge(%{attr: 0, flags: 0}, Keyword.get(opts, :policy, %{}))
-  end
+  defp map_policy(opts), do: opts |> Keyword.get(:policy) |> PolicyInteger.map_policy()
 
   defp write_flags(0), do: []
   defp write_flags(flags), do: [flags]

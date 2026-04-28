@@ -32,21 +32,27 @@ defmodule Aerospike.Op.BitTest do
   test "modify builders encode reference op codes and payloads" do
     cases = [
       {Bit.resize("bits", 16), [0, 16, 0, 0]},
-      {Bit.resize("bits", 16, 4, flags: Bit.write_update_only()), [0, 16, 2, 4]},
-      {Bit.insert("bits", 1, <<0x0F>>, flags: Bit.write_update_only()), [1, 1, <<4, 0x0F>>, 2]},
-      {Bit.remove("bits", 1, 2, flags: 3), [2, 1, 2, 3]},
-      {Bit.set("bits", 0, 8, <<0xF0>>, flags: Bit.write_no_fail()), [3, 0, 8, <<4, 0xF0>>, 4]},
-      {Bit.bw_or("bits", 0, 8, <<0x0F>>, flags: 5), [4, 0, 8, <<4, 0x0F>>, 5]},
-      {Bit.bw_xor("bits", 0, 8, <<0xFF>>, flags: 6), [5, 0, 8, <<4, 0xFF>>, 6]},
-      {Bit.bw_and("bits", 0, 8, <<0xF0>>, flags: 7), [6, 0, 8, <<4, 0xF0>>, 7]},
-      {Bit.bw_not("bits", 0, 8, flags: Bit.write_partial()), [7, 0, 8, 8]},
-      {Bit.lshift("bits", 0, 8, 2, flags: 9), [8, 0, 8, 2, 9]},
-      {Bit.rshift("bits", 0, 8, 3, flags: 10), [9, 0, 8, 3, 10]},
-      {Bit.add("bits", 0, 8, 1, flags: 11, overflow_action: Bit.overflow_saturate()),
-       [10, 0, 8, 1, 11, 2]},
-      {Bit.subtract("bits", 0, 8, 1, flags: 12, overflow_action: Bit.overflow_wrap()),
+      {Bit.resize("bits", 16, :shrink_only, flags: :update_only), [0, 16, 2, 4]},
+      {Bit.insert("bits", 1, <<0x0F>>, flags: :update_only), [1, 1, <<4, 0x0F>>, 2]},
+      {Bit.remove("bits", 1, 2, flags: [:create_only, :update_only]), [2, 1, 2, 3]},
+      {Bit.set("bits", 0, 8, <<0xF0>>, flags: :no_fail), [3, 0, 8, <<4, 0xF0>>, 4]},
+      {Bit.bw_or("bits", 0, 8, <<0x0F>>, flags: [:create_only, :no_fail]),
+       [4, 0, 8, <<4, 0x0F>>, 5]},
+      {Bit.bw_xor("bits", 0, 8, <<0xFF>>, flags: [:update_only, :no_fail]),
+       [5, 0, 8, <<4, 0xFF>>, 6]},
+      {Bit.bw_and("bits", 0, 8, <<0xF0>>, flags: [:create_only, :update_only, :no_fail]),
+       [6, 0, 8, <<4, 0xF0>>, 7]},
+      {Bit.bw_not("bits", 0, 8, flags: :partial), [7, 0, 8, 8]},
+      {Bit.lshift("bits", 0, 8, 2, flags: [:create_only, :partial]), [8, 0, 8, 2, 9]},
+      {Bit.rshift("bits", 0, 8, 3, flags: [:update_only, :partial]), [9, 0, 8, 3, 10]},
+      {Bit.add("bits", 0, 8, 1,
+         flags: [:create_only, :update_only, :partial],
+         overflow_action: :saturate
+       ), [10, 0, 8, 1, 11, 2]},
+      {Bit.subtract("bits", 0, 8, 1, flags: [:no_fail, :partial], overflow_action: :wrap),
        [11, 0, 8, 1, 12, 4]},
-      {Bit.set_int("bits", 0, 8, 42, flags: 13), [12, 0, 8, 42, 13]}
+      {Bit.set_int("bits", 0, 8, 42, flags: [:create_only, :no_fail, :partial]),
+       [12, 0, 8, 42, 13]}
     ]
 
     Enum.each(cases, fn {op, expected_payload} ->
@@ -70,6 +76,10 @@ defmodule Aerospike.Op.BitTest do
              0,
              bor(Bit.overflow_wrap(), 1)
            ]
+  end
+
+  test "raw integer escape hatches preserve bit policy values" do
+    assert payload(Bit.resize("bits", 16, {:raw, 3}, flags: {:raw, 5})) == [0, 16, 5, 3]
   end
 
   test "default-arity wrappers encode expected default flags" do

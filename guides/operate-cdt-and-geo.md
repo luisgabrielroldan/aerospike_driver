@@ -56,23 +56,24 @@ values, indexes, ranks, counts, or an existence flag.
 {:ok, record} =
   Aerospike.operate(:aerospike, key, [
     Aerospike.Op.List.get_by_index("events", 0,
-      return_type: Aerospike.Op.List.return_value()
+      return_type: :value
     ),
     Aerospike.Op.List.get_by_rank("events", -1,
-      return_type: Aerospike.Op.List.return_value()
+      return_type: :value
     ),
     Aerospike.Op.List.get_by_value("events", "opened",
-      return_type: Aerospike.Op.List.return_exists()
+      return_type: :exists
     )
   ])
 ```
 
-List write policies are passed as raw server policy integers. Defaults are the
+List write policies use mnemonic order and flag values. Defaults are the
 safest choice; set policy values only when your application needs ordered-list
-or write-flag behavior.
+or write-flag behavior. Advanced compatibility callers can still pass integer
+values, including `{:raw, integer}` for unnamed server values.
 
 ```elixir
-Aerospike.Op.List.append("events", "clicked", policy: %{order: 0, flags: 0})
+Aerospike.Op.List.append("events", "clicked", policy: [order: :ordered, flags: :add_unique])
 ```
 
 ## Map Operations
@@ -90,7 +91,7 @@ key = Aerospike.key("test", "profiles", "user:stats")
     Aerospike.Op.Map.increment("stats", "views", 1),
     Aerospike.Op.Map.put("stats", "updated_by", "worker-1"),
     Aerospike.Op.Map.get_by_key("stats", "views",
-      return_type: Aerospike.Op.Map.return_value()
+      return_type: :value
     )
   ])
 
@@ -106,26 +107,28 @@ when the desired shape matters.
 {:ok, record} =
   Aerospike.operate(:aerospike, key, [
     Aerospike.Op.Map.get_by_key("stats", "views",
-      return_type: Aerospike.Op.Map.return_value()
+      return_type: :value
     ),
     Aerospike.Op.Map.get_by_rank("stats", -1,
-      return_type: Aerospike.Op.Map.return_key_value()
+      return_type: :key_value
     ),
     Aerospike.Op.Map.get_by_value("stats", 1,
-      return_type: Aerospike.Op.Map.return_key()
+      return_type: :key
     )
   ])
 
 record.bins["stats"]
 ```
 
-Map write policies are also thin wrappers around server policy integers.
-`attr: 0` uses the default unordered map behavior; non-zero values request
-server map attributes such as ordered maps. `flags:` applies write flags when
-the operation supports them.
+Map write policies use mnemonic order and flag values. `:order` controls map
+ordering and `:flags` applies write flags when the operation supports them.
+Advanced compatibility callers can still pass integer values, including
+`{:raw, integer}` for unnamed server values.
 
 ```elixir
-Aerospike.Op.Map.put_items("stats", %{"likes" => 2}, policy: %{attr: 0, flags: 0})
+Aerospike.Op.Map.put_items("stats", %{"likes" => 2},
+  policy: [order: :key_ordered, flags: :update_only]
+)
 ```
 
 ## Nested CDT Paths
@@ -180,7 +183,7 @@ key = Aerospike.key("test", "profiles", "user:nested-scores")
         Aerospike.Ctx.list_index(0),
         Aerospike.Ctx.map_key("scores")
       ],
-      return_type: Aerospike.Op.List.return_value()
+      return_type: :value
     )
   ])
 

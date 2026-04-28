@@ -3,10 +3,9 @@ defmodule Aerospike.Exp.Bit do
   Bit expression helpers for blob expressions.
   """
 
-  import Bitwise
-
   alias Aerospike.Exp
   alias Aerospike.Exp.Module
+  alias Aerospike.PolicyInteger
 
   @typedoc "Opaque server-side expression."
   @type t :: Exp.t()
@@ -16,13 +15,13 @@ defmodule Aerospike.Exp.Bit do
 
   Supported keys:
 
-  * `:flags` - raw server bit-operation policy flags. Defaults to `0`.
+  * `:flags` - bit-operation write flags. Defaults to `:default`.
   * `:overflow_action` - overflow behavior for `add/5` and `subtract/5`.
-  * `:signed` - when true, ORs the signed flag into `:overflow_action`.
+  * `:signed` - when true, adds the signed flag to `:overflow_action`.
   """
   @type opts :: [
-          flags: non_neg_integer(),
-          overflow_action: non_neg_integer(),
+          flags: atom() | [atom()] | non_neg_integer() | {:raw, non_neg_integer()},
+          overflow_action: atom() | non_neg_integer() | {:raw, non_neg_integer()},
           signed: boolean()
         ]
 
@@ -45,12 +44,15 @@ defmodule Aerospike.Exp.Bit do
   @rscan 53
   @get_int 54
 
-  @signed_flag 1
-
   @doc "Resizes the blob expression to `byte_size` bytes using `resize_flags`."
-  @spec resize(Exp.t(), Exp.t(), integer(), opts()) :: t()
-  def resize(%Exp{} = bin, %Exp{} = byte_size, resize_flags \\ 0, opts \\ []) do
-    modify(bin, @resize, [byte_size, flags(opts), resize_flags])
+  @spec resize(
+          Exp.t(),
+          Exp.t(),
+          atom() | [atom()] | non_neg_integer() | {:raw, non_neg_integer()},
+          opts()
+        ) :: t()
+  def resize(%Exp{} = bin, %Exp{} = byte_size, resize_flags \\ :default, opts \\ []) do
+    modify(bin, @resize, [byte_size, flags(opts), PolicyInteger.bit_resize_flags(resize_flags)])
   end
 
   @doc "Inserts a byte-string expression at `byte_offset`."
@@ -162,7 +164,7 @@ defmodule Aerospike.Exp.Bit do
   def get_int(%Exp{} = bin, %Exp{} = bit_offset, %Exp{} = bit_size, signed \\ false) do
     args =
       if signed do
-        [bit_offset, bit_size, @signed_flag]
+        [bit_offset, bit_size, PolicyInteger.bit_signed_flag()]
       else
         [bit_offset, bit_size]
       end
@@ -172,15 +174,14 @@ defmodule Aerospike.Exp.Bit do
 
   defp read(bin, type, op_code, args), do: Module.bit_read(bin, type, op_code, args)
   defp modify(bin, op_code, args), do: Module.bit_modify(bin, op_code, args)
-  defp flags(opts), do: Keyword.get(opts, :flags, 0)
+  defp flags(opts), do: opts |> Keyword.get(:flags, :default) |> PolicyInteger.bit_write_flags()
 
-  defp overflow_action(opts) do
-    action = Keyword.get(opts, :overflow_action, 0)
+  defp overflow_action(opts),
+    do:
+      PolicyInteger.bit_overflow_action(
+        Keyword.get(opts, :overflow_action, :default),
+        signed?(opts)
+      )
 
-    if Keyword.get(opts, :signed, false) do
-      action ||| @signed_flag
-    else
-      action
-    end
-  end
+  defp signed?(opts), do: Keyword.get(opts, :signed, false) == true
 end

@@ -8,7 +8,9 @@ defmodule Aerospike.Runtime.TxnMonitorTest do
   alias Aerospike.Key
   alias Aerospike.Protocol.AsmMsg
   alias Aerospike.Protocol.AsmMsg.Field
+  alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.Message
+  alias Aerospike.Protocol.MessagePack
   alias Aerospike.Runtime.TxnMonitor
   alias Aerospike.Runtime.TxnOps
   alias Aerospike.Test.ReplicasFixture
@@ -79,6 +81,11 @@ defmodule Aerospike.Runtime.TxnMonitorTest do
     assert :ok = TxnMonitor.register_key(conn, txn, key)
     assert {:ok, %{namespace: "test"}} = TxnOps.get_tracking(conn, txn)
     assert TxnOps.get_deadline(conn, txn) == 321
+
+    assert %AsmMsg{operations: operations} = last_monitor_msg(fake)
+    assert %Operation{op_type: op_type, bin_name: "keyds", data: data} = List.last(operations)
+    assert op_type == Operation.op_cdt_modify()
+    assert MessagePack.unpack!(data) == [1, key.digest, 1, 13]
   end
 
   test "register_key/4 is a no-op for already tracked writes and roll helpers validate initialization",
@@ -121,6 +128,15 @@ defmodule Aerospike.Runtime.TxnMonitorTest do
     %AsmMsg{result_code: result_code, fields: fields}
     |> AsmMsg.encode()
     |> IO.iodata_to_binary()
+  end
+
+  defp last_monitor_msg(fake) do
+    request = fake |> Fake.last_command_request("A1") |> IO.iodata_to_binary()
+
+    assert {:ok, {2, 3, body}} = Message.decode(request)
+    assert {:ok, %AsmMsg{} = msg} = AsmMsg.decode(body)
+
+    msg
   end
 
   defp script_single_node_cluster(fake) do

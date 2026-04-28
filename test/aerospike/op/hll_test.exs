@@ -26,10 +26,12 @@ defmodule Aerospike.Op.HLLTest do
   test "modify builders encode reference op codes and payloads" do
     cases = [
       {HLL.init("hll"), [0, -1, -1, 0]},
-      {HLL.init("hll", 10, 20, flags: HLL.write_update_only()), [0, 10, 20, 2]},
+      {HLL.init("hll", 10, 20, flags: :update_only), [0, 10, 20, 2]},
       {HLL.add("hll", ["a", "b"]), [1, ["a", "b"], -1, -1, 0]},
-      {HLL.add("hll", ["a", {:bytes, <<1, 2>>}], 8, 16, flags: 3),
+      {HLL.add("hll", ["a", {:bytes, <<1, 2>>}], 8, 16, flags: [:create_only, :update_only]),
        [1, ["a", <<4, 1, 2>>], 8, 16, 3]},
+      {HLL.set_union("hll", [{:bytes, <<1, 2, 3>>}], flags: [:no_fail, :allow_fold]),
+       [2, [<<4, 1, 2, 3>>], 12]},
       {HLL.set_union("hll", [{:bytes, <<1, 2, 3>>}], flags: HLL.write_no_fail()),
        [2, [<<4, 1, 2, 3>>], 4]},
       {HLL.refresh_count("hll"), [3]},
@@ -39,6 +41,10 @@ defmodule Aerospike.Op.HLLTest do
     Enum.each(cases, fn {op, expected_payload} ->
       assert_op(op, Operation.op_hll_modify(), expected_payload)
     end)
+  end
+
+  test "raw integer escape hatch preserves HLL policy values" do
+    assert payload(HLL.init("hll", 10, 20, flags: {:raw, 9})) == [0, 10, 20, 9]
   end
 
   test "read builders encode reference op codes and payloads" do

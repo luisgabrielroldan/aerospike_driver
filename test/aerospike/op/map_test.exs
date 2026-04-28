@@ -41,17 +41,19 @@ defmodule Aerospike.Op.MapTest do
 
   test "modify builders encode reference op codes and payloads" do
     cases = [
-      {MapOp.create("items", MapOp.order_key_ordered()), [64, 1]},
-      {MapOp.create("items", MapOp.order_key_ordered(), persist_index: true), [64, 0x11]},
-      {MapOp.set_policy("items", 1), [64, 1]},
+      {MapOp.create("items", :key_ordered), [64, 1]},
+      {MapOp.create("items", :key_ordered, persist_index: true), [64, 0x11]},
+      {MapOp.set_policy("items", :key_ordered), [64, 1]},
       {MapOp.put("items", "a", 1), [67, "a", 1, 0]},
-      {MapOp.put("items", "a", 1, policy: %{attr: 1}), [67, "a", 1, 1]},
-      {MapOp.put("items", "a", 1, policy: %{attr: 1, flags: 2}), [67, "a", 1, 1, 2]},
+      {MapOp.put("items", "a", 1, policy: [order: :key_ordered]), [67, "a", 1, 1]},
+      {MapOp.put("items", "a", 1, policy: [order: :key_ordered, flags: :update_only]),
+       [67, "a", 1, 1, 2]},
       {MapOp.put_items("items", %{"a" => 1}), [68, %{"a" => 1}, 0]},
-      {MapOp.put_items("items", %{"a" => 1}, policy: %{attr: 1, flags: 2}),
+      {MapOp.put_items("items", %{"a" => 1}, policy: [order: :key_ordered, flags: [:update_only]]),
        [68, %{"a" => 1}, 1, 2]},
       {MapOp.increment("items", "count", 5), [73, "count", 5, 0]},
-      {MapOp.increment("items", "count", 1.5, policy: %{attr: 1}), [73, "count", 1.5, 1]},
+      {MapOp.increment("items", "count", 1.5, policy: [order: :key_ordered]),
+       [73, "count", 1.5, 1]},
       {MapOp.decrement("items", "count", 2), [74, "count", 2, 0]},
       {MapOp.clear("items"), [75]}
     ]
@@ -113,22 +115,51 @@ defmodule Aerospike.Op.MapTest do
   end
 
   test "return_type option overrides selector defaults" do
-    assert payload(MapOp.get_by_index("items", 1, return_type: MapOp.return_value())) == [
+    assert payload(MapOp.get_by_index("items", 1, return_type: :value)) == [
              98,
              7,
              1
            ]
 
-    assert payload(MapOp.remove_by_key("items", "a", return_type: MapOp.return_none())) == [
+    assert payload(MapOp.remove_by_key("items", "a", return_type: :none)) == [
              76,
              0,
              "a"
            ]
 
-    assert payload(MapOp.remove_by_rank("items", -1, return_type: MapOp.return_key())) == [
+    assert payload(MapOp.remove_by_rank("items", -1, return_type: :key)) == [
              79,
              6,
              -1
+           ]
+
+    assert payload(MapOp.get_by_value("items", "a", return_type: [:key, :inverted])) == [
+             102,
+             0x10006,
+             "a"
+           ]
+  end
+
+  test "policy keeps raw integer compatibility and prefers order over attr" do
+    assert payload(MapOp.put("items", "a", 1, policy: [attr: 1, flags: 2])) == [
+             67,
+             "a",
+             1,
+             1,
+             2
+           ]
+
+    assert payload(MapOp.put("items", "a", 1, policy: [attr: 3, order: :key_ordered])) == [
+             67,
+             "a",
+             1,
+             1
+           ]
+
+    assert payload(MapOp.get_by_index("items", 1, return_type: {:raw, 17})) == [
+             98,
+             17,
+             1
            ]
   end
 
@@ -155,7 +186,7 @@ defmodule Aerospike.Op.MapTest do
 
   test "create builder applies order flags to the final context step" do
     ctx = [Ctx.map_key("outer"), Ctx.map_key("inner")]
-    op = MapOp.create("items", MapOp.order_key_value_ordered(), ctx: ctx)
+    op = MapOp.create("items", :key_value_ordered, ctx: ctx)
 
     assert payload(op) == [
              255,

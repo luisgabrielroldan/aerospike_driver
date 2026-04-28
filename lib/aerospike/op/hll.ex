@@ -11,10 +11,11 @@ defmodule Aerospike.Op.HLL do
   16, min-hash bits 4 to 58, and their sum must not exceed 64.
 
   Multi-HLL read operations accept `hlls` as a list of `{:bytes, blob}` HLL
-  values. Modify operations accept raw integer `flags:` values for the server
+  values. Modify operations accept mnemonic `flags:` values for the server
   write policy.
   """
 
+  alias Aerospike.PolicyInteger
   alias Aerospike.Protocol.CDT
 
   @typedoc """
@@ -23,19 +24,21 @@ defmodule Aerospike.Op.HLL do
   @opaque t :: Aerospike.Op.t()
 
   @typedoc """
-  HyperLogLog write flags integer sent to the server.
+  HyperLogLog write flags.
 
-  Use the `write_*` helpers in this module and combine multiple flags with
-  `Bitwise.bor/2`.
+  Accepts `:default`, `:create_only`, `:update_only`, `:no_fail`,
+  `:allow_fold`, or a list of those atoms. Compatibility callers may pass a
+  non-negative integer; use `{:raw, integer}` when deliberately sending an
+  unnamed server value.
   """
-  @type flags :: non_neg_integer()
+  @type flags :: atom() | [atom()] | non_neg_integer() | {:raw, non_neg_integer()}
 
   @typedoc """
   Options accepted by HyperLogLog modify operations.
 
   Supported key:
 
-  * `:flags` - HyperLogLog write flags from the `write_*` helpers. Defaults to `0`.
+  * `:flags` - HyperLogLog write flags. Defaults to `:default`.
   """
   @type write_opts :: [flags: flags()]
 
@@ -61,23 +64,23 @@ defmodule Aerospike.Op.HLL do
 
   @doc "Use default HyperLogLog write behavior."
   @spec write_default() :: 0
-  def write_default, do: 0
+  def write_default, do: PolicyInteger.hll_write_flags(:default)
 
   @doc "Only create the HyperLogLog bin when it does not already exist."
   @spec write_create_only() :: 1
-  def write_create_only, do: 1
+  def write_create_only, do: PolicyInteger.hll_write_flags(:create_only)
 
   @doc "Only update the HyperLogLog bin when it already exists."
   @spec write_update_only() :: 2
-  def write_update_only, do: 2
+  def write_update_only, do: PolicyInteger.hll_write_flags(:update_only)
 
   @doc "Do not fail the command when a HyperLogLog operation is denied by write flags."
   @spec write_no_fail() :: 4
-  def write_no_fail, do: 4
+  def write_no_fail, do: PolicyInteger.hll_write_flags(:no_fail)
 
   @doc "Allow folding to less precise HyperLogLog settings when needed."
   @spec write_allow_fold() :: 8
-  def write_allow_fold, do: 8
+  def write_allow_fold, do: PolicyInteger.hll_write_flags(:allow_fold)
 
   @doc """
   Creates a new HyperLogLog bin or resets an existing one.
@@ -179,5 +182,5 @@ defmodule Aerospike.Op.HLL do
     CDT.hll_read_op(bin_name, @describe, [])
   end
 
-  defp flags(opts), do: Keyword.get(opts, :flags, 0)
+  defp flags(opts), do: opts |> Keyword.get(:flags, :default) |> PolicyInteger.hll_write_flags()
 end

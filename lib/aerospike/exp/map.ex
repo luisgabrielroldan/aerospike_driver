@@ -8,25 +8,20 @@ defmodule Aerospike.Exp.Map do
   alias Aerospike.Exp
   alias Aerospike.Exp.Module
   alias Aerospike.Op.Map, as: MapOp
+  alias Aerospike.PolicyInteger
 
   @typedoc "Opaque server-side expression."
   @type t :: Exp.t()
 
   @typedoc """
-  Map selector return type integer.
-
-  Use the `return_*` helpers in this module. `return_inverted/0` may be OR-ed
-  into another return type to invert a selector.
+  Map selector return type.
   """
-  @type return_type :: non_neg_integer()
+  @type return_type :: MapOp.return_type()
 
   @typedoc """
   Map expression write policy accepted in `opts[:policy]`.
-
-  `:attr` is the map order attributes value. `:flags` is the map write flags
-  integer. Omitted keys default to `0`.
   """
-  @type policy :: %{optional(:attr) => non_neg_integer(), optional(:flags) => non_neg_integer()}
+  @type policy :: MapOp.policy()
 
   @typedoc """
   Common map expression options.
@@ -112,11 +107,11 @@ defmodule Aerospike.Exp.Map do
 
   @doc "Return selected entries as an unordered map."
   @spec return_unordered_map() :: 16
-  def return_unordered_map, do: 16
+  def return_unordered_map, do: MapOp.return_unordered_map()
 
   @doc "Return selected entries as an ordered map."
   @spec return_ordered_map() :: 17
-  def return_ordered_map, do: 17
+  def return_ordered_map, do: MapOp.return_ordered_map()
 
   @doc "Invert the selector so it applies outside the matched range."
   @spec return_inverted() :: 0x10000
@@ -395,9 +390,15 @@ defmodule Aerospike.Exp.Map do
 
   defp read(bin, type, op_code, args), do: Module.cdt_read(bin, type, op_code, args)
   defp modify(bin, op_code, args), do: Module.cdt_modify(bin, :map, op_code, args, :map)
-  defp key_rt(opts), do: Keyword.get(opts, :return_type, return_key())
-  defp key_value_rt(opts), do: Keyword.get(opts, :return_type, return_key_value())
-  defp value_rt(opts), do: Keyword.get(opts, :return_type, return_value())
+
+  defp key_rt(opts),
+    do: opts |> Keyword.get(:return_type, :key) |> PolicyInteger.map_return_type()
+
+  defp key_value_rt(opts),
+    do: opts |> Keyword.get(:return_type, :key_value) |> PolicyInteger.map_return_type()
+
+  defp value_rt(opts),
+    do: opts |> Keyword.get(:return_type, :value) |> PolicyInteger.map_return_type()
 
   defp map_return_type(opts), do: map_return_type_from_rt(key_value_rt(opts))
 
@@ -423,7 +424,7 @@ defmodule Aerospike.Exp.Map do
     end
   end
 
-  defp map_policy(opts), do: Map.merge(%{attr: 0, flags: 0}, Keyword.get(opts, :policy, %{}))
+  defp map_policy(opts), do: opts |> Keyword.get(:policy) |> PolicyInteger.map_policy()
   defp write_flags(0), do: []
   defp write_flags(flags), do: [flags]
   defp range_args(return_type, begin_value, nil), do: [return_type, begin_value]

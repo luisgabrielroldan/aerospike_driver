@@ -15,11 +15,10 @@ defmodule Aerospike.Op.Bit do
   `get/4`, `count/4`, `lscan/5`, `rscan/5`, and `get_int/5`. `resize/4`,
   `insert/4`, and `remove/4` use byte offsets and sizes.
 
-  Pass `ctx:` for nested bitmaps and `flags:` for the server policy integer.
+  Pass `ctx:` for nested bitmaps and `flags:` for write policy flags.
   """
 
-  import Bitwise
-
+  alias Aerospike.PolicyInteger
   alias Aerospike.Protocol.CDT
 
   @typedoc """
@@ -28,20 +27,32 @@ defmodule Aerospike.Op.Bit do
   @opaque t :: Aerospike.Op.t()
 
   @typedoc """
-  Bit operation policy flags integer sent to the server.
+  Bit operation write policy flags.
 
-  Use the `write_*` helpers in this module and combine multiple flags with
-  `Bitwise.bor/2`.
+  Accepts `:default`, `:create_only`, `:update_only`, `:no_fail`, `:partial`,
+  or a list of those atoms. Compatibility callers may pass a non-negative
+  integer; use `{:raw, integer}` when deliberately sending an unnamed server
+  value.
   """
-  @type flags :: non_neg_integer()
+  @type flags :: atom() | [atom()] | non_neg_integer() | {:raw, non_neg_integer()}
 
   @typedoc """
-  Integer overflow action for bit add/subtract operations.
+  Overflow action for bit add/subtract operations.
 
-  Use `overflow_fail/0`, `overflow_saturate/0`, or `overflow_wrap/0`.
-  `signed: true` ORs the server signed flag into this value before encoding.
+  Accepts `:fail`, `:saturate`, or `:wrap`. Compatibility callers may pass a
+  non-negative integer; use `{:raw, integer}` when deliberately sending an
+  unnamed server value. `signed: true` adds the signed flag before encoding.
   """
-  @type overflow_action :: non_neg_integer()
+  @type overflow_action :: atom() | non_neg_integer() | {:raw, non_neg_integer()}
+
+  @typedoc """
+  Resize flags for bit resize operations.
+
+  Accepts `:default`, `:from_front`, `:grow_only`, `:shrink_only`, or a list
+  of those atoms. Compatibility callers may pass a non-negative integer; use
+  `{:raw, integer}` when deliberately sending an unnamed server value.
+  """
+  @type resize_flags :: atom() | [atom()] | non_neg_integer() | {:raw, non_neg_integer()}
 
   @typedoc """
   Common bit operation options.
@@ -49,9 +60,9 @@ defmodule Aerospike.Op.Bit do
   Supported keys:
 
   * `:ctx` - nested CDT context path from `Aerospike.Ctx`.
-  * `:flags` - bit-operation policy flags from the `write_*` helpers. Defaults to `0`.
+  * `:flags` - bit-operation write flags. Defaults to `:default`.
   * `:overflow_action` - overflow behavior for `add/5` and `subtract/5`.
-  * `:signed` - when true, ORs the signed flag into `:overflow_action`.
+  * `:signed` - when true, adds the signed flag to `:overflow_action`.
   """
   @type opts :: [
           ctx: Aerospike.Ctx.t(),
@@ -79,48 +90,50 @@ defmodule Aerospike.Op.Bit do
   @rscan 53
   @get_int 54
 
-  @signed_flag 1
-
   @doc "Use default bit write behavior."
   @spec write_default() :: 0
-  def write_default, do: 0
+  def write_default, do: PolicyInteger.bit_write_flags(:default)
 
   @doc "Only create the bit bin when it does not already exist."
   @spec write_create_only() :: 1
-  def write_create_only, do: 1
+  def write_create_only, do: PolicyInteger.bit_write_flags(:create_only)
 
   @doc "Only update the bit bin when it already exists."
   @spec write_update_only() :: 2
-  def write_update_only, do: 2
+  def write_update_only, do: PolicyInteger.bit_write_flags(:update_only)
 
   @doc "Do not fail the command when a bit operation is denied by write flags."
   @spec write_no_fail() :: 4
-  def write_no_fail, do: 4
+  def write_no_fail, do: PolicyInteger.bit_write_flags(:no_fail)
 
   @doc "Commit other valid operations when this bit operation is denied by write flags."
   @spec write_partial() :: 8
-  def write_partial, do: 8
+  def write_partial, do: PolicyInteger.bit_write_flags(:partial)
 
   @doc "Fail bit add/subtract on overflow or underflow."
   @spec overflow_fail() :: 0
-  def overflow_fail, do: 0
+  def overflow_fail, do: PolicyInteger.bit_overflow_action(:fail)
 
   @doc "Saturate bit add/subtract to min/max on overflow or underflow."
   @spec overflow_saturate() :: 2
-  def overflow_saturate, do: 2
+  def overflow_saturate, do: PolicyInteger.bit_overflow_action(:saturate)
 
   @doc "Wrap bit add/subtract on overflow or underflow."
   @spec overflow_wrap() :: 4
-  def overflow_wrap, do: 4
+  def overflow_wrap, do: PolicyInteger.bit_overflow_action(:wrap)
 
   @doc """
   Resizes the bin to `byte_size` bytes using `resize_flags`.
   """
-  @spec resize(String.t(), integer(), integer(), opts()) :: t()
-  def resize(bin_name, byte_size, resize_flags \\ 0, opts \\ [])
-      when is_binary(bin_name) and is_integer(byte_size) and is_integer(resize_flags) and
-             is_list(opts) do
-    CDT.bit_modify_op(bin_name, @resize, [byte_size, flags(opts), resize_flags], ctx(opts))
+  @spec resize(String.t(), integer(), resize_flags(), opts()) :: t()
+  def resize(bin_name, byte_size, resize_flags \\ :default, opts \\ [])
+      when is_binary(bin_name) and is_integer(byte_size) and is_list(opts) do
+    CDT.bit_modify_op(
+      bin_name,
+      @resize,
+      [byte_size, flags(opts), PolicyInteger.bit_resize_flags(resize_flags)],
+      ctx(opts)
+    )
   end
 
   @doc """
@@ -330,7 +343,7 @@ defmodule Aerospike.Op.Bit do
              is_boolean(signed) and is_list(opts) do
     args =
       if signed do
-        [bit_offset, bit_size, @signed_flag]
+        [bit_offset, bit_size, PolicyInteger.bit_signed_flag()]
       else
         [bit_offset, bit_size]
       end
@@ -339,15 +352,14 @@ defmodule Aerospike.Op.Bit do
   end
 
   defp ctx(opts), do: Keyword.get(opts, :ctx)
-  defp flags(opts), do: Keyword.get(opts, :flags, 0)
+  defp flags(opts), do: opts |> Keyword.get(:flags, :default) |> PolicyInteger.bit_write_flags()
 
-  defp overflow_action(opts) do
-    action = Keyword.get(opts, :overflow_action, 0)
+  defp overflow_action(opts),
+    do:
+      PolicyInteger.bit_overflow_action(
+        Keyword.get(opts, :overflow_action, :default),
+        signed?(opts)
+      )
 
-    if Keyword.get(opts, :signed, false) do
-      action ||| @signed_flag
-    else
-      action
-    end
-  end
+  defp signed?(opts), do: Keyword.get(opts, :signed, false) == true
 end

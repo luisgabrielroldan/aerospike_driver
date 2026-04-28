@@ -17,6 +17,7 @@ defmodule Aerospike.Op.Exp do
 
   alias Aerospike.Error
   alias Aerospike.Exp
+  alias Aerospike.PolicyInteger
   alias Aerospike.Protocol.AsmMsg.Operation
 
   @typedoc """
@@ -29,16 +30,17 @@ defmodule Aerospike.Op.Exp do
 
   Supported key:
 
-  * `:flags` - raw server expression read/write flags integer. Defaults to `0`.
+  * `:flags` - expression read or write flags. Defaults to `:default`.
   """
-  @type opts :: [flags: non_neg_integer()]
+  @type flags :: atom() | [atom()] | non_neg_integer() | {:raw, non_neg_integer()}
+  @type opts :: [flags: flags()]
 
   @doc """
   Reads the result of a server-side expression into `bin_name`.
 
-  The optional `:flags` value is the expression read-flags integer
-  (`ExpReadFlags` in the official clients), used for server-side expression
-  evaluation behavior such as no-fail reads.
+  The optional `:flags` value accepts `:default`, `:eval_no_fail`, or a list
+  of those atoms. Compatibility callers may pass a non-negative integer; use
+  `{:raw, integer}` when deliberately sending an unnamed server value.
 
       Aerospike.Op.Exp.read("projected", Aerospike.Exp.int_bin("count"))
   """
@@ -47,7 +49,7 @@ defmodule Aerospike.Op.Exp do
     case Operation.exp_read(
            normalize_bin_name(bin_name),
            expression,
-           Keyword.get(opts, :flags, 0)
+           read_flags(opts)
          ) do
       {:ok, op} -> op
       {:error, %Error{} = err} -> raise ArgumentError, err.message
@@ -57,10 +59,10 @@ defmodule Aerospike.Op.Exp do
   @doc """
   Writes the result of a server-side expression to `bin_name`.
 
-  The optional `:flags` value is the expression write-flags integer
-  (`ExpWriteFlags` in the official clients), used for server-side expression
-  write behavior such as create-only, update-only, allow-delete, and policy
-  no-fail.
+  The optional `:flags` value accepts `:default`, `:create_only`,
+  `:update_only`, `:allow_delete`, `:policy_no_fail`, `:eval_no_fail`, or a
+  list of those atoms. Compatibility callers may pass a non-negative integer;
+  use `{:raw, integer}` when deliberately sending an unnamed server value.
 
       Aerospike.Op.Exp.write("computed", Aerospike.Exp.int(99))
   """
@@ -69,12 +71,18 @@ defmodule Aerospike.Op.Exp do
     case Operation.exp_modify(
            normalize_bin_name(bin_name),
            expression,
-           Keyword.get(opts, :flags, 0)
+           write_flags(opts)
          ) do
       {:ok, op} -> op
       {:error, %Error{} = err} -> raise ArgumentError, err.message
     end
   end
+
+  defp read_flags(opts),
+    do: opts |> Keyword.get(:flags, :default) |> PolicyInteger.exp_read_flags()
+
+  defp write_flags(opts),
+    do: opts |> Keyword.get(:flags, :default) |> PolicyInteger.exp_write_flags()
 
   defp normalize_bin_name(bin_name) when is_atom(bin_name), do: Atom.to_string(bin_name)
   defp normalize_bin_name(bin_name), do: bin_name

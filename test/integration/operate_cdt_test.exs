@@ -61,7 +61,9 @@ defmodule Aerospike.Integration.OperateCdtTest do
 
     assert {:ok, %Record{}} =
              Aerospike.operate(cluster, key, [
-               MapOp.put_items("scores", %{"ada" => 10, "grace" => 20}, policy: %{attr: 1})
+               MapOp.put_items("scores", %{"ada" => 10, "grace" => 20},
+                 policy: [order: :key_ordered]
+               )
              ])
 
     assert {:ok, %Record{bins: %{"scores" => 20}}} =

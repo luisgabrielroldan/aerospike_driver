@@ -5,6 +5,7 @@ defmodule Aerospike.Exp.HLL do
 
   alias Aerospike.Exp
   alias Aerospike.Exp.Module
+  alias Aerospike.PolicyInteger
 
   @typedoc "Opaque server-side expression."
   @type t :: Exp.t()
@@ -14,9 +15,9 @@ defmodule Aerospike.Exp.HLL do
 
   Supported key:
 
-  * `:flags` - raw server HLL write flags. Defaults to `0`.
+  * `:flags` - HLL write flags. Defaults to `:default`.
   """
-  @type opts :: [flags: non_neg_integer()]
+  @type opts :: [flags: atom() | [atom()] | non_neg_integer() | {:raw, non_neg_integer()}]
 
   @init 0
   @add 1
@@ -86,5 +87,5 @@ defmodule Aerospike.Exp.HLL do
 
   defp read(bin, type, op_code, args), do: Module.hll_read(bin, type, op_code, args)
   defp modify(bin, op_code, args), do: Module.hll_modify(bin, op_code, args)
-  defp flags(opts), do: Keyword.get(opts, :flags, 0)
+  defp flags(opts), do: opts |> Keyword.get(:flags, :default) |> PolicyInteger.hll_write_flags()
 end

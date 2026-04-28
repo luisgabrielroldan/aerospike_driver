@@ -11,25 +11,23 @@ defmodule Aerospike.Exp.List do
   alias Aerospike.Exp
   alias Aerospike.Exp.Module
   alias Aerospike.Op.List, as: ListOp
+  alias Aerospike.PolicyInteger
 
   @typedoc "Opaque server-side expression."
   @type t :: Exp.t()
 
   @typedoc """
-  List selector return type integer.
-
-  Use the `return_*` helpers in this module. `return_inverted/0` may be OR-ed
-  into another return type to invert a selector.
+  List selector return type.
   """
-  @type return_type :: non_neg_integer()
+  @type return_type :: ListOp.return_type()
 
   @typedoc """
-  List expression write policy map accepted in `opts[:policy]`.
+  List expression write policy accepted in `opts[:policy]`.
 
   Append/increment operations expect both `:order` and `:flags`; insert and set
   operations encode only `:flags`.
   """
-  @type policy :: %{optional(:order) => non_neg_integer(), required(:flags) => non_neg_integer()}
+  @type policy :: ListOp.policy()
 
   @typedoc """
   Common list expression options.
@@ -37,7 +35,8 @@ defmodule Aerospike.Exp.List do
   Supported keys:
 
   * `:policy` - list write policy for modify expressions that document it.
-  * `:return_type` - selector return type from the `return_*` helpers.
+  * `:return_type` - selector return type such as `:value`, `:count`, or
+    `[:value, :inverted]`.
   """
   @type opts :: [policy: policy(), return_type: return_type()]
 
@@ -117,19 +116,19 @@ defmodule Aerospike.Exp.List do
     modify(bin, @append_items, [values | list_policy(opts)])
   end
 
-  @doc "Inserts `value` at `index`. Supports `policy: %{flags: flags}`."
+  @doc "Inserts `value` at `index`. Supports `policy: [flags: flags]`."
   @spec insert(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def insert(%Exp{} = bin, %Exp{} = index, %Exp{} = value, opts \\ []) do
     modify(bin, @insert, [index, value | flags_policy(opts)])
   end
 
-  @doc "Inserts list expression `values` at `index`. Supports `policy: %{flags: flags}`."
+  @doc "Inserts list expression `values` at `index`. Supports `policy: [flags: flags]`."
   @spec insert_items(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def insert_items(%Exp{} = bin, %Exp{} = index, %Exp{} = values, opts \\ []) do
     modify(bin, @insert_items, [index, values | flags_policy(opts)])
   end
 
-  @doc "Sets the value at `index`. Supports `policy: %{flags: flags}`."
+  @doc "Sets the value at `index`. Supports `policy: [flags: flags]`."
   @spec set(Exp.t(), Exp.t(), Exp.t(), opts()) :: t()
   def set(%Exp{} = bin, %Exp{} = index, %Exp{} = value, opts \\ []) do
     modify(bin, @set, [index, value | flags_policy(opts)])
@@ -146,9 +145,18 @@ defmodule Aerospike.Exp.List do
   end
 
   @doc "Sorts the list expression using `sort_flags`."
-  @spec sort(Exp.t(), integer()) :: t()
-  def sort(%Exp{} = bin, sort_flags \\ 0) when is_integer(sort_flags) do
-    modify(bin, @sort, [sort_flags])
+  @spec sort(Exp.t(), ListOp.sort_flags() | keyword()) :: t()
+  def sort(%Exp{} = bin, sort_flags_or_opts \\ :default) do
+    sort_flags =
+      case sort_flags_or_opts do
+        opts when is_list(opts) ->
+          if Keyword.keyword?(opts), do: Keyword.get(opts, :sort_flags, :default), else: opts
+
+        sort_flags ->
+          sort_flags
+      end
+
+    modify(bin, @sort, [PolicyInteger.list_sort_flags(sort_flags)])
   end
 
   @doc "Removes values equal to `value`, returning data selected by `return_type:`."
@@ -306,7 +314,9 @@ defmodule Aerospike.Exp.List do
 
   defp read(bin, type, op_code, args), do: Module.cdt_read(bin, type, op_code, args)
   defp modify(bin, op_code, args), do: Module.cdt_modify(bin, :list, op_code, args, :list)
-  defp rt(opts), do: Keyword.get(opts, :return_type, return_value())
+
+  defp rt(opts),
+    do: opts |> Keyword.get(:return_type, return_value()) |> PolicyInteger.list_return_type()
 
   defp list_return_type(opts), do: list_return_type_from_rt(rt(opts))
 
@@ -330,15 +340,19 @@ defmodule Aerospike.Exp.List do
 
   defp list_policy(opts) do
     case Keyword.get(opts, :policy) do
-      nil -> []
-      %{order: order, flags: flags} -> [order, flags]
+      nil ->
+        []
+
+      policy ->
+        %{order: order, flags: flags} = PolicyInteger.list_policy(policy)
+        [order, flags]
     end
   end
 
   defp flags_policy(opts) do
     case Keyword.get(opts, :policy) do
       nil -> []
-      %{flags: flags} -> [flags]
+      policy -> [PolicyInteger.list_policy(policy).flags]
     end
   end
 

@@ -35,19 +35,22 @@ defmodule Aerospike.Op.ListTest do
 
   test "modify builders encode reference op codes and payloads" do
     cases = [
-      {ListOp.set_type("items", 1, 0), [0, 1, 0]},
-      {ListOp.create("items", ListOp.order_ordered()), [0, 1]},
-      {ListOp.create("items", ListOp.order_ordered(), persist_index: true), [0, 0x11]},
-      {ListOp.set_order("items", ListOp.order_ordered()), [0, 1]},
-      {ListOp.set_order("items", ListOp.order_ordered(), persist_index: true), [0, 0x11]},
+      {ListOp.set_type("items", :ordered, :default), [0, 1, 0]},
+      {ListOp.create("items", :ordered), [0, 1]},
+      {ListOp.create("items", :ordered, persist_index: true), [0, 0x11]},
+      {ListOp.set_order("items", :ordered), [0, 1]},
+      {ListOp.set_order("items", :ordered, persist_index: true), [0, 0x11]},
       {ListOp.append("items", "a"), [1, "a"]},
-      {ListOp.append("items", "a", policy: %{order: 1, flags: 2}), [1, "a", 1, 2]},
+      {ListOp.append("items", "a", policy: [order: :ordered, flags: :insert_bounded]),
+       [1, "a", 1, 2]},
       {ListOp.append_items("items", ["a", "b"]), [2, ["a", "b"]]},
-      {ListOp.append_items("items", ["a"], policy: %{order: 1, flags: 2}), [2, ["a"], 1, 2]},
+      {ListOp.append_items("items", ["a"], policy: [order: :ordered, flags: [:insert_bounded]]),
+       [2, ["a"], 1, 2]},
       {ListOp.insert("items", 0, "a"), [3, 0, "a"]},
-      {ListOp.insert("items", 0, "a", policy: %{order: 1, flags: 2}), [3, 0, "a", 1, 2]},
+      {ListOp.insert("items", 0, "a", policy: [order: :ordered, flags: :insert_bounded]),
+       [3, 0, "a", 1, 2]},
       {ListOp.insert_items("items", 0, ["a"]), [4, 0, ["a"]]},
-      {ListOp.insert_items("items", 0, ["a"], policy: %{order: 1, flags: 2}),
+      {ListOp.insert_items("items", 0, ["a"], policy: [order: :ordered, flags: :insert_bounded]),
        [4, 0, ["a"], 1, 2]},
       {ListOp.pop("items", -1), [5, -1]},
       {ListOp.pop_range("items", 0, 2), [6, 0, 2]},
@@ -56,13 +59,15 @@ defmodule Aerospike.Op.ListTest do
       {ListOp.remove_range("items", 0, 2), [8, 0, 2]},
       {ListOp.remove_range_from("items", 1), [8, 1]},
       {ListOp.set("items", 0, "a"), [9, 0, "a"]},
-      {ListOp.set("items", 0, "a", policy: %{order: 1, flags: 2}), [9, 0, "a", 1, 2]},
+      {ListOp.set("items", 0, "a", policy: [order: :ordered, flags: :insert_bounded]),
+       [9, 0, "a", 1, 2]},
       {ListOp.trim("items", 0, 2), [10, 0, 2]},
       {ListOp.clear("items"), [11]},
       {ListOp.increment("items", 0, 3), [12, 0, 3]},
-      {ListOp.increment("items", 0, 3, policy: %{flags: 4}), [12, 0, 3, 4]},
+      {ListOp.increment("items", 0, 3, policy: [flags: :no_fail]), [12, 0, 3, 4]},
       {ListOp.sort("items"), [13, 0]},
-      {ListOp.sort("items", 3), [13, 3]}
+      {ListOp.sort("items", [:descending, :drop_duplicates]), [13, 3]},
+      {ListOp.sort("items", sort_flags: [:drop_duplicates]), [13, 2]}
     ]
 
     Enum.each(cases, fn {op, expected_payload} ->
@@ -124,13 +129,19 @@ defmodule Aerospike.Op.ListTest do
   end
 
   test "return_type option overrides selector defaults" do
-    assert payload(ListOp.get_by_index("items", 1, return_type: ListOp.return_count())) == [
+    assert payload(ListOp.get_by_index("items", 1, return_type: :count)) == [
              19,
              5,
              1
            ]
 
-    assert payload(ListOp.remove_by_value("items", "a", return_type: ListOp.return_none())) == [
+    assert payload(ListOp.get_by_value("items", "a", return_type: [:value, :inverted])) == [
+             22,
+             0x10007,
+             "a"
+           ]
+
+    assert payload(ListOp.remove_by_value("items", "a", return_type: :none)) == [
              35,
              0,
              "a"
@@ -150,7 +161,7 @@ defmodule Aerospike.Op.ListTest do
 
   test "create builder applies order flags to the final context step" do
     ctx = [Ctx.map_key("outer"), Ctx.list_index(2)]
-    op = ListOp.create("items", ListOp.order_unordered(), ctx: ctx, pad: true)
+    op = ListOp.create("items", :unordered, ctx: ctx, pad: true)
 
     assert payload(op) == [
              255,

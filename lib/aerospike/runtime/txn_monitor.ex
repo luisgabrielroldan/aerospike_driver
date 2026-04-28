@@ -12,7 +12,6 @@ defmodule Aerospike.Runtime.TxnMonitor do
   alias Aerospike.Protocol.AsmMsg.Field
   alias Aerospike.Protocol.AsmMsg.Operation
   alias Aerospike.Protocol.AsmMsg.Value
-  alias Aerospike.Protocol.CDT
   alias Aerospike.Protocol.Message
   alias Aerospike.Protocol.Response
   alias Aerospike.Protocol.ResultCode
@@ -20,14 +19,7 @@ defmodule Aerospike.Runtime.TxnMonitor do
   alias Aerospike.Txn
 
   @monitor_set "<ERO~MRT"
-  @list_append_op 1
-  @keyds_list_policy %{
-    order: ListOp.order_ordered(),
-    flags:
-      ListOp.write_add_unique()
-      |> Bitwise.bor(ListOp.write_no_fail())
-      |> Bitwise.bor(ListOp.write_partial())
-  }
+  @keyds_list_policy [order: :ordered, flags: [:add_unique, :no_fail, :partial]]
 
   @doc false
   @spec monitor_key(Txn.t(), String.t()) :: Key.t()
@@ -60,12 +52,7 @@ defmodule Aerospike.Runtime.TxnMonitor do
   end
 
   defp register_ops(conn_name, txn, cmd_key) do
-    append_op =
-      CDT.list_modify_op(
-        "keyds",
-        @list_append_op,
-        [cmd_key.digest, @keyds_list_policy.order, @keyds_list_policy.flags]
-      )
+    append_op = ListOp.append("keyds", cmd_key.digest, policy: @keyds_list_policy)
 
     if TxnOps.monitor_exists?(conn_name, txn) do
       [append_op]
