@@ -24,11 +24,7 @@ end
 
 ## Quick Start
 
-Start a local Aerospike Community Edition node from this repository:
-
-```bash
-docker compose up -d
-```
+Start with an Aerospike node available at `127.0.0.1:3000`.
 
 Define an application Repo module:
 
@@ -83,11 +79,11 @@ transport options fail before the runtime is published.
 Use `Aerospike.Cluster.ready?(MyApp.Repo.conn())` when your application wants
 to wait until the first cluster view is available for routing.
 
-## What It Supports
+## Feature Overview
 
 The canonical low-level public entry point is `Aerospike`. Applications can
 define a thin `Aerospike.Repo` module to bind that API to one supervised
-cluster. The current surface includes:
+cluster. The main supported areas are:
 
 - Record commands: `get/3`, `get_header/3`, `put/4`, `exists/3`, `touch/3`,
   `delete/3`, `add/4`, `append/4`, and `prepend/4`
@@ -159,12 +155,7 @@ Use these guides for task-oriented examples:
 - [Transactions](guides/transactions.md)
 - [Telemetry And Runtime Metrics](guides/telemetry-and-runtime-metrics.md)
 
-## Current Boundaries
-
-This library is still pre-1.0. The implemented surface is broad, but it is not
-yet a promise of complete Aerospike client parity.
-
-Important current boundaries:
+## Operational Notes
 
 - Public policy options stay keyword-based. Single-record, batch, scan, and
   query helpers expose the implemented timeout, retry, routing, filter,
@@ -178,9 +169,9 @@ Important current boundaries:
 - Expression-backed secondary indexes require Aerospike 8.1 or newer.
 - Enterprise security, transactions, TLS, auth, and XDR helpers require
   appropriately configured Enterprise Edition servers.
-- `close/2`, transaction helpers, and transaction status helpers currently
-  resolve runtime resources from the registered atom cluster name.
-- `put_payload/4` is an advanced escape hatch for callers that already have a
+- `close/2`, transaction helpers, and transaction status helpers resolve
+  runtime resources from the registered atom cluster name.
+- `put_payload/4` is intended for callers that already have a
   complete Aerospike single-record write or delete frame. The client uses the
   key for routing and forwards the payload unchanged.
 

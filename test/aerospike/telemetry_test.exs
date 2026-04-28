@@ -27,9 +27,8 @@ defmodule Aerospike.TelemetryTest do
   ]
 
   @telemetry_guide Path.expand("../../guides/telemetry-and-runtime-metrics.md", __DIR__)
-  @doc_emitters [
+  @hidden_emitters [
     "Aerospike.Runtime.PoolCheckout",
-    "Aerospike.Transport.Tcp",
     "Aerospike.Cluster.Tender",
     "Aerospike.Telemetry.emit_retry_attempt/4"
   ]
@@ -75,11 +74,14 @@ defmodule Aerospike.TelemetryTest do
       assert documented_event_names() == expected_doc_headings()
     end
 
-    test "telemetry guide still names the current emitters" do
+    test "telemetry guide points callers at the stable subscription surface" do
       guide = File.read!(@telemetry_guide)
 
-      for emitter <- @doc_emitters do
-        assert guide =~ emitter
+      assert guide =~ "Aerospike.Telemetry.handler_events/0"
+      assert guide =~ "stable subscription"
+
+      for emitter <- @hidden_emitters do
+        refute guide =~ emitter
       end
     end
 

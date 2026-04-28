@@ -53,7 +53,7 @@ defmodule Aerospike.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
-      files: ~w(lib guides .formatter.exs CHANGELOG.md LICENSE mix.exs mix.lock README.md)
+      files: ~w(lib guides .formatter.exs CHANGELOG.md LICENSE mix.exs README.md)
     ]
   end
 

@@ -2,14 +2,13 @@ defmodule Aerospike do
   @moduledoc """
   Public entry point for the Aerospike Elixir driver.
 
-  The public package identity is `aerospike_driver`. The useful contract here
-  is still narrower than "full client parity": start-up should be explicit,
-  supported command families should be discoverable, and the named proof suites
-  should match the public surface.
+  `Aerospike` exposes the low-level API for starting a supervised cluster,
+  constructing keys, and running commands against that cluster. Most
+  applications should define an `Aerospike.Repo` module to bind this API to
+  one configured cluster; lower-level code can call this module directly when
+  it needs explicit control over the cluster name.
 
-  The driver currently proves a small unary command family on one shared execution
-  path plus batch, scan, query, and transaction helpers over the same
-  supervised cluster runtime:
+  The main command families are:
 
     * `get/3` reads all bins for a key
     * `get_header/2` reads only record metadata for a key
@@ -90,25 +89,14 @@ defmodule Aerospike do
 
       Aerospike.Cluster.ready?(:aerospike)
 
-  The repo README names the supported validation profiles:
+  Scan and query stream helpers are lazy at the `Enumerable` boundary. The
+  runtime buffers each node's response before yielding that node's records
+  downstream.
 
-    * Community Edition single-node on `localhost:3000`
-    * Community Edition three-node cluster from this repo's `docker-compose.yml`
-    * Enterprise Edition variants from this repo's `docker-compose.yml`
-
-  The public `Stream` helpers are lazy only at the API boundary. The
-  current runtime still drains each node stream into memory before
-  yielding that node's records downstream, so it does not promise
-  frame-by-frame cross-node backpressure or cancellation coordination.
-
-  Expression builders now cover scalar, metadata, arithmetic, conditional,
-  variable, CDT, bit, and HyperLogLog helper families. Public policy remains
-  keyword-based at facade calls, with centralized normalization for
-  single-record, batch, scan, query, startup, auth, and discovery options.
-
-  Caller-facing policy validation and default materialization is shared across
-  command families. Public command functions still accept keyword opts, but
-  command paths no longer merge or validate those policy families ad hoc.
+  Expression builders cover scalar, metadata, arithmetic, conditional,
+  variable, CDT, bit, and HyperLogLog helper families. Public command and
+  startup options are keyword-based and validated by the facade before command
+  execution.
   """
 
   alias Aerospike.Batch
@@ -2140,7 +2128,7 @@ defmodule Aerospike do
   @doc """
   Sends a caller-built single-record write/delete frame for `key`.
 
-  This is an advanced escape hatch for tooling, proxy, and replay scenarios.
+  This helper is intended for tooling, proxy, and replay scenarios.
   `payload` must be a complete Aerospike wire frame for one write-shaped
   command. The client uses `key` only to choose the write partition owner,
   forwards `payload` unchanged, and parses only the standard write response.
