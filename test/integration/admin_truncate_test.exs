@@ -44,12 +44,10 @@ defmodule Aerospike.Integration.AdminTruncateTest do
     newer_key = Key.new(@namespace, newer_set, "newer")
 
     assert {:ok, _metadata} = Aerospike.put(cluster, older_key, %{"v" => 1})
-    Process.sleep(20)
-    before = DateTime.utc_now()
-    Process.sleep(20)
-    assert {:ok, _metadata} = Aerospike.put(cluster, newer_key, %{"v" => 2})
+    before = truncate_cutoff_after_lut!(cluster, older_key)
+    put_after_cutoff!(cluster, newer_key, %{"v" => 2}, before)
 
-    assert :ok = Aerospike.truncate(cluster, @namespace, before: before)
+    assert_truncate_accepted!(cluster, @namespace, before)
 
     IntegrationSupport.assert_eventually(
       "namespace truncate cutoff applied",
@@ -100,6 +98,45 @@ defmodule Aerospike.Integration.AdminTruncateTest do
              ])
 
     DateTime.from_unix!(last_update + 1_000_000, :nanosecond)
+  end
+
+  defp put_after_cutoff!(cluster, key, bins, cutoff) do
+    IntegrationSupport.assert_eventually(
+      "record written after truncate cutoff",
+      fn ->
+        assert {:ok, _metadata} = Aerospike.put(cluster, key, bins)
+
+        assert {:ok, %{bins: %{"last_update" => last_update}}} =
+                 Aerospike.operate(cluster, key, [
+                   Op.Exp.read("last_update", Exp.last_update())
+                 ])
+
+        DateTime.compare(DateTime.from_unix!(last_update, :nanosecond), cutoff) == :gt
+      end,
+      truncate_wait_timeout_ms(),
+      50
+    )
+  end
+
+  defp assert_truncate_accepted!(cluster, namespace, before) do
+    IntegrationSupport.assert_eventually(
+      "namespace truncate cutoff accepted",
+      fn ->
+        case Aerospike.truncate(cluster, namespace, before: before) do
+          :ok ->
+            true
+
+          {:error, %Error{message: message}} = error ->
+            if String.contains?(message, "would truncate in the future") do
+              false
+            else
+              flunk("truncate failed unexpectedly: #{inspect(error)}")
+            end
+        end
+      end,
+      truncate_wait_timeout_ms(),
+      50
+    )
   end
 
   defp assert_truncate_accepted!(cluster, namespace, set, before) do

@@ -3,6 +3,7 @@ defmodule Aerospike.IndexTask do
   Tracks secondary-index build progress.
   """
 
+  alias Aerospike.Cluster
   alias Aerospike.Command.Admin
   alias Aerospike.Error
 
@@ -51,10 +52,49 @@ defmodule Aerospike.IndexTask do
   """
   @spec status(t()) :: {:ok, :complete | :in_progress} | {:error, Error.t()}
   def status(%__MODULE__{conn: conn, namespace: namespace, index_name: index_name}) do
-    case Admin.index_status(conn, namespace, index_name, []) do
+    with {:ok, node_names} <- target_node_names(conn) do
+      poll_nodes(conn, node_names, namespace, index_name)
+    end
+  end
+
+  defp poll_nodes(conn, node_names, namespace, index_name) do
+    Enum.reduce_while(node_names, {:ok, :complete}, fn node_name, _acc ->
+      case node_status(conn, node_name, namespace, index_name) do
+        {:ok, :complete} -> {:cont, {:ok, :complete}}
+        {:ok, :in_progress} -> {:halt, {:ok, :in_progress}}
+        {:error, %Error{} = err} -> {:halt, {:error, err}}
+      end
+    end)
+  end
+
+  defp node_status(conn, node_name, namespace, index_name) do
+    case Admin.index_status_node(conn, node_name, namespace, index_name, []) do
       {:ok, response} -> parse_status(response)
       {:error, %Error{} = error} -> {:error, error}
     end
+  end
+
+  defp target_node_names(conn) do
+    if cluster_ready?(conn) do
+      case active_nodes(conn) do
+        [] -> {:error, Error.from_result_code(:cluster_not_ready)}
+        node_names -> {:ok, node_names}
+      end
+    else
+      {:error, Error.from_result_code(:cluster_not_ready)}
+    end
+  end
+
+  defp cluster_ready?(conn) do
+    Cluster.ready?(conn)
+  catch
+    :exit, _ -> false
+  end
+
+  defp active_nodes(conn) do
+    Cluster.active_nodes(conn)
+  catch
+    :exit, _ -> []
   end
 
   defp parse_status(""), do: {:ok, :complete}

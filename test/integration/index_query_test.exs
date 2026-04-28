@@ -20,7 +20,7 @@ defmodule Aerospike.Integration.IndexQueryTest do
   setup do
     IntegrationSupport.probe_aerospike!(@host, @port)
 
-    IntegrationSupport.wait_for_cluster_ready!([{@host, @port}], @namespace, 15_000,
+    IntegrationSupport.wait_for_cluster_ready!([{@host, @port}], @namespace, 60_000,
       expected_size: 3
     )
 

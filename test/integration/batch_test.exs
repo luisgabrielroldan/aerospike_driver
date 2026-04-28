@@ -25,6 +25,7 @@ defmodule Aerospike.Integration.BatchTest do
     3010 => "aerospike2",
     3020 => "aerospike3"
   }
+  @cluster_recovery_timeout_ms 60_000
 
   setup do
     IntegrationSupport.probe_aerospike!(
@@ -32,7 +33,8 @@ defmodule Aerospike.Integration.BatchTest do
       "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver/` first."
     )
 
-    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
+    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, @cluster_recovery_timeout_ms)
+
     name = IntegrationSupport.unique_atom("spike_batch_cluster")
 
     {:ok, sup} =
@@ -56,7 +58,8 @@ defmodule Aerospike.Integration.BatchTest do
       end
 
       Enum.each(Map.values(@seed_containers), &docker_start/1)
-      IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
+
+      IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, @cluster_recovery_timeout_ms)
     end)
 
     %{cluster: name, seed_nodes: seed_nodes}

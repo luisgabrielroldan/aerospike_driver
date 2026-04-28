@@ -38,6 +38,16 @@ defmodule Aerospike.Integration.QueryAggregateResultTest do
         pool_size: 2
       )
 
+    Process.unlink(sup)
+
+    on_exit(fn ->
+      if Process.whereis(name) do
+        cleanup_cluster(name, set, index_name, server_name)
+      end
+
+      IntegrationSupport.stop_supervisor_quietly(sup)
+    end)
+
     IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     assert {:ok, register_task} = Aerospike.register_udf(name, @fixture, server_name)
@@ -51,14 +61,6 @@ defmodule Aerospike.Integration.QueryAggregateResultTest do
              )
 
     assert :ok = IndexTask.wait(index_task, timeout: 30_000, poll_interval: 200)
-
-    on_exit(fn ->
-      if Process.whereis(name) do
-        cleanup_cluster(name, set, index_name, server_name)
-      end
-
-      IntegrationSupport.stop_supervisor_quietly(sup)
-    end)
 
     %{cluster: name, set: set, package: package}
   end

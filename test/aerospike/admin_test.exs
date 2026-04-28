@@ -347,6 +347,68 @@ defmodule Aerospike.Command.AdminTest do
     assert {:ok, :complete} = IndexTask.status(missing_task)
   end
 
+  test "index task waits for every active node to report complete" do
+    name = :"admin_index_task_cluster_#{System.unique_integer([:positive, :monotonic])}"
+
+    {:ok, fake} =
+      Fake.start_link(nodes: [{"A1", "10.0.0.1", 3000}, {"B1", "10.0.0.2", 3000}])
+
+    {:ok, owner} = TableOwner.start_link(name: name)
+    tables = TableOwner.tables(owner)
+    {:ok, writer} = PartitionMapWriter.start_link(name: name, tables: tables)
+    {:ok, node_sup} = NodeSupervisor.start_link(name: name)
+
+    {:ok, tender} =
+      Tender.start_link(
+        name: name,
+        transport: Fake,
+        connect_opts: [fake: fake],
+        seeds: [{"10.0.0.1", 3000}, {"10.0.0.2", 3000}],
+        namespaces: [@namespace],
+        tables: tables,
+        tend_trigger: :manual,
+        node_supervisor: NodeSupervisor.sup_name(name),
+        pool_size: 1
+      )
+
+    on_exit(fn ->
+      stop_quietly(tender)
+      stop_quietly(node_sup)
+      stop_quietly(writer)
+      stop_quietly(owner)
+      stop_quietly(fake)
+    end)
+
+    script_two_node_cluster(fake)
+    :ok = Tender.tend_now(tender)
+
+    task = %IndexTask{conn: tender, namespace: @namespace, index_name: "multi_idx"}
+
+    Fake.script_info(fake, "A1", ["build"], %{"build" => "8.1.0.0"})
+
+    Fake.script_info(fake, "A1", ["sindex-stat:namespace=test;indexname=multi_idx"], %{
+      "sindex-stat:namespace=test;indexname=multi_idx" => "load_pct=100;state=RW"
+    })
+
+    Fake.script_info(fake, "B1", ["build"], %{"build" => "8.1.0.0"})
+
+    Fake.script_info(fake, "B1", ["sindex-stat:namespace=test;indexname=multi_idx"], %{
+      "sindex-stat:namespace=test;indexname=multi_idx" => "load_pct=47;state=RW"
+    })
+
+    assert {:ok, :in_progress} = IndexTask.status(task)
+
+    for node <- ["A1", "B1"] do
+      Fake.script_info(fake, node, ["build"], %{"build" => "8.1.0.0"})
+
+      Fake.script_info(fake, node, ["sindex-stat:namespace=test;indexname=multi_idx"], %{
+        "sindex-stat:namespace=test;indexname=multi_idx" => "load_pct=100;state=RW"
+      })
+    end
+
+    assert :ok = IndexTask.wait(task, timeout: 100, poll_interval: 0)
+  end
+
   test "admin helpers reject invalid checkout policy values before issuing info commands", %{
     conn: conn
   } do
@@ -645,6 +707,33 @@ defmodule Aerospike.Command.AdminTest do
     Fake.script_info(fake, "A1", ["replicas"], %{
       "replicas" => ReplicasFixture.all_master(@namespace, 1)
     })
+  end
+
+  defp script_two_node_cluster(fake) do
+    for node <- ["A1", "B1"] do
+      Fake.script_info(fake, node, ["node", "features"], %{"node" => node, "features" => ""})
+
+      Fake.script_info(
+        fake,
+        node,
+        ["partition-generation", "cluster-stable", "peers-generation"],
+        %{
+          "partition-generation" => "1",
+          "cluster-stable" => "deadbeef",
+          "peers-generation" => "1"
+        }
+      )
+    end
+
+    for node <- ["A1", "B1"] do
+      Fake.script_info(fake, node, ["peers-clear-std"], %{
+        "peers-clear-std" => "0,3000,[[::1]:3000,[::2]:3000]"
+      })
+
+      Fake.script_info(fake, node, ["replicas"], %{
+        "replicas" => ReplicasFixture.all_master(@namespace, 2)
+      })
+    end
   end
 
   defp stop_quietly(pid) when is_pid(pid) do

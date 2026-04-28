@@ -384,6 +384,23 @@ defmodule Aerospike.Command.Admin do
     end
   end
 
+  @doc false
+  @spec index_status_node(GenServer.server(), String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, Error.t()}
+  def index_status_node(cluster, node_name, namespace, index_name, opts)
+      when is_binary(node_name) and is_binary(namespace) and is_binary(index_name) and
+             is_list(opts) do
+    with {:ok, policy} <- Policy.admin_info(opts),
+         :ok <- validate_target_node(cluster, node_name),
+         {:ok, handle} <- fetch_node_handle(cluster, node_name),
+         transport <- Tender.transport(cluster),
+         {:ok, server_version} <- fetch_server_version(node_name, handle, transport, policy),
+         command <- build_index_status_command(server_version, namespace, index_name),
+         {:ok, response} <- checkout_info(node_name, handle, transport, [command], policy) do
+      {:ok, Map.get(response, command, "")}
+    end
+  end
+
   @spec drop_index(GenServer.server(), String.t(), String.t(), keyword()) ::
           :ok | {:error, Error.t()}
   def drop_index(cluster, namespace, index_name, opts)

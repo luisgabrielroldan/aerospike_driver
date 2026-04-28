@@ -24,7 +24,7 @@ defmodule Aerospike.Integration.QueryAggregateResultClusterTest do
       "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver/` first."
     )
 
-    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
+    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 60_000)
 
     name = IntegrationSupport.unique_atom("spike_query_aggregate_result_cluster")
     set = IntegrationSupport.unique_name("agg_result_cluster")
@@ -42,6 +42,16 @@ defmodule Aerospike.Integration.QueryAggregateResultClusterTest do
         pool_size: 2
       )
 
+    Process.unlink(sup)
+
+    on_exit(fn ->
+      if Process.whereis(name) do
+        cleanup_cluster(name, set, index_name, server_name)
+      end
+
+      IntegrationSupport.stop_supervisor_quietly(sup)
+    end)
+
     IntegrationSupport.wait_for_tender_ready!(name, 5_000)
 
     assert {:ok, register_task} = Aerospike.register_udf(name, @fixture, server_name)
@@ -55,14 +65,6 @@ defmodule Aerospike.Integration.QueryAggregateResultClusterTest do
              )
 
     assert :ok = IndexTask.wait(index_task, timeout: 30_000, poll_interval: 200)
-
-    on_exit(fn ->
-      if Process.whereis(name) do
-        cleanup_cluster(name, set, index_name, server_name)
-      end
-
-      IntegrationSupport.stop_supervisor_quietly(sup)
-    end)
 
     %{cluster: name, set: set, package: package}
   end

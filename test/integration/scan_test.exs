@@ -21,7 +21,8 @@ defmodule Aerospike.Integration.ScanTest do
       "Run `docker compose --profile cluster up -d aerospike aerospike2 aerospike3` in `aerospike_driver/` first."
     )
 
-    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 15_000)
+    IntegrationSupport.wait_for_cluster_ready!(@seeds, @namespace, 60_000)
+
     name = IntegrationSupport.unique_atom("spike_scan_cluster")
 
     {:ok, sup} =
