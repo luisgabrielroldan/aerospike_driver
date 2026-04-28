@@ -1,5 +1,113 @@
 # Changelog
 
+## 0.3.0 (2026-04-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* collapse node-pinned scan and query APIs
+* tier 2 cluster correctness
+* NodeTransport.command/2 is now command/3 with a deadline_ms argument. All implementers (Transport.Tcp, Transport.Fake) and call sites (Aerospike.Get) updated.
+
+### Features
+
+* add advanced operate and geo breadth ([f98ae5c](https://github.com/luisgabrielroldan/aerospike_driver/commit/f98ae5c03ef113330910e54bd9aa2f659fc48342))
+* add AeroMarketLive example ([8d15f99](https://github.com/luisgabrielroldan/aerospike_driver/commit/8d15f99104525a1fc5b3b2f41ad6c1b5091b2300))
+* add Aerospike.Repo facade ([568ad45](https://github.com/luisgabrielroldan/aerospike_driver/commit/568ad455ae8f6177769afdd6bb0931a4b83aea3f))
+* add broader batch APIs ([bdc0be1](https://github.com/luisgabrielroldan/aerospike_driver/commit/bdc0be1d97d2cd8901871e705a7b9eddb0506519))
+* add cluster streaming and routing support ([21f2e29](https://github.com/luisgabrielroldan/aerospike_driver/commit/21f2e298989651bf66ddfc0b42aa87ede6d8245a))
+* add demo parity record features ([efc85b3](https://github.com/luisgabrielroldan/aerospike_driver/commit/efc85b3bd312365c33e3a212d6bf7a81581796a0))
+* add executable demo examples ([d9b961a](https://github.com/luisgabrielroldan/aerospike_driver/commit/d9b961a0abd30e7cded9d747014b982316d1f314))
+* add expression-backed server features ([143eebb](https://github.com/luisgabrielroldan/aerospike_driver/commit/143eebbbaee4ed4ffa8c2e790625c6831374cd44))
+* add node-targeted info facade ([1b71724](https://github.com/luisgabrielroldan/aerospike_driver/commit/1b7172451475df27a4672e817b1ea5890b14c2cb))
+* add raw payload and admin edge parity ([8576aaf](https://github.com/luisgabrielroldan/aerospike_driver/commit/8576aaf354b6f946a02e363e97da191e44b020e2))
+* add remaining API gap matrix surfaces ([e871d7d](https://github.com/luisgabrielroldan/aerospike_driver/commit/e871d7d609330fae0e3a7862cf730829e57d1622))
+* **api:** add missing public surface helpers ([0d934e0](https://github.com/luisgabrielroldan/aerospike_driver/commit/0d934e03aa09121438bb7e105cc3653b0db04f34))
+* **auth:** user/password session login with per-node token cache ([b2f7024](https://github.com/luisgabrielroldan/aerospike_driver/commit/b2f7024b048c263de9a1e7fff08ac9a68392ca94))
+* **bench:** add benchmark harness for the spike repo ([7f69749](https://github.com/luisgabrielroldan/aerospike_driver/commit/7f697494b53b453a919172943681177b1267484d))
+* **cluster:** improve seed recovery and stream scans ([103e036](https://github.com/luisgabrielroldan/aerospike_driver/commit/103e036db5f2c7b73b48ee3d8392a54cc8aef3a7))
+* **demo:** add policy and CDT expression examples ([73e8611](https://github.com/luisgabrielroldan/aerospike_driver/commit/73e8611f243a7f28087cb14da97e007294d059b0))
+* document public API helpers ([a65957e](https://github.com/luisgabrielroldan/aerospike_driver/commit/a65957e10c465a3ed8e3a839abd9d4f1eb74b62b))
+* expand expression and policy support ([800db3b](https://github.com/luisgabrielroldan/aerospike_driver/commit/800db3b8195e9e71219c1c005da7fefc2e97f5cb))
+* **expressions:** add expression filter foundation ([ad1c123](https://github.com/luisgabrielroldan/aerospike_driver/commit/ad1c123b7ba15b3f1072d8c94372856a81334c43))
+* foundational spike + Tier 1 supervision and pool ([1d6f3b5](https://github.com/luisgabrielroldan/aerospike_driver/commit/1d6f3b537d5376a70efea5673ac2aad3ad9565cd))
+* **get:** wire cluster-level :use_compression through node_handle ([d5bc5b9](https://github.com/luisgabrielroldan/aerospike_driver/commit/d5bc5b9c5ca2497cf5e5e218e4685da5268cb027))
+* harden spike operator and query surface ([93540b7](https://github.com/luisgabrielroldan/aerospike_driver/commit/93540b70f8ada246081eaf8aa1ca6472647b35ff))
+* **namespace:** remap internal modules behind cluster boundaries ([def1637](https://github.com/luisgabrielroldan/aerospike_driver/commit/def1637308cd2e8fa387658117174ce092fabd72))
+* normalize policy integer APIs ([24c8fb1](https://github.com/luisgabrielroldan/aerospike_driver/commit/24c8fb16d60a343d428cc394eefdc94b3b6e96d4))
+* plumb idle-timeout and TCP tuning opts end-to-end ([5e1de56](https://github.com/luisgabrielroldan/aerospike_driver/commit/5e1de569e10de5b6cedabf9b5eed8050d39074ea))
+* promote spike as the new aerospike_driver ([8601f8c](https://github.com/luisgabrielroldan/aerospike_driver/commit/8601f8caf9a07652297383f3bebdc6a114c11c7e))
+* **protocol:** support direct list and map write values ([efc85b3](https://github.com/luisgabrielroldan/aerospike_driver/commit/efc85b3bd312365c33e3a212d6bf7a81581796a0))
+* **query:** add finalized aggregate reduction ([6b4a480](https://github.com/luisgabrielroldan/aerospike_driver/commit/6b4a480bff6f2b7d689c15abe8bd376ad3d5d34c))
+* **reads:** support named-bin unary and batch reads ([efc85b3](https://github.com/luisgabrielroldan/aerospike_driver/commit/efc85b3bd312365c33e3a212d6bf7a81581796a0))
+* **runtime:** converge unary and batch execution paths ([24f04ad](https://github.com/luisgabrielroldan/aerospike_driver/commit/24f04ad909bdd96bb444c5d333a7c578318f5629))
+* **scan-query:** add streaming substrate ([b4329ae](https://github.com/luisgabrielroldan/aerospike_driver/commit/b4329ae9f1c9f1d71a9483aa113cad73cdb7b88b))
+* **scan:** expose public scan pagination ([efc85b3](https://github.com/luisgabrielroldan/aerospike_driver/commit/efc85b3bd312365c33e3a212d6bf7a81581796a0))
+* **telemetry:** add :telemetry dep and lock event-name taxonomy ([efda72d](https://github.com/luisgabrielroldan/aerospike_driver/commit/efda72d89c660baaa0fb89e66158a3a7a0d6b727))
+* **telemetry:** emit node lifecycle transition events ([1271fc9](https://github.com/luisgabrielroldan/aerospike_driver/commit/1271fc9bd0c1bef26c0ee2fa68d5d38d7767ec0e))
+* **telemetry:** emit pool checkout, command, info, and retry events ([71bd9fd](https://github.com/luisgabrielroldan/aerospike_driver/commit/71bd9fd6d7d1893227fcb4659b10f7cc4c2c7544))
+* **tender:** add :use_services_alternate toggle for peer discovery ([7ce3567](https://github.com/luisgabrielroldan/aerospike_driver/commit/7ce35673ed40440e64f09f0ef8b206cde1bd9300))
+* **tender:** capture per-node features on bootstrap ([5a73a3d](https://github.com/luisgabrielroldan/aerospike_driver/commit/5a73a3d2a473e32ee214573401b27b756558abd5))
+* **tender:** per-node tend-cycle histogram and telemetry spans ([72926cf](https://github.com/luisgabrielroldan/aerospike_driver/commit/72926cf4ef2725b70931f9f441aa19da3e3bf3e7))
+* tier 1.5 pool hardening ([aa2b135](https://github.com/luisgabrielroldan/aerospike_driver/commit/aa2b135e5c84149215e62b05250922364bfbb143))
+* tier 2 cluster correctness ([a813086](https://github.com/luisgabrielroldan/aerospike_driver/commit/a813086527de869fa68e2f3b7296e936f54bb795))
+* **transport:** add stream transport support ([40d0aab](https://github.com/luisgabrielroldan/aerospike_driver/commit/40d0aab30dd5b2d38859420c2fe773837b0846ca))
+* **transport:** opt-in compressed AS_MSG send above 128-byte threshold ([a57f707](https://github.com/luisgabrielroldan/aerospike_driver/commit/a57f70701e8d17d029751ade74565d1351adab6f))
+* **transport:** TLS variant with standard, mTLS, and PKI modes ([70cb39e](https://github.com/luisgabrielroldan/aerospike_driver/commit/70cb39e1166510b93ec19e74285d9b545c40c414))
+* **transport:** validate proto headers and inflate compressed replies ([972e3b0](https://github.com/luisgabrielroldan/aerospike_driver/commit/972e3b004a2bd06071a2b94d1e84837625618f7c))
+* **write:** add record-exists and durable-delete policies ([efc85b3](https://github.com/luisgabrielroldan/aerospike_driver/commit/efc85b3bd312365c33e3a212d6bf7a81581796a0))
+
+
+### Bug Fixes
+
+* **batch:** avoid sorting already ordered results ([f1f7fbb](https://github.com/luisgabrielroldan/aerospike_driver/commit/f1f7fbb03c8009387b7fcbe8f003b89cac4ce842))
+* centralize spike retry classification ([1c48464](https://github.com/luisgabrielroldan/aerospike_driver/commit/1c484642b131f1a260eed87bb2ab1c1edad965e3))
+* **docs:** avoid hidden policy integer type references in public docs ([24c8fb1](https://github.com/luisgabrielroldan/aerospike_driver/commit/24c8fb16d60a343d428cc394eefdc94b3b6e96d4))
+* keep driver repo self-contained ([a37f539](https://github.com/luisgabrielroldan/aerospike_driver/commit/a37f5396bd90f286cb8947ebd212db131dabf79e))
+* keep validation checks passing ([5fef606](https://github.com/luisgabrielroldan/aerospike_driver/commit/5fef60666953420db8f71c1badcf2fb11431c858))
+* **metrics:** reset runtime counters reliably ([8df9c10](https://github.com/luisgabrielroldan/aerospike_driver/commit/8df9c1003b7cef41d0124eb00ab5ee02f0349658))
+* **operate:** align mixed write/read proofs with live server replies ([93540b7](https://github.com/luisgabrielroldan/aerospike_driver/commit/93540b70f8ada246081eaf8aa1ca6472647b35ff))
+* **policy:** randomize foreground/background task ids\nfix(txn): generate signed 64-bit transaction ids from strong randomness\ntest(transport): broaden unit and integration coverage for transport, protocol, admin, and scan paths ([103e036](https://github.com/luisgabrielroldan/aerospike_driver/commit/103e036db5f2c7b73b48ee3d8392a54cc8aef3a7))
+* **policy:** unify command policy handling ([65bd7dd](https://github.com/luisgabrielroldan/aerospike_driver/commit/65bd7dd76e9d6bc9fbb36115b73cca6847368b4f))
+* **protocol:** avoid reversing decoded AS_MSG parts ([54d0852](https://github.com/luisgabrielroldan/aerospike_driver/commit/54d0852c14516c6ab5792a69477ace3f1830b2b5))
+* **protocol:** optimize batch response parsing ([db71e1b](https://github.com/luisgabrielroldan/aerospike_driver/commit/db71e1bcdb491ce3283d156ddf9bfc69af2af568))
+* **protocol:** optimize record response parsing ([ea2ce01](https://github.com/luisgabrielroldan/aerospike_driver/commit/ea2ce011b996ba07b165a0e8c4d01d9ffb05a093))
+* **protocol:** reduce codec hot path overhead ([8519f3c](https://github.com/luisgabrielroldan/aerospike_driver/commit/8519f3ca602bf272ff321a54f25dc58595e37eee))
+* **query:** return background query execute task handles ([d9b961a](https://github.com/luisgabrielroldan/aerospike_driver/commit/d9b961a0abd30e7cded9d747014b982316d1f314))
+* **repo:** stop generated repos from exposing deprecated scan aliases ([8d15f99](https://github.com/luisgabrielroldan/aerospike_driver/commit/8d15f99104525a1fc5b3b2f41ad6c1b5091b2300))
+* run cluster-only integration tests on cluster profile ([cc92cbe](https://github.com/luisgabrielroldan/aerospike_driver/commit/cc92cbe58bd3cd760688dca697cc3d56e8177096))
+* **runtime:** align spike contracts with execution ownership ([949920a](https://github.com/luisgabrielroldan/aerospike_driver/commit/949920adbd3a103f06d23a9ec4c0d92ad85fe6ef))
+* stabilize cluster integration tests ([1f517ba](https://github.com/luisgabrielroldan/aerospike_driver/commit/1f517ba10472cad754d129bdb7ba6c8851fdc37f))
+* stabilize UDF lifecycle cleanup ([aa8c058](https://github.com/luisgabrielroldan/aerospike_driver/commit/aa8c058fdba1e29ff35fa43e0940e092544c3b42))
+* **startup:** make hosts the public seed option ([b7435ca](https://github.com/luisgabrielroldan/aerospike_driver/commit/b7435ca21212d726d83b87fe091160ec0b3cc5f0))
+* **telemetry:** normalize telemetry emission points ([21f2e29](https://github.com/luisgabrielroldan/aerospike_driver/commit/21f2e298989651bf66ddfc0b42aa87ede6d8245a))
+* **test:** add local cluster setup and quiet teardown noise ([ef379b2](https://github.com/luisgabrielroldan/aerospike_driver/commit/ef379b210c7563eb0519fffddd55e5e6526d1c7f))
+* **test:** avoid stopped cluster cleanup in put payload integration tests ([d9b961a](https://github.com/luisgabrielroldan/aerospike_driver/commit/d9b961a0abd30e7cded9d747014b982316d1f314))
+* **test:** harden flaky async cleanup and telemetry assertions ([8030917](https://github.com/luisgabrielroldan/aerospike_driver/commit/8030917814ec3615c05b1b1c039209d2fdd6ea18))
+* **test:** select integration suites by tag ([6cf8e0b](https://github.com/luisgabrielroldan/aerospike_driver/commit/6cf8e0b4f360f58422d8f066d5836c9e58d19e88))
+* **test:** stabilize router ets cleanup ([9b1b76f](https://github.com/luisgabrielroldan/aerospike_driver/commit/9b1b76fc6e0a59350fc9e04aab23201dff696028))
+* **test:** stabilize set truncate integration coverage ([3babf0b](https://github.com/luisgabrielroldan/aerospike_driver/commit/3babf0bcaddc606e037e3bb8662fddd59d6e9b1e))
+* **txn:** normalize task helper contracts exposed by deterministic coverage ([93540b7](https://github.com/luisgabrielroldan/aerospike_driver/commit/93540b70f8ada246081eaf8aa1ca6472647b35ff))
+
+
+### Performance Improvements
+
+* **batch:** optimize batch request routing ([a48cabb](https://github.com/luisgabrielroldan/aerospike_driver/commit/a48cabbd5c5dfa5e1dc69cf272c0752da5604aad))
+* **metrics:** reduce runtime metrics overhead ([dbc6326](https://github.com/luisgabrielroldan/aerospike_driver/commit/dbc632653b631b2a87242762ca93dd9f41446d31))
+* optimize batch result conversion ([9e1b105](https://github.com/luisgabrielroldan/aerospike_driver/commit/9e1b105f8b555503850102be3ef8f486ca2f2539))
+* **router:** optimize sequence replica selection ([2a2514f](https://github.com/luisgabrielroldan/aerospike_driver/commit/2a2514f7a5c0b8d7fa7b5f852396ed86b17da56d))
+* **scan:** optimize scan response operation parsing ([f639768](https://github.com/luisgabrielroldan/aerospike_driver/commit/f6397686b2d9e2b02714c08e5155ec8434b1f6d5))
+
+
+### Miscellaneous Chores
+
+* fix release version ([17b44ce](https://github.com/luisgabrielroldan/aerospike_driver/commit/17b44ce3334e12939f8b467d757f9fe0fae0446e))
+
+
+### Code Refactoring
+
+* collapse node-pinned scan and query APIs ([8e2ace2](https://github.com/luisgabrielroldan/aerospike_driver/commit/8e2ace2a70489629f3a5b4bf999fed4c86a0bafd))
+
 ## [Unreleased]
 
 ## [0.3.0](https://github.com/luisgabrielroldan/aerospike_driver/compare/v0.2.0...v0.3.0) (2026-04-27)
