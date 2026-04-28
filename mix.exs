@@ -16,13 +16,10 @@ defmodule Aerospike.MixProject do
     "test/integration/expressions_test.exs",
     "test/integration/get_pool_test.exs",
     "test/integration/get_test.exs",
-    "test/integration/index_query_test.exs",
-    "test/integration/node_kill_test.exs",
     "test/integration/operate_cdt_test.exs",
     "test/integration/put_payload_test.exs",
     "test/integration/query_aggregate_result_test.exs",
     "test/integration/query_execute_test.exs",
-    "test/integration/stream_transport_test.exs",
     "test/integration/udf_apply_test.exs",
     "test/integration/udf_lifecycle_test.exs",
     "test/integration/write_family_test.exs"
@@ -30,8 +27,11 @@ defmodule Aerospike.MixProject do
   @cluster_integration_files [
     "test/integration/batch_get_test.exs",
     "test/integration/batch_test.exs",
+    "test/integration/index_query_test.exs",
+    "test/integration/node_kill_test.exs",
     "test/integration/query_aggregate_result_cluster_test.exs",
     "test/integration/scan_test.exs",
+    "test/integration/stream_transport_test.exs",
     "test/integration/udf_remote_cluster_test.exs"
   ]
   @enterprise_integration_files [
