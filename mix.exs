@@ -11,12 +11,17 @@ defmodule Aerospike.MixProject do
   @source_url "https://github.com/luisgabrielroldan/aerospike_driver"
   @description "Aerospike driver for Elixir with an OTP-native cluster runtime"
   @ce_integration_files [
+    "test/integration/admin_truncate_test.exs",
     "test/integration/compression_test.exs",
+    "test/integration/expressions_test.exs",
     "test/integration/get_pool_test.exs",
     "test/integration/get_test.exs",
     "test/integration/index_query_test.exs",
     "test/integration/node_kill_test.exs",
     "test/integration/operate_cdt_test.exs",
+    "test/integration/put_payload_test.exs",
+    "test/integration/query_aggregate_result_test.exs",
+    "test/integration/query_execute_test.exs",
     "test/integration/stream_transport_test.exs",
     "test/integration/udf_apply_test.exs",
     "test/integration/udf_lifecycle_test.exs",
@@ -24,14 +29,18 @@ defmodule Aerospike.MixProject do
   ]
   @cluster_integration_files [
     "test/integration/batch_get_test.exs",
-    "test/integration/scan_test.exs"
+    "test/integration/batch_test.exs",
+    "test/integration/query_aggregate_result_cluster_test.exs",
+    "test/integration/scan_test.exs",
+    "test/integration/udf_remote_cluster_test.exs"
   ]
   @enterprise_integration_files [
     "test/integration/auth_test.exs",
     "test/integration/operator_surface_smoke_test.exs",
     "test/integration/security_admin_test.exs",
     "test/integration/tls_test.exs",
-    "test/integration/txn_test.exs"
+    "test/integration/txn_test.exs",
+    "test/integration/xdr_filter_test.exs"
   ]
 
   def project do
