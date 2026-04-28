@@ -67,7 +67,11 @@ defmodule Aerospike.Integration.PutPayloadTest do
 
     assert {:ok, %{generation: generation}} = Aerospike.put(cluster, key, %{"payload" => "seed"})
 
-    payload = write_payload(key, "stale", generation: generation + 100)
+    payload =
+      write_payload(key, "stale",
+        generation: generation + 100,
+        generation_policy: :expect_equal
+      )
 
     assert {:error, %Error{code: :generation_error}} =
              Aerospike.put_payload(cluster, key, payload)
@@ -91,7 +95,8 @@ defmodule Aerospike.Integration.PutPayloadTest do
     |> AsmMsg.key_command([operation],
       write: true,
       send_key: true,
-      generation: Keyword.get(opts, :generation, 0)
+      generation: Keyword.get(opts, :generation, 0),
+      generation_policy: Keyword.get(opts, :generation_policy, :none)
     )
     |> AsmMsg.encode()
     |> Message.encode_as_msg_iodata()
