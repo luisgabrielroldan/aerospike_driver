@@ -17,7 +17,7 @@ Add `aerospike_driver` to your dependencies:
 ```elixir
 def deps do
   [
-    {:aerospike_driver, "~> 0.3.0"}
+    {:aerospike_driver, "~> 0.3"}
   ]
 end
 ```
